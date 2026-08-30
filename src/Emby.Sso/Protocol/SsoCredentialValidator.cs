@@ -13,11 +13,12 @@ namespace Emby.Sso.Protocol
 
     public sealed class SsoCredentialResult
     {
-        private SsoCredentialResult(SsoCredentialOutcome outcome, string displayName, string reason)
+        private SsoCredentialResult(SsoCredentialOutcome outcome, string displayName, string reason, OidcIdentity identity)
         {
             Outcome = outcome;
             DisplayName = displayName;
             Reason = reason;
+            Identity = identity;
         }
 
         public SsoCredentialOutcome Outcome { get; }
@@ -26,14 +27,21 @@ namespace Emby.Sso.Protocol
 
         public string Reason { get; }
 
-        public static SsoCredentialResult Handoff(string displayName) =>
-            new SsoCredentialResult(SsoCredentialOutcome.HandoffAccepted, displayName, null);
+        /// <summary>
+        /// The verified identity, on the direct-grant path only. Null on rejection,
+        /// and null for a handoff secret — that path proves the browser flow already
+        /// ran and applied the gate, so no identity is carried here.
+        /// </summary>
+        public OidcIdentity Identity { get; }
 
-        public static SsoCredentialResult DirectGrant(string displayName) =>
-            new SsoCredentialResult(SsoCredentialOutcome.DirectGrantAccepted, displayName, null);
+        public static SsoCredentialResult Handoff(string displayName) =>
+            new SsoCredentialResult(SsoCredentialOutcome.HandoffAccepted, displayName, null, null);
+
+        public static SsoCredentialResult DirectGrant(OidcIdentity identity) =>
+            new SsoCredentialResult(SsoCredentialOutcome.DirectGrantAccepted, identity.DisplayName, null, identity);
 
         public static SsoCredentialResult Reject(string reason) =>
-            new SsoCredentialResult(SsoCredentialOutcome.Rejected, null, reason);
+            new SsoCredentialResult(SsoCredentialOutcome.Rejected, null, reason, null);
     }
 
     /// <summary>
@@ -109,7 +117,7 @@ namespace Emby.Sso.Protocol
                 return SsoCredentialResult.Reject(SsoErrors.UnknownUser);
             }
 
-            return SsoCredentialResult.DirectGrant(identity.DisplayName);
+            return SsoCredentialResult.DirectGrant(identity);
         }
     }
 }

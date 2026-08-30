@@ -169,5 +169,42 @@ namespace Emby.Sso.Tests
             Assert.Equal(SsoErrors.EmptyCredential, noPassword.Reason);
             Assert.Equal(SsoErrors.EmptyCredential, emptyPassword.Reason);
         }
+
+        [Fact]
+        public async Task A_direct_grant_result_carries_the_verified_identity()
+        {
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(
+                _idp.CreateIdToken(username: "alice", groups: new[] { "emby-users" }));
+
+            var result = await CreateValidator().ValidateAsync("alice", "correct horse", CancellationToken.None);
+
+            Assert.Equal(SsoCredentialOutcome.DirectGrantAccepted, result.Outcome);
+            Assert.NotNull(result.Identity);
+            Assert.Equal("alice", result.Identity.Username);
+            Assert.Equal(new[] { "emby-users" }, result.Identity.Groups);
+        }
+
+        [Fact]
+        public async Task A_rejection_carries_no_identity()
+        {
+            _idp.TokenResponseStatus = HttpStatusCode.BadRequest;
+            _idp.TokenResponseJson = "{\"error\":\"invalid_grant\"}";
+
+            var result = await CreateValidator().ValidateAsync("alice", "wrong", CancellationToken.None);
+
+            Assert.Equal(SsoCredentialOutcome.Rejected, result.Outcome);
+            Assert.Null(result.Identity);
+        }
+
+        [Fact]
+        public async Task A_handoff_result_carries_no_identity()
+        {
+            var secret = _handoff.Issue("alice");
+
+            var result = await CreateValidator().ValidateAsync("alice", secret, CancellationToken.None);
+
+            Assert.Equal(SsoCredentialOutcome.HandoffAccepted, result.Outcome);
+            Assert.Null(result.Identity);
+        }
     }
 }
