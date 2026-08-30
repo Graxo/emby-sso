@@ -11,8 +11,8 @@ namespace Emby.Sso.Auth
     /// Both provisioning paths go through here — the browser path
     /// (<see cref="UserProvisioner"/>) and the native path
     /// (<see cref="SsoAuthenticationProvider"/>'s IHasNewUserPolicy hook) — so
-    /// the two fields that must never be inherited cannot be forced on one path
-    /// and forgotten on the other.
+    /// the fields that must never be inherited cannot be forced on one path and
+    /// forgotten on the other.
     ///
     /// Policy and configuration are treated differently on purpose, and the
     /// difference is not stylistic:
@@ -24,10 +24,15 @@ namespace Emby.Sso.Auth
     ///   template's rights - including administrator, if the operator picked an
     ///   administrator as their template.
     /// - The <b>configuration is display preference</b> - subtitle mode, resume
-    ///   offsets, which views are ordered where. It carries no access at all, so
-    ///   applying it in a second write afterwards is safe where applying the
-    ///   policy that way was not, and a failure to apply it must not fail the
-    ///   sign-in.
+    ///   offsets, which views are ordered where. It grants no library and no
+    ///   right, so applying it in a second write afterwards is safe where
+    ///   applying the policy that way was not, and a failure to apply it must
+    ///   not fail the sign-in. It is not ENTIRELY preference, though: it also
+    ///   carries two per-person authentication fields, and
+    ///   <see cref="CloneConfiguration"/> clears both rather than handing every
+    ///   provisioned account the template owner's. Anything added to
+    ///   UserConfiguration by a future Emby release has to be read the same way
+    ///   before it is assumed to be a preference.
     /// </summary>
     internal static class TemplateClone
     {
@@ -111,9 +116,11 @@ namespace Emby.Sso.Auth
                 return null;
             }
 
+            UserConfiguration clone;
+
             try
             {
-                return JsonConvert.DeserializeObject<UserConfiguration>(
+                clone = JsonConvert.DeserializeObject<UserConfiguration>(
                     JsonConvert.SerializeObject(templateConfiguration, SerializerSettings),
                     SerializerSettings);
             }
@@ -121,6 +128,56 @@ namespace Emby.Sso.Auth
             {
                 return null;
             }
+
+            if (clone == null)
+            {
+                return null;
+            }
+
+            // Everything else in UserConfiguration is a preference - subtitle
+            // mode, resume offsets, which views are ordered where - and copying
+            // it is the point of having a template. These two are not
+            // preferences, they are the template OWNER's, and neither may be
+            // inherited. Both are cleared to the value a normally created
+            // account starts with, so a provisioned account is in exactly the
+            // state Emby would have put it in.
+
+            // ProfilePin is a per-person secret. Emby's own documentation
+            // (emby.media/support/articles/Passwords.html) describes it as a
+            // four-digit PIN that guards a user on a shared device: once that
+            // device has authenticated the user, the PIN is asked for each time
+            // someone returns to or switches into that profile. Copying the
+            // template's PIN would give every provisioned account a shared
+            // secret that its own owner never chose and does not know, and that
+            // the template's owner does.
+            //
+            // UNVERIFIED: how 4.9.5.0 enforces it - which of the server and the
+            // apps actually checks it - was not measured. MediaBrowser.Model
+            // 4.9.1.90 only declares the property; nothing in the reference
+            // assemblies reads it, so enforcement lives in code this project
+            // cannot see, and the plugin is not installed on a server that can
+            // be signed into. It does not change the decision: an inherited PIN
+            // cannot be right either way. Enforced, it is a shared secret; not
+            // enforced, it is a stale secret sitting on every account waiting
+            // for a release that starts enforcing it.
+            clone.ProfilePin = null;
+
+            // EnableLocalPassword is the switch for Emby's old "easy password"
+            // - the short local-network credential. The credential it pairs
+            // with is User.EasyPassword, which lives on the user entity and is
+            // NOT copied here (confirmed by decompiling
+            // MediaBrowser.Controller.Entities.User 4.9.1.90), so inheriting
+            // the switch alone would mark a new account as wanting a local
+            // password it does not have. Obsolete on 4.9.1.90 and very possibly
+            // ignored by the server, which is why the pragma is here rather
+            // than the property being left alone: an obsolete authentication
+            // switch is exactly the kind of thing that should be off on an
+            // account nobody chose it for.
+#pragma warning disable 612 // CS0612: the member is obsolete - deliberate, see above
+            clone.EnableLocalPassword = false;
+#pragma warning restore 612
+
+            return clone;
         }
 
         public static string PolicyToJson(UserPolicy policy)
