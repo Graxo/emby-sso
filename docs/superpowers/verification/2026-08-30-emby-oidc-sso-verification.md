@@ -34,25 +34,26 @@ The DLL was copied to `/docker-data/compose/dl-cluster/configs/emby/plugins/Emby
 
 Not a deviation from spec — just noting the plugin is invisible to `/Auth/Providers` until configured, which anyone verifying this should expect.
 
-### 3. Configuration page loads; saving persists; redirect URI / sign-in URL are correct — PASS (fixed; was PARTIAL PASS in earlier passes)
+### 3. Configuration page loads; saving persists; redirect URI / sign-in URL are correct — PASS (fixed; user-confirmed)
 
-Two earlier passes found the config page broken in the browser: the page used the obsolete `data-role="page"` / `<div data-role="content">` markup pattern instead of Emby's current `emby-scroller`/`view` pattern, so it rendered as an overlay on top of the plugin catalog instead of replacing the view, and its `<script>` tag — first inline, then `src="configurationpage?name=AuthentikSsoScript"` in the second attempt — was stripped or commented out by the server in every case, so no JavaScript ever ran.
+Two earlier passes found the config page broken in the browser: the page used the obsolete `data-role="page"` / `<div data-role="content">` markup pattern instead of Emby's current `emby-scroller`/`view` pattern, so it rendered as an overlay on top of the plugin catalog instead of replacing the view. Its `<script>` tag — first inline, then `src="configurationpage?name=AuthentikSsoScript"` — was never executed: Emby strips **every** `<script>` tag from plugin config pages, inline or `src`.
 
-Root cause, confirmed by diffing our served page against a built-in plugin's (`/web/configurationpage?name=nfo`, Emby's Nfo Metadata plugin): Emby strips **every** `<script>` tag from a plugin config page, inline or `src`. JavaScript is loaded instead via `data-controller="__plugin/<ScriptPageName>"` on the root element, which resolves to a second registered `PluginPageInfo` and is fetched as an AMD module. The root element must also be the `emby-scroller`/`view` div, or the page is not treated as a view.
+**Root cause (confirmed by diffing against Emby's Nfo Metadata plugin, `/web/configurationpage?name=nfo`):** Emby's mechanism for loading plugin configuration JavaScript has no place for a script tag. JavaScript is loaded via `data-controller="__plugin/<ScriptPageName>"` on the root element, which resolves to a second registered `PluginPageInfo` and is fetched as an AMD module. The root element must be the `emby-scroller`/`view` div or the page is not treated as a view — `data-role="page"` is obsolete.
 
-`src/Emby.Sso/Configuration/configPage.html` and `configPage.js` were rewritten to that pattern, following the reference implementation fetched live from `/web/configurationpage?name=nfojs`:
-- HTML root is now `<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" ... data-controller="__plugin/AuthentikSsoScript" data-title="Authentik SSO">` with a `scrollSlider` inner wrapper, and **no `<script>` tag anywhere**.
+**The fix (commit `ea74b53`):** `src/Emby.Sso/Configuration/configPage.html` and `configPage.js` were rewritten to the correct pattern:
+- HTML root is now `<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" ... data-controller="__plugin/AuthentikSsoScript" data-title="Authentik SSO">` with a `scrollSlider` inner wrapper, and **no `<script>` tag**.
 - `configPage.js` is an AMD module (`define(['baseView', 'loading', 'globalize', ...], ...)`) returning a `View` that borrows `BaseView.prototype`, loads configuration in `onResume`, and saves on the form's `submit` handler, using the `loading` module for the spinner.
-- The second `PluginPageInfo` registration (`Name = "AuthentikSsoScript"`, `IsMainConfigPage = false`) in `Plugin.cs`, added in the previous attempt, was kept — the `data-controller` mechanism needs it. The embedded resource names (`Emby.Sso.Configuration.configPage.html`, `Emby.Sso.Configuration.configPage.js`) were verified against `strings` output of the built, merged DLL and match `Plugin.cs` exactly.
-- All nine configuration properties (`IssuerUrl`, `ClientId`, `ClientSecret`, `Scopes`, `EmbyPublicBaseUrl`, `UsernameClaim`, `EnableDirectGrant`, `EnableButtonInjection`, `AllowInsecureHttp`), the redirect-URI/sign-in-URL display logic, the honest help text (no login-page button is possible, `EnableButtonInjection` is inert, MFA warning on direct grant), and error handling on both the load and save paths (loading indicator always hidden, `Dashboard.processErrorResponse`/`processPluginConfigurationUpdateResult` used) were carried over unchanged from the previous markup/logic — this was a re-platforming, not a redesign.
+- The second `PluginPageInfo` registration (`Name = "AuthentikSsoScript"`, `IsMainConfigPage = false`) in `Plugin.cs` was kept — the `data-controller` mechanism requires it. Embedded resource names verified against the merged DLL's `strings` output and match `Plugin.cs` exactly: `Emby.Sso.Configuration.configPage.html`, `Emby.Sso.Configuration.configPage.js`.
+- All nine configuration properties, the redirect-URI/sign-in-URL display logic, help text, and error handling (loading indicator always hidden, `Dashboard.processErrorResponse`/`processPluginConfigurationUpdateResult` used) were carried over unchanged — this was a re-platforming, not a redesign.
 
-Verified against the live server after installing the new build and restarting the container:
-- `GET /web/configurationpage?name=AuthentikSso` now returns the `emby-scroller` root div with `data-controller="__plugin/AuthentikSsoScript"` intact and no script tag, commented or otherwise.
-- `GET /web/configurationpage?name=AuthentikSsoScript` returns the AMD module verbatim, byte-for-byte matching the new `configPage.js` source.
-- `dotnet build -c Release` is 0 warnings / 0 errors with the ILRepack merge succeeding; `dotnet test tests/Emby.Sso.Tests -v minimal` is 68/68.
+**Server verification after installing the new build:**
+- `GET /web/configurationpage?name=AuthentikSso` returns the `emby-scroller` root div with `data-controller="__plugin/AuthentikSsoScript"` intact and no script tag.
+- `GET /web/configurationpage?name=AuthentikSsoScript` returns the AMD module verbatim, matching the source.
+- `dotnet build -c Release` succeeded (0 warnings / 0 errors, ILRepack merge OK); `dotnet test tests/Emby.Sso.Tests -v minimal` passed (68/68).
 
-**Not verified:** actual rendering in a browser. This pass has no browser access, so it cannot confirm the page visually replaces the plugin catalog, that fields populate on open, or that Save behaves correctly end-to-end in the UI — only that the served markup and controller now match the pattern Emby's own built-in plugins use, and that the previously-observed defects (overlay rendering, stripped script) are structurally absent from what the server now sends. The plugin was left installed on the server, unconfigured, for the user to check in a browser.
-- Redirect URI / sign-in URL: the JS that displays them (`base + '/emby/Sso/Callback'`, `base + '/emby/Sso/Start'`) never runs (see above), so it could not be confirmed via the UI. The computed values for this server (`EmbyPublicBaseUrl = http://10.10.140.5:8090`) would be `http://10.10.140.5:8090/emby/Sso/Callback` and `http://10.10.140.5:8090/emby/Sso/Start` — both of these exact URLs were independently exercised and behaved correctly in checks 4–7 below, so the values themselves are correct even though the page cannot currently display them.
+**Browser verification (user-confirmed):** The user opened the plugin's configuration page in a browser and confirmed the page renders correctly, replacing the plugin catalog view. The configuration fields populate on page load, and the form's Save button successfully persists and reloads configuration values. Note: immediately after the fix was installed, the first page load still showed the broken layout; after a dashboard reload it rendered correctly — consistent with Emby caching configuration pages.
+
+- **Redirect URI / sign-in URL:** The JavaScript that displays them now runs correctly on the page, showing `http://10.10.140.5:8090/emby/Sso/Callback` and `http://10.10.140.5:8090/emby/Sso/Start` as expected. Both URLs were independently exercised and behaved correctly in checks 4–7 below, confirming the computed values are correct.
 
 ### 4. `GET /emby/Sso/Start` while unconfigured → "not configured" page — PASS
 
@@ -130,7 +131,7 @@ See the working report for the exact commands and command output this summary is
 |---|---|---|
 | 1 | Build shipping artifact | PASS |
 | 2 | Installs, appears in plugin list and `/Auth/Providers` (once configured) | PASS |
-| 3 | Config page loads / save persists / redirect+sign-in URLs correct | PARTIAL — API works; dashboard UI's inline `<script>` is stripped by this Emby server and never runs (defect, not fixed per task scope) |
+| 3 | Config page loads / save persists / redirect+sign-in URLs correct | PASS |
 | 4 | `/Sso/Start` unconfigured → clean error page | PASS |
 | 5 | `/Sso/Callback?state=garbage` → expired page, logged | PASS |
 | 6 | Unreachable issuer → error page, logged, no hang/storm | PASS |

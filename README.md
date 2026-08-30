@@ -262,6 +262,8 @@ ever sees one of a fixed set of short, generic sentences:
 | "Password sign-in is disabled for this account." | A native app tried to sign in via direct grant, but "Allow native apps to sign in with a password" is off. | Enable it in the plugin configuration if you want native sign-in, understanding the MFA trade-off above. |
 | "This sign-in could not be completed in this browser. Please try signing in again." | `/emby/Sso/Start` sets a short-lived binding cookie that must come back unchanged on `/emby/Sso/Callback`. A reverse proxy sitting in front of Emby stripped or rewrote cookies on that path, or rewrote the path so the cookie's `Path` no longer covers `/emby/Sso/Callback`. | Check the log line next to this error: it distinguishes no cookie presented at all from a cookie that was presented but did not match. Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on both `/emby/Sso/Start` and `/emby/Sso/Callback`, and that it does not rewrite either path in a way that changes the cookie's directory. |
 
+**Note:** If the plugin's settings page renders oddly right after an update (for example, as an overlay on top of the plugin catalog instead of replacing the view), reload the Emby dashboard in your browser — Emby caches configuration pages, and the old version may still be in the browser's cache.
+
 If a user reports being unable to sign in with their old Emby password
 after using SSO once, that is expected — see "Emby stamps the provider...
 permanently" above. An administrator must reset that user's
