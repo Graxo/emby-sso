@@ -42,9 +42,9 @@
         <label for="usernameClaim">Username claim</label>
         <input is="emby-input" type="text" id="usernameClaim" />
         <div class="fieldDescription">
-          The claim matched against the Emby username. Users are never created
-          automatically: the Emby account must already exist, and its
-          authentication provider must be set to Authentik SSO.
+          The claim matched against the Emby username. Unless automatic
+          account creation is enabled below, the Emby account must already
+          exist, and its authentication provider must be set to Authentik SSO.
         </div>
       </div>
 
@@ -57,7 +57,10 @@
           Lets phone and TV apps sign in by sending the password to the
           provider directly. This path cannot perform multi-factor
           authentication, and needs a direct-grant authentication flow bound to
-          the provider in Authentik.
+          the provider in Authentik. It is refused outright while &quot;Allow
+          plain HTTP (testing only)&quot; is on: that combination is the only one
+          that would have this server relay a native client's real password in
+          cleartext, so the two settings are mutually exclusive.
         </div>
       </div>
 
@@ -81,7 +84,7 @@
       <div class="checkboxContainer">
         <label>
           <input is="emby-checkbox" type="checkbox" id="allowInsecureHttp" />
-          <span>Allow plain HTTP (testing only)</span>
+          <span>Allow plain HTTP (testing only) &mdash; also disables native password sign-in</span>
         </label>
       </div>
 
@@ -92,7 +95,12 @@
         <input is="emby-input" type="text" id="requiredGroup" />
         <div class="fieldDescription">
           The Authentik group a user must hold to sign in. Leaving this empty
-          blocks all group-gated sign-in.
+          refuses EVERY single sign-on, including users who already have an
+          Emby account and could sign in before &mdash; the browser flow refuses
+          at the sign-in URL and native apps are refused too. Set this before
+          you install this build over a working one, or your whole user base is
+          locked out until you do. The server log names the reason: &quot;no
+          required group is configured&quot;.
         </div>
       </div>
 

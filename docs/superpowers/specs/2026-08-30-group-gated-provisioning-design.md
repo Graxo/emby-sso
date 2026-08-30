@@ -53,16 +53,46 @@ For an account that already exists, conditions 3, 5 and 6 still apply on every
 sign-in. Conditions 1 and 2 do not — disabling provisioning or removing the
 template must not lock out accounts that already exist.
 
+> **Precision noted 2026-08-30 (final review, F7).** "Every sign-in" means every
+> sign-in that carries an identity. The browser flow applies conditions 3, 5 and
+> 6 in the callback and then hands `SsoAuthenticationProvider` a short-lived
+> handoff secret which carries no identity, so the provider does not re-evaluate
+> the gate for that one call — it cannot, and re-checking would be impossible
+> rather than redundant. Separately, the gate acts at sign-in only: an Emby
+> access token minted before the user lost the group keeps working until it is
+> revoked.
+
 ## Configuration
 
 Four new properties:
 
 - **Enable automatic account creation** — off by default. Turning it on is the
   act that opens the guard.
-- **Required group** — the group an identity must hold. No default; empty means
-  provisioning cannot proceed, whatever the enable flag says.
-- **Template user** — an existing Emby user whose policy and configuration are
-  cloned. No default.
+- **Required group** — the group an identity must hold. No default; empty
+  refuses **every** SSO sign-in, existing accounts included, whatever the enable
+  flag says.
+
+  > **Corrected 2026-08-30 by ratified decision R10.** This paragraph originally
+  > read "empty means provisioning cannot proceed, whatever the enable flag
+  > says", scoping the refusal to auto-creation only. Tasks 7 and 8 shipped the
+  > stronger rule (`GroupGateOutcome.NotConfigured` → `SsoErrors.NotConfigured`
+  > on both paths), the choice was put to the user, and the user ratified the
+  > shipped behaviour: an unset required group refuses everyone. The design text
+  > was the wrong one and is corrected here rather than the code being changed.
+  > See `.superpowers/sdd/2026-08-30-group-gated-provisioning/progress.md`,
+  > "Ratified decision — 2026-08-30: unset RequiredGroup refuses everyone".
+
+- **Template user** — an existing Emby user whose policy is cloned. No default.
+
+  > **Drift noted 2026-08-30 (final review, F6).** This originally said "policy
+  > and configuration are cloned". Only the browser path clones the template's
+  > `UserConfiguration`; the native path's account is created by Emby itself and
+  > gets Emby's default `UserConfiguration`. The difference is display
+  > preference only — the two authentication-bearing fields, `ProfilePin` and
+  > `EnableLocalPassword`, are `null`/`false` in Emby's default and are forced to
+  > exactly those values by `TemplateClone.CloneConfiguration`, measured against
+  > decompiled `MediaBrowser.Model.Configuration.UserConfiguration` 4.9.1.90.
+  > Not fixed in code; recorded so a reader does not mistake it for a defect.
 - **Groups claim** — the claim to read groups from, defaulting to `groups`.
 
 ## Components
