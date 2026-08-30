@@ -391,6 +391,7 @@ namespace Emby.Sso.Tests
 
             var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
 
+            Assert.True(identity.HasGroupsClaim);
             Assert.Empty(identity.Groups);
         }
 

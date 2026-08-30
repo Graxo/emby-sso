@@ -300,13 +300,14 @@ namespace Emby.Sso.Protocol
             }
 
             var groups = ReadClaims(token, _options.GroupsClaim);
+            var hasGroupsClaim = ClaimExistsInPayload(token, _options.GroupsClaim);
 
             return new OidcIdentity(
                 ReadClaim(token, "sub"),
                 username.Trim(),
                 ReadClaim(token, "name") ?? username.Trim(),
                 groups,
-                token.Claims.Any(c => string.Equals(c.Type, _options.GroupsClaim, StringComparison.Ordinal)));
+                hasGroupsClaim);
         }
 
         /// <summary>
@@ -359,6 +360,31 @@ namespace Emby.Sso.Protocol
             }
 
             return values;
+        }
+
+        /// <summary>
+        /// Checks whether a claim exists in the token's raw JSON payload.
+        /// This distinguishes between a claim being absent and a claim containing an empty array.
+        /// IdentityModel flattens arrays into one claim per element, so an empty array
+        /// produces zero claims in the flattened Claims collection; checking the raw payload
+        /// is the only way to distinguish this case from the claim being missing entirely.
+        /// </summary>
+        private static bool ClaimExistsInPayload(JsonWebToken token, string name)
+        {
+            try
+            {
+                var payloadJson = System.Text.Encoding.UTF8.GetString(
+                    System.Convert.FromBase64String(
+                        token.EncodedPayload.PadRight(
+                            token.EncodedPayload.Length + (4 - token.EncodedPayload.Length % 4) % 4, '=')));
+
+                var payload = Newtonsoft.Json.Linq.JObject.Parse(payloadJson);
+                return payload.ContainsKey(name);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static string ReadStringField(string json, string field)
