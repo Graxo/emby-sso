@@ -409,6 +409,25 @@ namespace Emby.Sso.Tests
             Assert.Equal(new[] { "emby-users" }, identity.Groups);
         }
 
+        [Fact]
+        public async Task HasGroupsClaim_is_correct_with_non_ascii_displayname_and_populated_groups()
+        {
+            var login = _logins.Create();
+            // Non-ASCII characters (Japanese) in display name will encode to base64url containing
+            // special characters that would break a naive Convert.FromBase64String, ensuring
+            // we use the correct Base64UrlEncoder.
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(
+                _idp.CreateIdToken(
+                    nonce: login.Nonce,
+                    displayName: "田中太郎",
+                    groups: new[] { "emby-users", "admins" }));
+
+            var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.True(identity.HasGroupsClaim);
+            Assert.Equal(new[] { "emby-users", "admins" }, identity.Groups);
+        }
+
         /// <summary>Every request fails, as if the provider (or DNS, or the network) were down.</summary>
         private sealed class ThrowingHandler : HttpMessageHandler
         {

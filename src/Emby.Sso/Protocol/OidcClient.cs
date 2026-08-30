@@ -373,16 +373,14 @@ namespace Emby.Sso.Protocol
         {
             try
             {
-                var payloadJson = System.Text.Encoding.UTF8.GetString(
-                    System.Convert.FromBase64String(
-                        token.EncodedPayload.PadRight(
-                            token.EncodedPayload.Length + (4 - token.EncodedPayload.Length % 4) % 4, '=')));
-
+                var payloadBytes = Base64UrlEncoder.DecodeBytes(token.EncodedPayload);
+                var payloadJson = System.Text.Encoding.UTF8.GetString(payloadBytes);
                 var payload = Newtonsoft.Json.Linq.JObject.Parse(payloadJson);
                 return payload.ContainsKey(name);
             }
-            catch (Exception)
+            catch (Newtonsoft.Json.JsonException)
             {
+                // Payload exists but is not valid JSON. This should not happen for a valid token.
                 return false;
             }
         }
