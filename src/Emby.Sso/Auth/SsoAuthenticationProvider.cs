@@ -27,6 +27,7 @@ namespace Emby.Sso.Auth
     /// OPEN, narrowly. What guards it in its place is the ordered chain in
     /// <see cref="ProvisionOrRefuse"/>: auto-create must be enabled, a template
     /// user must be configured AND exist, direct grant must be enabled, the
+    /// attempt must be within <see cref="ProvisioningThrottle"/>'s budget, the
     /// identity provider must accept the supplied password on the direct-grant
     /// path, the verified identity must name the very username that was asked for,
     /// and that identity must hold the operator's required group. Every one of
@@ -65,6 +66,16 @@ namespace Emby.Sso.Auth
         private readonly IUserManager _userManager;
 
         private readonly PendingPolicies _pendingPolicies = new PendingPolicies(PendingPolicyLifetime);
+
+        // The brute-force brake on the provisioning branch, and only on that
+        // branch: a resolved user already has a UserPolicy and Emby's own
+        // InvalidLoginAttemptCount counting against it, while an unknown
+        // username has no account for Emby to count against and is exactly the
+        // case that forwards a stranger's guess to the identity provider.
+        // One instance per provider, which is one per server: Emby resolves its
+        // authentication providers once, so the counters are shared across every
+        // sign-in the way they must be to mean anything.
+        private readonly ProvisioningThrottle _throttle = new ProvisioningThrottle();
 
         public SsoAuthenticationProvider(ILogManager logManager, IUserManager userManager)
         {
@@ -147,7 +158,10 @@ namespace Emby.Sso.Auth
         /// therefore to an account being created. Every guard below throws; the
         /// success return at the end is reachable only when all of them passed.
         /// The order is deliberate - the three configuration checks come first, so
-        /// a server that is not provisioning never sends a credential anywhere.
+        /// a server that is not provisioning never sends a credential anywhere,
+        /// and the throttle comes fourth, so a server that IS provisioning stops
+        /// forwarding a stranger's guesses before it forwards them rather than
+        /// after.
         /// </summary>
         private async Task<ProviderAuthenticationResult> ProvisionOrRefuse(string username, string password)
         {
@@ -179,7 +193,22 @@ namespace Emby.Sso.Auth
                 throw new Exception(SsoErrors.DirectGrantDisabled);
             }
 
-            // 4. There is no resolved user, so the supplied username is all there
+            // 4. The brake, and it is consulted BEFORE anything is sent: from
+            //    here on this method hands the supplied password to the identity
+            //    provider, and an unknown username has no Emby account for
+            //    Emby's own throttle to count against. The refusal is the same
+            //    sentence an ordinary unknown username gets - see
+            //    ProvisioningThrottle.RefusalReason for why it must stay that
+            //    way - and only the log says a limit was involved.
+            if (_throttle.IsThrottled(username, DateTimeOffset.UtcNow))
+            {
+                _logger.Warn(
+                    "Rejecting sign-in for unresolved '{0}' without contacting the provider: the provisioning throttle is closed",
+                    ForLog(username));
+                throw new Exception(ProvisioningThrottle.RefusalReason);
+            }
+
+            // 5. There is no resolved user, so the supplied username is all there
             //    is to check the password against.
             var result = await SsoRuntime.Validator
                 .ValidateAsync(username, password, CancellationToken.None)
@@ -194,26 +223,47 @@ namespace Emby.Sso.Auth
                 // an unknown user rather than throwing a null message.
                 var reason = result.Reason ?? SsoErrors.UnknownUser;
                 _logger.Info("Rejecting sign-in for unresolved '{0}': {1}", ForLog(username), reason);
+                RecordThrottledFailure(username);
                 throw new Exception(reason);
             }
 
-            // 5. The identity the provider verified must be the one that was asked
+            // 6. The identity the provider verified must be the one that was asked
             //    for. The validator checks this too; it is repeated here because
             //    this is the branch that creates accounts, and the name checked
             //    here is the name the account gets.
             if (result.Identity == null || !UsernameMatcher.Matches(result.Identity.Username, username))
             {
                 _logger.Info("Rejecting sign-in: the verified identity does not name '{0}'", ForLog(username));
+                RecordThrottledFailure(username);
                 throw new Exception(SsoErrors.UnknownUser);
             }
 
-            // 6. The group gate. A non-holder must never cause an account to exist.
+            // 7. The group gate. A non-holder must never cause an account to exist.
             var gateOutcome = GroupGate.Evaluate(result.Identity, configuration.RequiredGroup);
 
             if (gateOutcome != GroupGateOutcome.Allowed)
             {
+                // Counted like any other refusal on this branch. A caller who
+                // holds a valid credential but not the group is still consuming
+                // identity-provider round trips, and refusing to count them
+                // would leave a budget-free way to probe the gate.
+                RecordThrottledFailure(username);
                 throw new Exception(RefuseByGate(gateOutcome, result.Identity.Username, configuration.GroupsClaim));
             }
+
+            // The credential was the caller's own and it was right, so the
+            // failures under this username were somebody fumbling their own
+            // password: clear that budget. Everything below this point can still
+            // fail the sign-in, but none of those failures are the credential's
+            // fault, so none of them is counted.
+            //
+            // Keyed on the name that was ASKED for, which is the name the check
+            // above was keyed on. Step 6 has already established that it and the
+            // identity's own spelling match under UsernameMatcher, and the
+            // throttle's map is keyed by that same comparison, so the two names
+            // cannot address different buckets. The global bucket is deliberately
+            // left alone - see RecordSuccess.
+            _throttle.RecordSuccess(username, DateTimeOffset.UtcNow);
 
             // Read the template before returning success, not after: if it cannot
             // be read there must be no account, and after the return it is too
@@ -434,6 +484,21 @@ namespace Emby.Sso.Auth
                     _logger.Error("Rejected sign-in for '{0}': no required group is configured", ForLog(identityUsername));
                     return SsoErrors.NotConfigured;
             }
+        }
+
+        /// <summary>
+        /// One counted failure of the provisioning branch. Called at every
+        /// failing exit BELOW the throttle check that reflects the credential
+        /// itself - a rejected password, an identity that names someone else, a
+        /// gate refusal. It is deliberately not called for the configuration
+        /// refusals above the check (nothing was tried, and an operator who has
+        /// not switched provisioning on must not accumulate a lockout), nor for
+        /// the throttle's own refusal, nor for the template and store failures
+        /// after the gate, which are the server's fault and not the caller's.
+        /// </summary>
+        private void RecordThrottledFailure(string username)
+        {
+            _throttle.RecordFailure(username, DateTimeOffset.UtcNow);
         }
 
         private static string ForLog(string value)
