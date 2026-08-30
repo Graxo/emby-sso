@@ -87,6 +87,32 @@ namespace Emby.Sso.Protocol
             return ValidateIdToken(idToken, login.Nonce, await GetConfigurationAsync(cancellationToken).ConfigureAwait(false));
         }
 
+        /// <summary>
+        /// Resource owner password credentials. Used only by native clients that
+        /// cannot perform a browser redirect. Cannot satisfy multi-factor
+        /// authentication, and is disabled unless an administrator enables it.
+        /// </summary>
+        public async Task<OidcIdentity> DirectGrantAsync(string username, string password, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                throw new SsoException(SsoErrors.ProviderRejected, "direct grant attempted with an empty credential");
+            }
+
+            var form = new Dictionary<string, string>
+            {
+                ["grant_type"] = "password",
+                ["username"] = username,
+                ["password"] = password,
+                ["scope"] = _options.Scopes,
+            };
+
+            var idToken = await PostTokenRequestAsync(form, cancellationToken).ConfigureAwait(false);
+
+            // No nonce: there was no authorization request to bind one to.
+            return ValidateIdToken(idToken, null, await GetConfigurationAsync(cancellationToken).ConfigureAwait(false));
+        }
+
         private async Task<string> PostTokenRequestAsync(Dictionary<string, string> form, CancellationToken cancellationToken)
         {
             var configuration = await GetConfigurationAsync(cancellationToken).ConfigureAwait(false);
