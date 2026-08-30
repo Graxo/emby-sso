@@ -95,6 +95,76 @@ namespace Emby.Sso.Auth
             // otherwise make every group holder an Emby administrator.
             clone.IsAdministrator = false;
 
+            // The mirror image of IsAdministrator, and it is here for the
+            // opposite reason: not because the template's value is too
+            // permissive, but because the SAFE value for a template is the
+            // WRONG value for a real account.
+            //
+            // The template exists only to donate a policy, but Emby treats it as
+            // an ordinary user - it can be signed into, and a freshly created
+            // "it's just a template" account with no password can be signed into
+            // by anyone, without touching this plugin, its group gate or its
+            // throttle (assessment finding F2, observed live). The correct
+            // hardening is therefore to DISABLE the template account.
+            //
+            // Without this line that hardening would silently break every
+            // provisioned account: the clone would inherit IsDisabled = true and
+            // each new user would be created already disabled, needing an
+            // administrator before they could sign in even once. The advice and
+            // the code have to agree, so the code is what makes the advice safe
+            // to follow. Do not remove this believing operators will simply be
+            // told to leave the template enabled - that is asking them to keep a
+            // login-able account with the exact library access this plugin hands
+            // out.
+            clone.IsDisabled = false;
+
+            // The rest of the safe/wrong-state review (assessment F2). Two more
+            // fields on UserPolicy are not policy INTENT at all - they are the
+            // template account's own accumulated login history - and inheriting
+            // them hands a brand-new account someone else's failures:
+            //
+            //   InvalidLoginAttemptCount - Emby's failed-login counter. A
+            //   template that has been probed would create accounts already part
+            //   of the way to a lockout.
+            //
+            //   LockedOutDate - a unix-millisecond timestamp. User.IsLockedOut
+            //   is "less than a minute since LockedOutDate" (decompiled from
+            //   MediaBrowser.Controller.Entities.User 4.9.1.90), so cloning a
+            //   recent one creates an account that is locked out at birth.
+            //
+            // Both are reset to the value Emby gives a normally created account.
+            // UNVERIFIED: exactly how 4.9.5.0's server code updates and reads
+            // them was not measured - the reference assemblies only declare
+            // them. It does not change the decision; neither field can be right
+            // to inherit under any reading.
+            clone.InvalidLoginAttemptCount = 0;
+            clone.LockedOutDate = 0;
+
+            // Everything else on UserPolicy was checked and deliberately left
+            // alone, because it IS the access the operator chose to donate:
+            // EnableAllFolders/EnabledFolders/ExcludedSubFolders,
+            // EnableAllChannels/EnabledChannels, EnableAllDevices/EnabledDevices,
+            // EnableRemoteAccess, EnableMediaPlayback and the transcoding and
+            // remuxing switches, EnableContentDownloading/Deletion,
+            // EnableSubtitleDownloading/Management, EnableSyncTranscoding,
+            // EnableMediaConversion, EnableLiveTvAccess/Management,
+            // EnableRemoteControlOfOtherUsers, EnableSharedDeviceControl,
+            // EnableUserPreferenceAccess, EnablePublicSharing,
+            // AllowCameraUpload, AllowSharingPersonalItems,
+            // SimultaneousStreamLimit, RemoteClientBitrateLimit,
+            // MaxParentalRating/BlockUnratedItems/AllowTagOrRating/BlockedTags/
+            // IncludeTags/IsTagBlockingModeInclusive, AccessSchedules,
+            // RestrictedFeatures, and the IsHidden family. Choosing the template
+            // deliberately is how an operator sets all of those, which is the
+            // documented contract.
+            //
+            // The IsHidden family is the one judgement call in that list.
+            // Hiding the template from the login list is sensible hardening, and
+            // a clone inherits it - so provisioned users are hidden from the
+            // login list too. That is a display consequence, not an access one,
+            // and SSO users do not sign in from that list, so it is left as the
+            // operator's choice rather than forced either way.
+
             // The template almost certainly carries Emby's default provider id.
             // Copying that would make the account unreachable through SSO, and
             // pre-setting it here also makes Emby's post-creation stamping write
