@@ -290,6 +290,32 @@ namespace Emby.Sso.Api
             // non-holder can never trigger it.
             var user = _userManager.GetUserByName(identity.Username);
 
+            if (user != null && UsernameMatcher.Matches(identity.Username, user.Name))
+            {
+                // The account already exists, so this plugin is being asked to
+                // ADOPT it rather than create it - and it may only do that for
+                // an account an operator has already pointed at this plugin.
+                //
+                // The same guard as SsoAuthenticationProvider's, on the other
+                // door. Emby offers an account whose AuthenticationProviderId is
+                // empty to every enabled provider (assessment F1 / S1a), and a
+                // freshly created administrator that has never signed in is
+                // exactly such an account - so without this, a group holder
+                // whose username claim names that administrator receives its
+                // session. Removing it from either path closes neither.
+                if (!IsStampedToThisPlugin(user))
+                {
+                    // Same sentence as an unknown user: the browser must not be
+                    // able to tell "no such account" from "that account is not
+                    // mine to sign in". The helper has already logged which it
+                    // was, with the account name as an ARGUMENT - it must never
+                    // become part of a log format string, nor part of the
+                    // logDetail this method passes to Error, which is a format
+                    // string too.
+                    return Error(SsoErrors.UnknownUser, null);
+                }
+            }
+
             if (user == null || !UsernameMatcher.Matches(identity.Username, user.Name))
             {
                 if (!configuration.EnableAutoCreate)
@@ -337,6 +363,61 @@ namespace Emby.Sso.Api
             _logger.Info("SSO: issued a sign-in handoff for {0}", user.Name);
 
             return Html(CompletionPage.Render(user.Name, secret));
+        }
+
+        /// <summary>
+        /// Whether an ALREADY-EXISTING Emby account names this plugin as its
+        /// authentication provider - the only accounts this flow may sign in.
+        /// Logs the reason when it does not; the caller renders the ordinary
+        /// indistinguishable refusal.
+        ///
+        /// See <see cref="ProviderStamp"/> for why an unstamped account must be
+        /// refused rather than adopted, and
+        /// <see cref="Auth.SsoAuthenticationProvider"/> for the twin of this
+        /// check on the native path. The two must not diverge: an account
+        /// refused here and admitted there is admitted.
+        /// </summary>
+        private bool IsStampedToThisPlugin(MediaBrowser.Controller.Entities.User user)
+        {
+            string providerId = null;
+
+            try
+            {
+                providerId = _userManager.GetUserPolicy(user)?.AuthenticationProviderId;
+            }
+            catch (Exception ex)
+            {
+                // A policy that could not be read is not evidence the account is
+                // ours. Null reads as Unstamped below, which refuses.
+                _logger.ErrorException(
+                    "SSO: could not read the policy for '{0}'; treating the account as not belonging to this plugin",
+                    ex,
+                    ForLog(user.Name));
+            }
+
+            var stamp = ProviderStamp.Evaluate(providerId, Auth.SsoAuthenticationProvider.ProviderId);
+
+            if (ProviderStamp.Permits(stamp))
+            {
+                return true;
+            }
+
+            if (stamp == ProviderStampOutcome.Unstamped)
+            {
+                _logger.Error(
+                    "SSO: rejected sign-in for '{0}': the account has no authentication provider assigned, so this "
+                    + "plugin will not adopt it. Set its Login provider to '{1}' deliberately if it should use SSO.",
+                    ForLog(user.Name),
+                    Auth.SsoAuthenticationProvider.ProviderId);
+            }
+            else
+            {
+                _logger.Info(
+                    "SSO: rejected sign-in for '{0}': the account belongs to another authentication provider",
+                    ForLog(user.Name));
+            }
+
+            return false;
         }
 
         // ------------------------------------------------------------------

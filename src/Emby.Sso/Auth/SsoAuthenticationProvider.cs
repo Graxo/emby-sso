@@ -73,6 +73,22 @@ namespace Emby.Sso.Auth
         /// </summary>
         private static readonly TimeSpan PendingPolicyLifetime = TimeSpan.FromSeconds(10);
 
+        /// <summary>
+        /// The value Emby writes into a user's <c>Policy.AuthenticationProviderId</c>
+        /// when this plugin authenticates them, and the value an account must
+        /// already carry before this plugin will authenticate it
+        /// (<see cref="ProviderStamp"/>). One definition, used by the two
+        /// provisioners and by both stamp checks, so the name this plugin
+        /// STAMPS and the name it REQUIRES cannot drift apart - if they ever
+        /// did, either every account would be refused or every account would be
+        /// admitted.
+        ///
+        /// The full type name is what Emby compares against; the project's
+        /// provisioning spike (§5.4) established that, and the README documents
+        /// the same string for operators setting the field by hand.
+        /// </summary>
+        public static readonly string ProviderId = typeof(SsoAuthenticationProvider).FullName;
+
         private readonly ILogger _logger;
 
         // Reads the template user whose policy a newly provisioned account is
@@ -171,6 +187,23 @@ namespace Emby.Sso.Auth
                 throw new Exception(SsoErrors.NotConfigured);
             }
 
+            // Decided before the credential goes anywhere, for the same reason
+            // the group check above is: it needs no identity, no token and no
+            // network, and an account this plugin may not authenticate must not
+            // cause a password to be forwarded on its behalf.
+            //
+            // This is the guard that closes the unstamped-account takeover
+            // (assessment F1 / S1a). See ProviderStamp for the full reasoning;
+            // in one line: Emby offers an account with an EMPTY
+            // AuthenticationProviderId to every enabled provider, so without
+            // this an administrator who has never signed in is reachable through
+            // the identity provider by whoever can present their name.
+            //
+            // It must stay ABOVE ValidateAsync and it must stay on this path as
+            // well as the browser callback's - the two are separate doors into
+            // the same account and closing one is closing neither.
+            RefuseUnlessStampedToThisPlugin(resolvedUser);
+
             var result = await SsoRuntime.Validator
                 .ValidateAsync(resolvedUser.Name, password, CancellationToken.None)
                 .ConfigureAwait(false);
@@ -237,6 +270,85 @@ namespace Emby.Sso.Auth
                 Username = resolvedUser.Name,
                 DisplayName = result.DisplayName,
             };
+        }
+
+        /// <summary>
+        /// Throws unless the already-existing account names this plugin as its
+        /// authentication provider.
+        ///
+        /// The refusal is the ordinary indistinguishable "not set up on this
+        /// server" sentence - the same one an unknown username, a missing
+        /// groups claim and a withheld group all get - because telling a
+        /// stranger "that account exists but belongs to another provider"
+        /// confirms the account exists. Only the log says which it was, and it
+        /// says it at Error for an unstamped account because that one is an
+        /// operator action waiting to happen: adopting an existing account into
+        /// SSO means setting its Login provider deliberately.
+        ///
+        /// The policy is read through IUserManager rather than User.Policy so
+        /// the dependency this class already declares is the one that answers,
+        /// rather than the lazily-initialised static BaseItem.UserManager the
+        /// property reaches for (verified by decompiling
+        /// MediaBrowser.Controller.Entities.User 4.9.1.90).
+        ///
+        /// UNVERIFIED: that Emby routes an unstamped account to this provider
+        /// at all is taken from the assessment's decompilation of the running
+        /// server's GetAuthenticationProviders, not re-measured here - the
+        /// plugin is installed on no server this project may sign into. The
+        /// guard is safe either way: if Emby never offered unstamped accounts,
+        /// this refusal would simply never fire.
+        /// </summary>
+        private void RefuseUnlessStampedToThisPlugin(User resolvedUser)
+        {
+            string providerId = null;
+
+            try
+            {
+                providerId = _userManager.GetUserPolicy(resolvedUser)?.AuthenticationProviderId;
+            }
+            catch (Exception ex)
+            {
+                // A policy that cannot be read is not evidence that the account
+                // is ours. Fall through with a null provider id, which
+                // ProviderStamp reports as Unstamped, which refuses.
+                _logger.ErrorException(
+                    "Could not read the policy for {0}; treating the account as not belonging to this plugin",
+                    ex,
+                    ForLog(resolvedUser.Name));
+            }
+
+            var stamp = ProviderStamp.Evaluate(providerId, ProviderId);
+
+            if (ProviderStamp.Permits(stamp))
+            {
+                return;
+            }
+
+            switch (stamp)
+            {
+                case ProviderStampOutcome.Unstamped:
+                    _logger.Error(
+                        "Rejecting sign-in for {0}: the account has no authentication provider assigned, so this "
+                        + "plugin will not adopt it. Set its Login provider to '{1}' deliberately if it should use SSO.",
+                        ForLog(resolvedUser.Name),
+                        ProviderId);
+                    break;
+
+                case ProviderStampOutcome.StampedToAnotherProvider:
+                    _logger.Info(
+                        "Rejecting sign-in for {0}: the account belongs to another authentication provider",
+                        ForLog(resolvedUser.Name));
+                    break;
+
+                default:
+                    _logger.Error(
+                        "Rejecting sign-in for {0}: unrecognised provider stamp outcome {1}",
+                        ForLog(resolvedUser.Name),
+                        (int)stamp);
+                    break;
+            }
+
+            throw new Exception(SsoErrors.UnknownUser);
         }
 
         /// <summary>

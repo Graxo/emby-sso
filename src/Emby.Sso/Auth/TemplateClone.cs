@@ -99,7 +99,7 @@ namespace Emby.Sso.Auth
             // Copying that would make the account unreachable through SSO, and
             // pre-setting it here also makes Emby's post-creation stamping write
             // a no-op, so no second policy write ever races this one. Spike §5.4.
-            clone.AuthenticationProviderId = typeof(SsoAuthenticationProvider).FullName;
+            clone.AuthenticationProviderId = SsoAuthenticationProvider.ProviderId;
 
             return clone;
         }
