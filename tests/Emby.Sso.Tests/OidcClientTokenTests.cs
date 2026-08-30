@@ -410,22 +410,33 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public async Task HasGroupsClaim_is_correct_with_non_ascii_displayname_and_populated_groups()
+        public async Task HasGroupsClaim_is_correct_with_base64url_special_characters_in_payload()
         {
             var login = _logins.Create();
-            // Non-ASCII characters (Japanese) in display name will encode to base64url containing
-            // special characters that would break a naive Convert.FromBase64String, ensuring
-            // we use the correct Base64UrlEncoder.
-            _idp.TokenResponseJson = _idp.CreateTokenResponse(
-                _idp.CreateIdToken(
-                    nonce: login.Nonce,
-                    displayName: "田中太郎",
-                    groups: new[] { "emby-users", "admins" }));
+            // Non-ASCII display name (ß characters) that encodes to base64url containing
+            // - or _ characters, which would cause Convert.FromBase64String to fail.
+            // This test ensures we use Base64UrlEncoder.DecodeBytes, not hand-rolled decoding.
+            var displayName = "ßßßßßßßß";
+            var idToken = _idp.CreateIdToken(
+                nonce: login.Nonce,
+                displayName: displayName,
+                groups: new[] { "emby-users", "admins" });
+
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(idToken);
+
+            // Precondition: verify the token's base64url-encoded payload contains - or _ characters
+            // that would break Convert.FromBase64String. Extract payload (part between first and second dots).
+            var parts = idToken.Split('.');
+            Assert.Equal(3, parts.Length);
+            var payload = parts[1];
+            Assert.True(payload.Contains('-') || payload.Contains('_'),
+                "Test fixture must contain base64url special characters (- or _) to exercise the decoding fix");
 
             var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
 
             Assert.True(identity.HasGroupsClaim);
             Assert.Equal(new[] { "emby-users", "admins" }, identity.Groups);
+            Assert.Equal(displayName, identity.DisplayName);
         }
 
         /// <summary>Every request fails, as if the provider (or DNS, or the network) were down.</summary>
