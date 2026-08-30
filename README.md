@@ -215,11 +215,31 @@ release and currently does nothing — leave it as you find it.
 
 ## Installing the plugin
 
-The shipped artifact is a **single file**:
+The shipped artifact is a **single file**, `Emby.Sso.dll`. Every release is a
+git tag, and the release page carries that one DLL and a SHA256 checksum for
+it:
 
 ```
-src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
+https://git.koper.cloud/Graxo/emby-sso/-/releases
 ```
+
+The same two files have a stable, version-addressed download URL, so an
+upgrade is one substitution away:
+
+```
+base=https://git.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
+curl -fLO $base/Emby.Sso.dll
+curl -fLO $base/Emby.Sso.dll.sha256
+sha256sum -c Emby.Sso.dll.sha256
+```
+
+**Check the checksum before you copy anything onto a server.** It is also the
+only way to tell two builds of the same version apart if you have been
+building locally.
+
+Building from source produces the same file, at
+`src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll` — see **Building
+from source** below.
 
 Do not install any other DLL from the build output. This file is
 deliberately produced by merging (ILRepack) the plugin together with its
@@ -237,9 +257,17 @@ colliding with the server's own copies.
 To install:
 
 1. Copy `Emby.Sso.dll` into Emby's `plugins` directory (for example
-   `/config/plugins` in the linuxserver.io Docker image).
+   `/config/plugins` in the linuxserver.io Docker image), replacing any
+   earlier copy.
 2. Restart Emby Server.
-3. Confirm it loaded: Dashboard → Plugins should list **Authentik SSO**.
+3. Confirm it loaded: Dashboard → Plugins should list **Authentik SSO**, at
+   the version you downloaded. The version shown is the release tag — a
+   release built from `v1.4.0` reports `1.4.0`, and a build you made yourself
+   reports `0.0.0`. If the number is not the one you just installed, the old
+   DLL is still in place and Emby is still running it.
+
+Upgrading is the same three steps, but read **Upgrading an existing install:
+set the required group FIRST** at the top of this document before you restart.
 
 ---
 
@@ -492,6 +520,16 @@ produces the merged, installable plugin at:
 src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
 ```
 
+A build with no version given reports `0.0.0-dev`, deliberately: a DLL you
+built yourself should never look like a release in Emby's plugin list. To
+build one that names itself, pass the version in:
+
+```
+dotnet build -c Release -p:Version=1.4.0
+```
+
+That is all CI does — with the version taken from the tag.
+
 Run the protocol test suite (203 tests, no Emby server or network required —
 they run against a fake identity provider built from a locally generated
 RSA key). Note what it does and does not cover: the suite compiles the
@@ -503,6 +541,44 @@ because those types reference `MediaBrowser.*` and need a running server:
 ```
 dotnet test tests/Emby.Sso.Tests
 ```
+
+---
+
+## Cutting a release
+
+Releases are made by pushing a tag. There is nothing to build by hand and
+nothing to upload.
+
+```
+git tag -a v1.4.0 -m "What changed in this release."
+git push origin v1.4.0
+```
+
+The tag pipeline in `.gitlab-ci.yml` then, in order:
+
+1. runs the test suite. Every later job hangs off it through `needs:`, so a
+   tag cannot produce a release with a red suite behind it;
+2. builds `-c Release` with `-p:Version=1.4.0`, derived from the tag by
+   `ci/version.sh`. A tag that is not `vMAJOR.MINOR.PATCH` — optionally with a
+   `-rc.1`-style suffix — fails the build instead of quietly shipping
+   something;
+3. checks the artifact with `ci/verify-artifact.sh` before it leaves the job.
+   The file must be over a megabyte, because the merged DLL is ~1.8 MB and the
+   unmerged one one directory away is ~108 KB, and it must carry
+   `1.4.0+<commit>` as its assembly informational version, which shows both
+   that the tag's version reached the assembly and that this file came from
+   this build;
+4. uploads the DLL and its `.sha256` to the project's generic package registry
+   under `emby-sso/1.4.0/`, which is what gives them a permanent download URL;
+5. creates the GitLab Release for the tag, linking both files as assets and
+   describing it with notes generated from the tag's own message and the
+   checksum.
+
+Write the annotated tag's message for the operator who will read it on the
+release page: it becomes the release notes' "What changed" section.
+
+An untagged push runs steps 1–3 only, and versions the build
+`0.0.0-dev.<short sha>`.
 
 ---
 
@@ -555,3 +631,18 @@ key or shape. Either way, sign-in through the plugin still completes on
 the server side — the account is not locked out — it's only the automatic
 hand-off into the already-signed-in home screen that would need a second
 look.
+
+### The release pipeline has not published a release yet
+
+No tag has been pushed since the release jobs were written, so the download
+URLs above describe what the pipeline is built to produce rather than
+something already sitting on the server. What *has* been checked, locally and
+outside CI: the version derivation, the merged-artifact check, and the release
+notes were run as scripts against a real Release build, and the version in the
+tag was confirmed to land in the merged assembly's identity by reading the
+DLL's metadata back. What only a real pipeline run can confirm is GitLab's
+side of it — that the runner accepts the file, that the package upload and the
+Release are created, and that the asset links resolve for someone who is not
+signed in. Treat the first tag as a rehearsal: push `v0.1.0`, then download
+the DLL from the release page as an anonymous user and check its checksum
+before telling anyone the link exists.
