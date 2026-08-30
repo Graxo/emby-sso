@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Emby.Sso.Protocol;
@@ -25,6 +26,18 @@ namespace Emby.Sso.Api
         private readonly ILogger _logger;
         private readonly IUserManager _userManager;
         private readonly IHttpResultFactory _resultFactory;
+
+        private const string BindingCookieName = "emby_sso_binding";
+
+        /// <summary>
+        /// Not in <c>SsoErrors</c>, which is in the frozen Protocol layer and knows
+        /// nothing of browsers. Deliberately not <c>SessionExpired</c>: for a
+        /// stripped cookie nothing has expired, and telling the user to wait or
+        /// blame the provider would send them and their administrator the wrong
+        /// way. It says what to do and reveals nothing about why.
+        /// </summary>
+        private const string BrowserBindingFailed =
+            "This sign-in could not be completed in this browser. Please try signing in again.";
 
         // Property injection of IHttpResultFactory via IHasResultFactory leaves it
         // null on this server; the constructor is the only way that works.
@@ -91,6 +104,11 @@ namespace Emby.Sso.Api
                 var login = SsoRuntime.PendingLogins.Create();
                 var url = await client.BuildAuthorizationUrlAsync(login, CancellationToken.None).ConfigureAwait(false);
 
+                // Bind the flow to this browser. Without it, state is a
+                // server-global key and anyone holding a valid state and code can
+                // complete the flow in someone else's browser.
+                IssueBrowserBinding(login);
+
                 return _resultFactory.GetRedirectResult(url);
             }
             catch (SsoException ex)
@@ -108,6 +126,11 @@ namespace Emby.Sso.Api
 
         private async Task<object> HandleCallbackAsync(SsoCallback request)
         {
+            // Consume first, unconditionally: a state is single-use whatever the
+            // outcome, including the provider-error path below, which would
+            // otherwise leave the pending login live for its whole TTL.
+            var login = SsoRuntime.PendingLogins.Consume(request.State);
+
             if (!string.IsNullOrEmpty(request.Error))
             {
                 // Provider-supplied. It goes to the log and nowhere else - as an
@@ -117,14 +140,25 @@ namespace Emby.Sso.Api
                 return Error(SsoErrors.ProviderRejected, null);
             }
 
-            // Consume before anything else can fail: a state is single-use even
-            // when the rest of the exchange goes wrong.
-            var login = SsoRuntime.PendingLogins.Consume(request.State);
-
             if (login == null)
             {
                 return Error(SsoErrors.SessionExpired, "callback carried an unknown, expired or replayed state");
             }
+
+            var bindingFailure = CheckBrowserBinding(login);
+
+            if (bindingFailure != null)
+            {
+                // Deliberately without clearing the cookie. A callback that fails
+                // the binding check is, by definition, in a browser that did not
+                // start this login - quite possibly a victim's, mid-flow, with a
+                // live cookie of their own. Expiring it here would let anyone
+                // holding one valid state cancel other people's sign-ins.
+                return Error(BrowserBindingFailed, bindingFailure);
+            }
+
+            // The binding did its job; this browser has no further use for it.
+            ClearBrowserBinding();
 
             var client = SsoRuntime.GetClient();
 
@@ -161,6 +195,211 @@ namespace Emby.Sso.Api
             _logger.Info("SSO: issued a sign-in handoff for {0}", user.Name);
 
             return Html(CompletionPage.Render(user.Name, secret));
+        }
+
+        // ------------------------------------------------------------------
+        // Browser binding
+        //
+        // The state parameter is a server-global key with no tie to a user agent.
+        // An attacker can run their own sign-in, hold the resulting code and
+        // state, and induce a victim's browser to load the callback inside the
+        // pending login's TTL - the victim's web client is then signed in as the
+        // attacker, with the attacker's token in the victim's localStorage. So
+        // /Sso/Start also hands the browser a fresh high-entropy value in a
+        // cookie, stores it with the pending login, and the callback requires it
+        // back unchanged. Fails closed: no cookie, or a cookie that does not
+        // match, ends the flow.
+        // ------------------------------------------------------------------
+
+        private void IssueBrowserBinding(PendingLogin login)
+        {
+            if (login == null || !IsCookieSafe(login.BrowserBinding))
+            {
+                return;
+            }
+
+            // Exactly as long as the pending login itself is good for.
+            var remaining = login.ExpiresAt - DateTimeOffset.UtcNow;
+            var seconds = remaining.TotalSeconds < 1 ? 1 : (long)Math.Ceiling(remaining.TotalSeconds);
+
+            SetCookie(login.BrowserBinding, seconds);
+        }
+
+        private void ClearBrowserBinding()
+        {
+            SetCookie(string.Empty, 0);
+        }
+
+        /// <summary>
+        /// Returns null when the browser presented the value this login was bound
+        /// to, or a log detail naming which way it failed - a stripped cookie and
+        /// a forged one need different things looked at.
+        /// </summary>
+        private string CheckBrowserBinding(PendingLogin login)
+        {
+            if (login == null || string.IsNullOrEmpty(login.BrowserBinding))
+            {
+                // Only reachable if a PendingLogin was built outside the store.
+                return "the pending login carried no browser binding";
+            }
+
+            var presented = ReadBindingCookies();
+
+            if (presented.Count == 0)
+            {
+                return "no browser-binding cookie was presented: the callback reached a different browser "
+                    + "than the one that started, or something between the browser and Emby drops cookies";
+            }
+
+            foreach (var candidate in presented)
+            {
+                if (FixedTime.Equals(login.BrowserBinding, candidate))
+                {
+                    return null;
+                }
+            }
+
+            return "the browser-binding cookie did not match the pending login";
+        }
+
+        private void SetCookie(string value, long maxAgeSeconds)
+        {
+            var response = Request?.Response;
+
+            if (response == null)
+            {
+                return;
+            }
+
+            var cookie = new System.Text.StringBuilder();
+            cookie.Append(BindingCookieName).Append('=').Append(value);
+            cookie.Append("; Path=").Append(CookiePath());
+            cookie.Append("; Max-Age=").Append(maxAgeSeconds.ToString(CultureInfo.InvariantCulture));
+            cookie.Append("; HttpOnly; SameSite=Lax");
+
+            // Lax, not Strict: the callback is a top-level cross-site navigation
+            // from the identity provider, and Strict would withhold the cookie
+            // there and break every sign-in. Lax still withholds it from
+            // cross-site subresources, forms and frames.
+            if (IsHttps(SsoRuntime.Configuration?.EmbyPublicBaseUrl))
+            {
+                cookie.Append("; Secure");
+            }
+
+            response.AddHeader("Set-Cookie", cookie.ToString());
+        }
+
+        private List<string> ReadBindingCookies()
+        {
+            var found = new List<string>();
+            var headers = Request?.Headers;
+
+            if (headers == null)
+            {
+                return found;
+            }
+
+            var prefix = BindingCookieName + "=";
+
+            foreach (var header in headers)
+            {
+                if (header == null || !string.Equals(header.Name, "Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(header.Value))
+                {
+                    continue;
+                }
+
+                // A browser may send several cookies of the same name when their
+                // paths differ; try them all rather than only the first.
+                foreach (var part in header.Value.Split(';'))
+                {
+                    var item = part.Trim();
+
+                    if (item.StartsWith(prefix, StringComparison.Ordinal) && item.Length > prefix.Length)
+                    {
+                        found.Add(item.Substring(prefix.Length));
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// The cookie path in the BROWSER's terms, which is the redirect URI's
+        /// directory - not Emby's own PathInfo, which a reverse proxy may have
+        /// stripped a prefix from. Falls back to "/" rather than guessing.
+        /// </summary>
+        private static string CookiePath()
+        {
+            var redirectUri = SsoRuntime.RedirectUri();
+
+            if (!string.IsNullOrEmpty(redirectUri) && Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
+            {
+                var path = uri.AbsolutePath;
+                var lastSlash = path.LastIndexOf('/');
+
+                if (lastSlash > 0 && IsPathSafe(path))
+                {
+                    return path.Substring(0, lastSlash);
+                }
+            }
+
+            return "/";
+        }
+
+        /// <summary>
+        /// Nothing that could end an attribute or the header itself: the base URL
+        /// this is derived from is administrator-supplied.
+        /// </summary>
+        private static bool IsPathSafe(string path)
+        {
+            foreach (var character in path)
+            {
+                var allowed = (character >= 'a' && character <= 'z')
+                    || (character >= 'A' && character <= 'Z')
+                    || (character >= '0' && character <= '9')
+                    || character == '/' || character == '-' || character == '_'
+                    || character == '.' || character == '~' || character == '%';
+
+                if (!allowed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// SecureRandom emits base64url, so this always holds; it exists so a
+        /// future change to the token alphabet cannot become header injection.
+        /// </summary>
+        private static bool IsCookieSafe(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return false;
+            }
+
+            foreach (var character in value)
+            {
+                var allowed = (character >= 'a' && character <= 'z')
+                    || (character >= 'A' && character <= 'Z')
+                    || (character >= '0' && character <= '9')
+                    || character == '-' || character == '_';
+
+                if (!allowed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -237,17 +476,29 @@ namespace Emby.Sso.Api
 
         private object Html(string body)
         {
-            // The content type argument alone is not enough on this server: without
-            // this line the response goes out as application/json.
-            Request.ResponseContentType = "text/html";
-
             var headers = new Dictionary<string, string>
             {
                 ["Cache-Control"] = "no-store, no-cache, must-revalidate",
                 ["Pragma"] = "no-cache",
             };
 
-            return _resultFactory.GetResult(Request, body.AsSpan(), "text/html", headers);
+            var request = Request;
+
+            if (request == null)
+            {
+                // IRequiresRequest injection has never been seen to fail, but this
+                // is the last step of the handler that exists so nothing escapes
+                // into Emby's error handling - it must not be the thing that
+                // throws. There is a request-less overload; use it.
+                _logger.Error("SSO: the request was not injected into the service; responding without it");
+                return _resultFactory.GetResult(body.AsSpan(), "text/html", headers);
+            }
+
+            // The content type argument alone is not enough on this server: without
+            // this line the response goes out as application/json.
+            request.ResponseContentType = "text/html";
+
+            return _resultFactory.GetResult(request, body.AsSpan(), "text/html", headers);
         }
     }
 }

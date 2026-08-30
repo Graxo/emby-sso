@@ -238,7 +238,8 @@ namespace Emby.Sso.Tests
                 "state-1",
                 nonce: null,
                 SecureRandom.CreateCodeVerifier(),
-                DateTimeOffset.UtcNow.AddMinutes(5));
+                DateTimeOffset.UtcNow.AddMinutes(5),
+                SecureRandom.CreateToken(32));
 
             var error = await Assert.ThrowsAsync<SsoException>(
                 () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));

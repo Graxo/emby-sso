@@ -44,7 +44,7 @@ align-items:center;justify-content:center;text-align:center}
 main{max-width:32rem;padding:2rem}h1{font-size:1.25rem;font-weight:600}
 p{color:#bbb;line-height:1.5}a{color:#9cf}code{color:#888;font-size:.85em}
 </style></head><body><main>
-<div id='working'><h1>Signing you in</h1><p>One moment.</p></div>
+<div id='working' style='display:none'><h1>Signing you in</h1><p>One moment.</p></div>
 <div id='failed' style='display:none'><h1>Sign-in failed</h1>
 <p>Emby could not complete this sign-in. <code id='code'></code></p>
 <p><a id='retry' href='#'>Try again</a></p></div>
@@ -76,6 +76,11 @@ var manualAddress = serverUrl.toLowerCase();
 
 function show(id) { document.getElementById(id).style.display = ''; }
 function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+// Both blocks start hidden so that with scripting off the <noscript> message is
+// the only thing on the page, rather than a second heading under a claim that a
+// sign-in is in progress.
+show('working');
 
 function fail(code) {
   var clean = String(code || 'unknown').replace(/[^A-Za-z0-9 _.:-]/g, '').slice(0, 60);
@@ -181,16 +186,24 @@ function store(result) {
   localStorage.setItem(STORE_KEY, JSON.stringify(creds));
 }
 
-authenticate()
-  .then(verify)
-  .then(function (result) {
-    store(result);
-    location.replace(serverUrl + '/web/index.html');
-  })
-  .catch(function (error) {
-    // Codes only. A response body could carry the access token.
-    fail(error && error.message);
-  });
+// authenticate() is called through the chain, not before it: a synchronous
+// throw - no fetch, no Promise, a blocked API - has to reach the same handler,
+// or the page sits on 'Signing you in' for ever.
+try {
+  Promise.resolve()
+    .then(authenticate)
+    .then(verify)
+    .then(function (result) {
+      store(result);
+      location.replace(serverUrl + '/web/index.html');
+    })
+    .catch(function (error) {
+      // Codes only. A response body could carry the access token.
+      fail(error && error.message);
+    });
+} catch (error) {
+  fail('unsupported-browser');
+}
 })();
 </script></body></html>
 ";

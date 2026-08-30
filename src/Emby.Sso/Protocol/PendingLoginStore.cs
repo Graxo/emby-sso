@@ -31,7 +31,8 @@ namespace Emby.Sso.Protocol
                 SecureRandom.CreateToken(32),
                 SecureRandom.CreateToken(32),
                 SecureRandom.CreateCodeVerifier(),
-                _clock().Add(_ttl));
+                _clock().Add(_ttl),
+                SecureRandom.CreateToken(32));
 
             lock (_lock)
             {
