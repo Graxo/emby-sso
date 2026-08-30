@@ -75,6 +75,14 @@ namespace Emby.Sso.Protocol
                 throw new SsoException(SsoErrors.ProviderRejected, "authorization code missing from callback");
             }
 
+            // A pending login is always minted with a nonce (PendingLoginStore.Create);
+            // a missing one here means the invariant broke somewhere, not that the
+            // caller opted out. Fail closed rather than silently skipping the check.
+            if (string.IsNullOrEmpty(login.Nonce))
+            {
+                throw new SsoException(SsoErrors.InvalidToken, "pending login had no nonce");
+            }
+
             var form = new Dictionary<string, string>
             {
                 ["grant_type"] = "authorization_code",
@@ -84,7 +92,8 @@ namespace Emby.Sso.Protocol
             };
 
             var idToken = await PostTokenRequestAsync(form, cancellationToken).ConfigureAwait(false);
-            return ValidateIdToken(idToken, login.Nonce, await GetConfigurationAsync(cancellationToken).ConfigureAwait(false));
+            var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
+            return ValidateIdToken(idToken, login.Nonce, requireNonce: true, configuration);
         }
 
         /// <summary>
@@ -108,14 +117,29 @@ namespace Emby.Sso.Protocol
             };
 
             var idToken = await PostTokenRequestAsync(form, cancellationToken).ConfigureAwait(false);
+            var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
 
-            // No nonce: there was no authorization request to bind one to.
-            return ValidateIdToken(idToken, null, await GetConfigurationAsync(cancellationToken).ConfigureAwait(false));
+            // No nonce: there was no authorization request to bind one to. Unlike
+            // ExchangeCodeAsync, this is an explicit, named opt-out rather than an
+            // inferred one.
+            return ValidateIdToken(idToken, null, requireNonce: false, configuration);
+        }
+
+        private async Task<OpenIdConnectConfiguration> GetConfigurationOrThrowAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await GetConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new SsoException(SsoErrors.ProviderUnreachable, "provider metadata could not be retrieved", ex);
+            }
         }
 
         private async Task<string> PostTokenRequestAsync(Dictionary<string, string> form, CancellationToken cancellationToken)
         {
-            var configuration = await GetConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, configuration.TokenEndpoint))
             {
@@ -129,8 +153,12 @@ namespace Emby.Sso.Protocol
                 {
                     request.Content = new FormUrlEncodedContent(form);
 
+                    // RFC 6749 §2.3.1: the client id and secret are each encoded per
+                    // application/x-www-form-urlencoded before being joined and
+                    // base64-encoded, so a secret containing ':', '+', '%' or a space
+                    // round-trips correctly at strict providers.
                     var credentials = Convert.ToBase64String(
-                        System.Text.Encoding.UTF8.GetBytes(_options.ClientId + ":" + _options.ClientSecret));
+                        System.Text.Encoding.UTF8.GetBytes(FormUrlEncode(_options.ClientId) + ":" + FormUrlEncode(_options.ClientSecret)));
                     request.Headers.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
                 }
@@ -147,7 +175,15 @@ namespace Emby.Sso.Protocol
 
                 using (response)
                 {
-                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    string body;
+                    try
+                    {
+                        body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new SsoException(SsoErrors.ProviderUnreachable, "token endpoint response could not be read", ex);
+                    }
 
                     if (!response.IsSuccessStatusCode)
                     {
@@ -169,7 +205,12 @@ namespace Emby.Sso.Protocol
             }
         }
 
-        private OidcIdentity ValidateIdToken(string idToken, string expectedNonce, OpenIdConnectConfiguration configuration)
+        private static string FormUrlEncode(string value)
+        {
+            return Uri.EscapeDataString(value ?? string.Empty).Replace("%20", "+");
+        }
+
+        private OidcIdentity ValidateIdToken(string idToken, string expectedNonce, bool requireNonce, OpenIdConnectConfiguration configuration)
         {
             var parameters = new TokenValidationParameters
             {
@@ -197,7 +238,7 @@ namespace Emby.Sso.Protocol
 
             var token = (JsonWebToken)result.SecurityToken;
 
-            if (expectedNonce != null)
+            if (requireNonce)
             {
                 token.TryGetClaim("nonce", out var nonceClaim);
 

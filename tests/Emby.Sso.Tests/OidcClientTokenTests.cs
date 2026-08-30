@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -15,9 +16,9 @@ namespace Emby.Sso.Tests
         private readonly PendingLoginStore _logins =
             new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
 
-        private OidcClient CreateClient()
+        private static OidcOptions CreateOptions()
         {
-            var options = new OidcOptions
+            return new OidcOptions
             {
                 IssuerUrl = FakeIdentityProvider.Issuer,
                 ClientId = FakeIdentityProvider.ClientId,
@@ -26,8 +27,11 @@ namespace Emby.Sso.Tests
                 RedirectUri = "https://emby.test/emby/Sso/Callback",
                 UsernameClaim = "preferred_username",
             };
+        }
 
-            return new OidcClient(new HttpClient(_idp), options);
+        private OidcClient CreateClient()
+        {
+            return new OidcClient(new HttpClient(_idp), CreateOptions());
         }
 
         [Fact]
@@ -197,6 +201,137 @@ namespace Emby.Sso.Tests
             var text = error.ToString();
             Assert.DoesNotContain(FakeIdentityProvider.ClientSecret, text, StringComparison.Ordinal);
             Assert.DoesNotContain(login.CodeVerifier, text, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task Failures_never_leak_the_id_token_on_a_validation_failure()
+        {
+            // The path that actually attaches an inner exception (and so is the one
+            // that could leak into SsoException.ToString()) is JWT validation, not
+            // the HTTP-rejection path above.
+            var otherIdp = new FakeIdentityProvider();
+            var login = _logins.Create();
+            var idToken = otherIdp.CreateIdToken(nonce: login.Nonce);
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(idToken);
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.InvalidToken, error.UserSafeReason);
+            Assert.DoesNotContain(idToken, error.ToString(), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task A_pending_login_with_no_nonce_is_rejected_before_contacting_the_provider()
+        {
+            // A pending login should always carry a nonce (PendingLoginStore.Create
+            // always mints one). This constructs one directly, bypassing the store,
+            // to prove the code-exchange path fails closed rather than treating a
+            // missing nonce as "nonce checking is optional here".
+            var login = new PendingLogin(
+                "state-1",
+                nonce: null,
+                SecureRandom.CreateCodeVerifier(),
+                DateTimeOffset.UtcNow.AddMinutes(5));
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.InvalidToken, error.UserSafeReason);
+            Assert.Null(_idp.LastTokenRequestForm);
+        }
+
+        [Fact]
+        public async Task An_unreachable_provider_surfaces_as_provider_unreachable()
+        {
+            var login = _logins.Create();
+            var client = new OidcClient(new HttpClient(new ThrowingHandler()), CreateOptions());
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => client.ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.ProviderUnreachable, error.UserSafeReason);
+            Assert.DoesNotContain(FakeIdentityProvider.Issuer, error.UserSafeReason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task A_failure_reading_the_token_response_surfaces_as_provider_unreachable()
+        {
+            var login = _logins.Create();
+            var client = new OidcClient(new HttpClient(new TokenReadFailureHandler(_idp)), CreateOptions());
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => client.ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.ProviderUnreachable, error.UserSafeReason);
+        }
+
+        [Fact]
+        public async Task The_token_request_form_urlencodes_the_client_secret_before_basic_auth()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(nonce: login.Nonce));
+
+            var options = CreateOptions();
+            options.ClientSecret = "p@ss:w rd+%";
+
+            await new OidcClient(new HttpClient(_idp), options)
+                .ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            var decoded = Encoding.UTF8.GetString(
+                Convert.FromBase64String(_idp.LastTokenRequestAuthorization.Parameter));
+
+            // RFC 6749 §2.3.1: form-urlencoded, not raw concatenation. ':' -> %3A,
+            // '@' -> %40, ' ' -> '+', '+' -> %2B, '%' -> %25.
+            Assert.Equal(FakeIdentityProvider.ClientId + ":p%40ss%3Aw+rd%2B%25", decoded);
+        }
+
+        /// <summary>Every request fails, as if the provider (or DNS, or the network) were down.</summary>
+        private sealed class ThrowingHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                throw new HttpRequestException("simulated network failure reaching " + request.RequestUri);
+            }
+        }
+
+        /// <summary>
+        /// Discovery and JWKS succeed normally (forwarded to a real fake provider),
+        /// but the token endpoint returns a response whose body throws when read -
+        /// a mid-response transport failure rather than a connect failure.
+        /// </summary>
+        private sealed class TokenReadFailureHandler : HttpMessageHandler
+        {
+            private readonly HttpMessageInvoker _inner;
+
+            public TokenReadFailureHandler(HttpMessageHandler inner)
+            {
+                _inner = new HttpMessageInvoker(inner, disposeHandler: false);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                if (request.RequestUri.AbsoluteUri.EndsWith("/token/", StringComparison.Ordinal))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ThrowingContent() };
+                }
+
+                return await _inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+
+            private sealed class ThrowingContent : HttpContent
+            {
+                protected override Task SerializeToStreamAsync(Stream stream, TransportContext context)
+                {
+                    throw new IOException("simulated failure reading the token response body");
+                }
+
+                protected override bool TryComputeLength(out long length)
+                {
+                    length = 0;
+                    return false;
+                }
+            }
         }
     }
 }
