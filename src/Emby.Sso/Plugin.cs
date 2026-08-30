@@ -34,6 +34,12 @@ namespace Emby.Sso
                     Name = "AuthentikSso",
                     EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
                 },
+                new PluginPageInfo
+                {
+                    Name = "AuthentikSsoScript",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js",
+                    IsMainConfigPage = false,
+                },
             };
         }
     }
