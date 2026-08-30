@@ -69,11 +69,16 @@ assumed from documentation:
 - **A user with no provider assigned is offered to every enabled provider.**
   If an account's `AuthenticationProviderId` has never been set, Emby tries
   every provider in turn (its own built-in password check first, then this
-  plugin) and stamps whichever one succeeds. In practice this means: as
-  soon as this plugin is installed and enabled, **every unstamped Emby
-  account becomes reachable through Authentik**, and the very first
-  successful Authentik sign-in for that account permanently strips its
-  local Emby password.
+  plugin) and stamps whichever one succeeds. That would make every unstamped
+  Emby account reachable through Authentik the moment this plugin is
+  installed — including a newly created administrator that has never logged
+  in. **This plugin therefore refuses any existing account that is not
+  already assigned to it**, on both sign-in paths, so that adopting an
+  account into SSO is always a deliberate action. The log says so:
+  `the account has no authentication provider assigned, so this plugin will
+  not adopt it`. Note that Emby still *offers* those accounts to the plugin —
+  it is the plugin that says no — so this is a guard, not a reason to skip
+  assigning providers deliberately.
 
 **Consequences — do this before you install the plugin:**
 
@@ -310,13 +315,51 @@ Authentik account and installing the plugin is not enough by itself:
   and must be set through the API — see "Read this before you install"
   above for the exact call and the reason the dashboard can't be trusted
   for admins.
-- If you skip this step, the account is still reachable through this
-  plugin as soon as it's installed (see "Read this before you install"),
-  just not deliberately — assign it explicitly either way.
+- If you skip this step the account cannot sign in through SSO at all: the
+  plugin refuses any account not already assigned to it, and the user sees
+  the ordinary "This account is not set up on this server."
 - Accounts the plugin **creates itself** (see "Group-gated sign-in and
   automatic account creation") are stamped with this plugin as their
   authentication provider at the moment they are created, so this step does
   not apply to them. It applies to every account that existed before.
+
+---
+
+## Each account is bound to one Authentik identity
+
+A username is a display handle: identity providers let people change
+`preferred_username`, and reassign a freed-up name to somebody else. The
+claim OpenID Connect guarantees is stable and unique for a person is `sub`,
+so that is what this plugin actually binds an Emby account to.
+
+- **On an account's first successful SSO sign-in**, the plugin records
+  "this Authentik `sub` owns this Emby account" in
+  `<Emby data path>/emby-sso/subject-bindings.json`. It is kept there and
+  not in the plugin's configuration, because saving the settings page
+  rewrites that file wholesale and would destroy the bindings.
+- **Afterwards** a different `sub` presenting the same account name is
+  refused, and so is a known `sub` presenting a different account name. The
+  user sees the usual generic refusal; the server log says which it was and
+  that an operator has to decide.
+- **The trust-on-first-use window is real.** Until an account has signed in
+  once under this build, there is nothing to compare against — whoever signs
+  in first establishes the binding. The group gate and the refusal to adopt
+  unassigned accounts (above) narrow that window; they do not remove it.
+- **If the store cannot be read or written, sign-in fails** rather than
+  falling back to matching on the username alone. An unparseable file
+  refuses everything until the server is restarted and is never overwritten,
+  so it can still be inspected.
+- **Renaming an Emby account breaks its binding** and the account is refused
+  until the file is edited or the entry removed (Emby stopped, then restart).
+  The same applies if you deliberately want to hand an account to a
+  different Authentik user. Deleting the whole file reopens the
+  trust-on-first-use window for every account at once.
+
+Relatedly, **the username claim must be immutable and unique in Authentik.**
+`preferred_username` is the default and the right answer. If you configure
+`email`, the plugin refuses any token that does not assert
+`email_verified` — but the underlying problem stays: many providers let a
+user change their own address.
 
 ---
 
@@ -386,11 +429,18 @@ account provisioned from it can see. The usual answer is to create one
 ordinary account with the libraries you want new people to get and nominate
 that as the template.
 
-Three things are deliberately **not** inherited, whatever the template says:
+Some things are deliberately **not** inherited, whatever the template says:
 
 - **Administrator.** An administrator template does *not* produce
   administrators. `IsAdministrator` is forced to `false` on both paths, at
   construction. There is no moment at which the new account is an admin.
+- **Disabled.** `IsDisabled` is forced to `false`. The template is an
+  ordinary, sign-in-able Emby account that exists only to donate a policy, so
+  the right thing to do with it is to **disable it** once its library access
+  is set — and that must not produce disabled new accounts.
+- **The template's own login history.** `InvalidLoginAttemptCount` and
+  `LockedOutDate` are reset. They are not policy intent; inheriting them
+  would start an account part-way to a lockout, or locked out outright.
 - **The profile PIN.** The template's `ProfilePin` is a per-person secret;
   handing every provisioned account a copy of it would be handing them each
   other's. It is cleared.
@@ -493,7 +543,7 @@ ever sees one of a fixed set of short, generic sentences:
 | "The sign-in provider rejected this sign-in." | Authentik returned an OAuth error on the callback, or an empty/malformed credential was submitted. | Check the Authentik provider/application logs for the same request; confirm the redirect URI matches exactly. |
 | "The sign-in response could not be verified." | The ID token failed validation — bad signature, wrong issuer, wrong audience, expired, or a nonce mismatch. | Server clocks in sync (Emby and Authentik); client ID matches the token's audience; issuer URL matches the token's `iss` exactly. |
 | "This sign-in attempt expired. Please try again." | The `state` value on the callback was unknown, already used, or too old (single-use, short TTL). | Usually a stale bookmark/back-button reuse — just start over from the sign-in URL. If it happens consistently, check for a reverse proxy caching or replaying the callback request. |
-| "This account is not set up on this server." | One of four things, deliberately indistinguishable to the user: the username claim matched no existing Emby user and automatic creation is off; the token carried no groups claim; the identity did not hold the required group; or the provisioning throttle is closed for that username or globally. | **Only the log tells them apart** — it says which, naming the configured claim rather than any group value. Then: confirm the Emby account exists (or that auto-create and a template user are configured); confirm Authentik emits the groups claim on the flow in use, direct grant included; confirm the user is in the required group; if the log says the throttle is closed, wait out the 15-minute window. |
+| "This account is not set up on this server." | Deliberately indistinguishable to the user, and now one of several things: the username claim matched no existing Emby user and automatic creation is off; the token carried no groups claim; the identity did not hold the required group; the provisioning throttle is closed for that username or globally; **the account is not assigned to this plugin as its login provider**; or **the identity does not match the `sub` the account is bound to, or the binding store could not be read or written**. | **Only the log tells them apart** — it says which, naming the configured claim rather than any group value. Then: confirm the Emby account exists (or that auto-create and a template user are configured); confirm Authentik emits the groups claim on the flow in use, direct grant included; confirm the user is in the required group; if the log says the throttle is closed, wait out the 15-minute window. |
 | "Password sign-in is disabled for this account." | A native app tried to sign in via direct grant, but either "Allow native apps to sign in with a password" is off, **or "Allow plain HTTP (testing only)" is on**, which disables native password sign-in entirely. The user-facing sentence is the same for both; the log says which. | Enable native sign-in in the plugin configuration if you want it, understanding the MFA trade-off above. If the log names plain HTTP, turn that off and serve the plugin over HTTPS — this server will not relay a password in cleartext. |
 | "This sign-in could not be completed in this browser. Please try signing in again." | `/emby/Sso/Start` sets a short-lived binding cookie that must come back unchanged on `/emby/Sso/Callback`. A reverse proxy sitting in front of Emby stripped or rewrote cookies on that path, or rewrote the path so the cookie's `Path` no longer covers `/emby/Sso/Callback`. | Check the log line next to this error: it distinguishes no cookie presented at all from a cookie that was presented but did not match. Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on both `/emby/Sso/Start` and `/emby/Sso/Callback`, and that it does not rewrite either path in a way that changes the cookie's directory. |
 

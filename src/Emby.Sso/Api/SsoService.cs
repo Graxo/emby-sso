@@ -283,11 +283,6 @@ namespace Emby.Sso.Api
                     return Error(SsoErrors.NotConfigured, "the group gate returned an outcome this build does not handle");
             }
 
-            // The plugin never creates an Emby account on its own initiative. An
-            // identity that passed the group gate still needs a resolvable Emby
-            // user before any handoff secret exists, unless auto-create is on -
-            // in which case one is provisioned below, after the gate, so a
-            // non-holder can never trigger it.
             // Checked BEFORE the account is looked up or created, and not
             // recorded yet. A subject already bound to a different account must
             // be refused before provisioning leaves a second, orphaned account
@@ -306,6 +301,11 @@ namespace Emby.Sso.Api
                 return Error(SsoErrors.UnknownUser, null);
             }
 
+            // The plugin never creates an Emby account on its own initiative. An
+            // identity that passed the group gate still needs a resolvable Emby
+            // user before any handoff secret exists, unless auto-create is on -
+            // in which case one is provisioned below, after the gate, so a
+            // non-holder can never trigger it.
             var user = _userManager.GetUserByName(identity.Username);
 
             if (user != null && UsernameMatcher.Matches(identity.Username, user.Name))
