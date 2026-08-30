@@ -75,6 +75,16 @@ namespace Emby.Sso.Protocol
                 throw new SsoException(SsoErrors.ProviderRejected, "authorization code missing from callback");
             }
 
+            // PendingLoginStore.Consume returns null for an expired, unknown, or
+            // already-consumed (replayed) state - exactly what the callback handler
+            // passes in here. That is a routine, expected outcome, not a broken
+            // invariant, so it gets its own reason rather than falling through to
+            // the nonce check below and throwing a bare NullReferenceException.
+            if (login == null)
+            {
+                throw new SsoException(SsoErrors.SessionExpired, "no pending login for the callback state");
+            }
+
             // A pending login is always minted with a nonce (PendingLoginStore.Create);
             // a missing one here means the invariant broke somewhere, not that the
             // caller opted out. Fail closed rather than silently skipping the check.

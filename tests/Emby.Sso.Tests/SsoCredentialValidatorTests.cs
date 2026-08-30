@@ -133,6 +133,23 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
+        public async Task An_unconfigured_plugin_takes_precedence_over_direct_grant_disabled()
+        {
+            // Both checks would reject this call on their own, so on their own
+            // they can't prove the validator checks configuration before checking
+            // whether direct grant is enabled. Swapping that order would only
+            // surface via an incidental null reference from the unconfigured
+            // client factory. Pin the precedence directly by asserting the reason.
+            _configured = false;
+            _directGrantEnabled = false;
+
+            var result = await CreateValidator().ValidateAsync("alice", "correct horse", CancellationToken.None);
+
+            Assert.Equal(SsoCredentialOutcome.Rejected, result.Outcome);
+            Assert.Equal(SsoErrors.NotConfigured, result.Reason);
+        }
+
+        [Fact]
         public async Task An_empty_username_or_password_is_rejected()
         {
             var validator = CreateValidator();

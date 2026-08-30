@@ -193,7 +193,13 @@ namespace Emby.Sso.Tests
         {
             var login = _logins.Create();
             _idp.TokenResponseStatus = HttpStatusCode.BadRequest;
-            _idp.TokenResponseJson = "{\"error\":\"invalid_grant\"}";
+
+            // The response body itself carries the secret, so this only proves
+            // anything if the implementation is redacting the body rather than
+            // simply never having had a secret to leak in the first place.
+            _idp.TokenResponseJson =
+                "{\"error\":\"invalid_grant\",\"error_description\":\"invalid client secret: "
+                + FakeIdentityProvider.ClientSecret + "\"}";
 
             var error = await Assert.ThrowsAsync<SsoException>(
                 () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
@@ -238,6 +244,20 @@ namespace Emby.Sso.Tests
                 () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
 
             Assert.Equal(SsoErrors.InvalidToken, error.UserSafeReason);
+            Assert.Null(_idp.LastTokenRequestForm);
+        }
+
+        [Fact]
+        public async Task A_null_pending_login_is_rejected_as_session_expired_before_contacting_the_provider()
+        {
+            // PendingLoginStore.Consume returns null for an expired, unknown, or
+            // replayed state - the realistic caller is the callback handler doing
+            // _logins.Consume(state). ExchangeCodeAsync must fail closed with
+            // SessionExpired rather than dereferencing a null login.
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().ExchangeCodeAsync("the-code", null, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.SessionExpired, error.UserSafeReason);
             Assert.Null(_idp.LastTokenRequestForm);
         }
 

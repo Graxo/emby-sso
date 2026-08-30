@@ -88,7 +88,12 @@ namespace Emby.Sso.Tests
         public async Task Failures_never_leak_the_password()
         {
             _idp.TokenResponseStatus = HttpStatusCode.BadRequest;
-            _idp.TokenResponseJson = "{\"error\":\"invalid_grant\"}";
+
+            // The response body echoes the submitted password back, so this only
+            // proves anything if the implementation is redacting the body rather
+            // than simply never having concatenated a secret it never touched.
+            _idp.TokenResponseJson =
+                "{\"error\":\"invalid_grant\",\"error_description\":\"invalid password: hunter2\"}";
 
             var error = await Assert.ThrowsAsync<SsoException>(
                 () => CreateClient().DirectGrantAsync("alice", "hunter2", CancellationToken.None));

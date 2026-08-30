@@ -39,7 +39,19 @@ namespace Emby.Sso.Protocol
     /// <summary>
     /// The single decision an Emby sign-in funnels into: is this password a live
     /// browser handoff secret, or a real password the identity provider should
-    /// check? Emby resolves the user first, so the account is known to exist.
+    /// check?
+    ///
+    /// This class does NOT and CANNOT verify that the Emby account exists. It
+    /// stays free of <c>MediaBrowser.*</c> types by design, so it has no way to
+    /// ask Emby whether the username it was given resolved to a real user.
+    /// Emby hands its authentication providers a null resolved user for an
+    /// unknown username, and if a provider returns success for that call, Emby
+    /// auto-creates the account. The caller - the Emby-facing authentication
+    /// provider - MUST check Emby's resolved user itself and refuse the sign-in
+    /// when it is null, before ever consulting this validator's result. Do not
+    /// treat a <see cref="SsoCredentialOutcome.HandoffAccepted"/> or
+    /// <see cref="SsoCredentialOutcome.DirectGrantAccepted"/> result from
+    /// <see cref="ValidateAsync"/> as proof the account already exists.
     /// </summary>
     public sealed class SsoCredentialValidator
     {
