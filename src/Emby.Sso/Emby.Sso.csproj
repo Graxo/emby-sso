@@ -6,7 +6,11 @@
     <RootNamespace>Emby.Sso</RootNamespace>
     <LangVersion>latest</LangVersion>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>0.1.0</Version>
+    <!-- The version comes from the git tag: CI derives it in ci/version.sh
+         and passes it in with -p:Version. This default is only ever used by a
+         build nobody tagged, and is meant to be recognisable as such where
+         Emby shows it. -->
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
