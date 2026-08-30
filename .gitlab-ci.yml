@@ -1,0 +1,21 @@
+stages:
+  - test
+  - build
+
+default:
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+
+test:
+  stage: test
+  script:
+    - dotnet test tests/Emby.Sso.Tests --logger "console;verbosity=normal"
+
+build:
+  stage: build
+  script:
+    - dotnet build -c Release
+  artifacts:
+    name: "emby-sso-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
+    expire_in: 30 days
