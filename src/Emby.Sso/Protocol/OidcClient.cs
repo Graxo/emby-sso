@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Emby.Sso.Protocol
 {
@@ -64,6 +66,153 @@ namespace Emby.Sso.Protocol
 
             var separator = configuration.AuthorizationEndpoint.IndexOf('?') >= 0 ? "&" : "?";
             return configuration.AuthorizationEndpoint + separator + string.Join("&", query);
+        }
+
+        public async Task<OidcIdentity> ExchangeCodeAsync(string code, PendingLogin login, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(code))
+            {
+                throw new SsoException(SsoErrors.ProviderRejected, "authorization code missing from callback");
+            }
+
+            var form = new Dictionary<string, string>
+            {
+                ["grant_type"] = "authorization_code",
+                ["code"] = code,
+                ["redirect_uri"] = _options.RedirectUri,
+                ["code_verifier"] = login.CodeVerifier,
+            };
+
+            var idToken = await PostTokenRequestAsync(form, cancellationToken).ConfigureAwait(false);
+            return ValidateIdToken(idToken, login.Nonce, await GetConfigurationAsync(cancellationToken).ConfigureAwait(false));
+        }
+
+        private async Task<string> PostTokenRequestAsync(Dictionary<string, string> form, CancellationToken cancellationToken)
+        {
+            var configuration = await GetConfigurationAsync(cancellationToken).ConfigureAwait(false);
+
+            using (var request = new HttpRequestMessage(HttpMethod.Post, configuration.TokenEndpoint))
+            {
+                if (string.IsNullOrEmpty(_options.ClientSecret))
+                {
+                    // Public client: identify without authenticating.
+                    form["client_id"] = _options.ClientId;
+                    request.Content = new FormUrlEncodedContent(form);
+                }
+                else
+                {
+                    request.Content = new FormUrlEncodedContent(form);
+
+                    var credentials = Convert.ToBase64String(
+                        System.Text.Encoding.UTF8.GetBytes(_options.ClientId + ":" + _options.ClientSecret));
+                    request.Headers.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+                }
+
+                HttpResponseMessage response;
+                try
+                {
+                    response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    throw new SsoException(SsoErrors.ProviderUnreachable, "token endpoint request failed", ex);
+                }
+
+                using (response)
+                {
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // Only the OAuth error code is logged; the body may contain more.
+                        throw new SsoException(
+                            SsoErrors.ProviderRejected,
+                            "token endpoint returned " + (int)response.StatusCode + " " + ReadErrorCode(body));
+                    }
+
+                    var idToken = ReadStringField(body, "id_token");
+
+                    if (string.IsNullOrEmpty(idToken))
+                    {
+                        throw new SsoException(SsoErrors.InvalidToken, "token response contained no id_token");
+                    }
+
+                    return idToken;
+                }
+            }
+        }
+
+        private OidcIdentity ValidateIdToken(string idToken, string expectedNonce, OpenIdConnectConfiguration configuration)
+        {
+            var parameters = new TokenValidationParameters
+            {
+                ValidIssuer = configuration.Issuer,
+                ValidAudience = _options.ClientId,
+                IssuerSigningKeys = configuration.SigningKeys,
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateIssuerSigningKey = true,
+                ValidateLifetime = true,
+                RequireExpirationTime = true,
+                RequireSignedTokens = true,
+                ClockSkew = TimeSpan.FromMinutes(2),
+            };
+
+            var result = new JsonWebTokenHandler().ValidateToken(idToken, parameters);
+
+            if (!result.IsValid)
+            {
+                throw new SsoException(
+                    SsoErrors.InvalidToken,
+                    "id_token validation failed: " + (result.Exception?.GetType().Name ?? "unknown"),
+                    result.Exception);
+            }
+
+            var token = (JsonWebToken)result.SecurityToken;
+
+            if (expectedNonce != null)
+            {
+                token.TryGetClaim("nonce", out var nonceClaim);
+
+                if (nonceClaim == null || !FixedTime.Equals(expectedNonce, nonceClaim.Value))
+                {
+                    throw new SsoException(SsoErrors.InvalidToken, "id_token nonce did not match the pending login");
+                }
+            }
+
+            var username = ReadClaim(token, _options.UsernameClaim);
+
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                throw new SsoException(
+                    SsoErrors.InvalidToken,
+                    "id_token did not contain the configured username claim '" + _options.UsernameClaim + "'");
+            }
+
+            return new OidcIdentity(ReadClaim(token, "sub"), username.Trim(), ReadClaim(token, "name") ?? username.Trim());
+        }
+
+        private static string ReadClaim(JsonWebToken token, string name)
+        {
+            return token.TryGetClaim(name, out var claim) ? claim.Value : null;
+        }
+
+        private static string ReadStringField(string json, string field)
+        {
+            try
+            {
+                return (string)Newtonsoft.Json.Linq.JObject.Parse(json)[field];
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static string ReadErrorCode(string json)
+        {
+            return ReadStringField(json, "error") ?? "unknown_error";
         }
     }
 }
