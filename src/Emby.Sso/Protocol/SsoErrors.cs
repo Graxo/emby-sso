@@ -40,11 +40,52 @@ namespace Emby.Sso.Protocol
     public sealed class SsoException : Exception
     {
         public SsoException(string userSafeReason, string logDetail, Exception inner = null)
+            : this(userSafeReason, logDetail, inner, false)
+        {
+        }
+
+        private SsoException(string userSafeReason, string logDetail, Exception inner, bool providerUnreachable)
             : base(logDetail, inner)
         {
             UserSafeReason = userSafeReason;
+            ProviderUnreachable = providerUnreachable;
         }
 
         public string UserSafeReason { get; }
+
+        /// <summary>
+        /// The identity provider could not be reached, so NO CREDENTIAL WAS
+        /// TESTED and this failure says nothing whatever about the caller.
+        ///
+        /// It is a flag on the exception rather than a comparison against
+        /// <see cref="SsoErrors.ProviderUnreachable"/> because that constant is
+        /// user-facing text - three others in this file are already deliberately
+        /// character-identical to one another, and an operator-friendly reword
+        /// must never silently change a security decision. Only the code that
+        /// issued the request knows it never got an answer, so that is where the
+        /// fact is recorded.
+        ///
+        /// False on every exception built by the public constructor, which is
+        /// the whole point: FAIL CLOSED. A credential rejection wrongly marked
+        /// unreachable is a hole in the brute-force brake
+        /// (<see cref="ProvisioningThrottle"/> does not count these); a
+        /// transport failure wrongly left unmarked is only an inconvenience.
+        /// When in doubt, do not mark it.
+        /// </summary>
+        public bool ProviderUnreachable { get; }
+
+        /// <summary>
+        /// The only way to produce a <see cref="ProviderUnreachable"/> failure.
+        /// It takes no user-safe reason, so an unreachable provider tells the
+        /// caller exactly what it has always told them, and it must stay that
+        /// way: this flag is a signal to the code that counts failures, never a
+        /// new distinction for a stranger to observe.
+        ///
+        /// Use it only where nothing came back from the provider at all. If the
+        /// provider answered - however unwelcome the answer - it is an ordinary
+        /// <see cref="SsoException"/>.
+        /// </summary>
+        public static SsoException Unreachable(string logDetail, Exception inner = null) =>
+            new SsoException(SsoErrors.ProviderUnreachable, logDetail, inner, true);
     }
 }

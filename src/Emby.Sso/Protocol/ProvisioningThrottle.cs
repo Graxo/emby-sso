@@ -158,10 +158,19 @@ namespace Emby.Sso.Protocol
 
         /// <summary>
         /// One attempt that was tried and did not end in a provisioned account.
+        /// This overload counts unconditionally, which is what makes it the safe
+        /// one to reach for: the caller has already decided this failure is the
+        /// caller's own.
+        ///
         /// Every failing exit of the provisioning branch below the check counts,
-        /// including the ones that never reached the identity provider: they are
-        /// free for an attacker to generate, so leaving them uncounted would be a
-        /// way around the brake rather than a kindness.
+        /// including ones that never sent anything to the identity provider,
+        /// because those are free for an attacker to generate and leaving them
+        /// uncounted would be a way around the brake rather than a kindness. The
+        /// single exception is a provider that could not be reached, which is
+        /// not decided here - see
+        /// <see cref="RecordFailure(string, SsoCredentialResult, DateTimeOffset)"/>,
+        /// the overload a caller must use when the failure came from a
+        /// validator result.
         ///
         /// A refusal by this throttle is NOT recorded - nothing was tried, and
         /// recording it would let a caller who is already refused keep the map
@@ -202,6 +211,46 @@ namespace Emby.Sso.Protocol
                     _perUsername[key] = new Bucket { Failures = 1, ExpiresAt = now + Window };
                 }
             }
+        }
+
+        /// <summary>
+        /// The same counted failure, described by the validator result that
+        /// produced it. This overload is where the ONE exemption lives: a result
+        /// that says the identity provider could not be reached is not counted,
+        /// because no credential was tested and an outage is not an attempt.
+        ///
+        /// Why it matters operationally: an identity-provider outage plus
+        /// ordinary users retrying would otherwise fill both buckets, and the
+        /// global one is small enough that a mass migration - many people
+        /// signing in for the first time at once - could shut provisioning for
+        /// EVERYONE for a further fifteen minutes after the provider came back.
+        /// Nothing about that trades away brute-force protection: a guesser
+        /// learns nothing from a request that got no answer.
+        ///
+        /// Everything else counts, and the exemption is deliberately narrow. A
+        /// null result counts. A rejection the provider issued counts. A refusal
+        /// this process decided without asking anyone - empty credential,
+        /// plugin not configured, direct grant off - counts, because those are
+        /// free for an attacker to produce. An identity that names somebody else
+        /// and a group-gate refusal are counted by the caller through
+        /// <see cref="RecordFailure(string, DateTimeOffset)"/>, which has no
+        /// exemption at all.
+        ///
+        /// A future reader must not widen this into "do not count failures that
+        /// never reached the provider". Uncounted failures are the hole this
+        /// class exists to close; only the case where the network, not the
+        /// caller, decided the outcome may be free.
+        /// </summary>
+        public void RecordFailure(string username, SsoCredentialResult result, DateTimeOffset now)
+        {
+            // Note the direction: anything other than an explicit unreachable
+            // result - a null included - falls through and is counted.
+            if (result != null && result.ProviderUnreachable)
+            {
+                return;
+            }
+
+            RecordFailure(username, now);
         }
 
         /// <summary>

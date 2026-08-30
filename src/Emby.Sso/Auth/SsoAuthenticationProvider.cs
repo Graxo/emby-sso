@@ -111,10 +111,19 @@ namespace Emby.Sso.Auth
                 .ValidateAsync(resolvedUser.Name, password, CancellationToken.None)
                 .ConfigureAwait(false);
 
-            if (result.Outcome == SsoCredentialOutcome.Rejected)
+            // Listed the other way round - refuse unless the outcome is one of
+            // the two this build knows accepts - so that a future
+            // SsoCredentialOutcome member cannot let anyone in by default.
+            // `== Rejected` would have treated an unrecognised outcome as a
+            // success, which is fail-open on an authentication decision decided
+            // by whoever adds the enum member rather than by anyone reading
+            // here. Behaviour for the three outcomes that exist is unchanged.
+            if (result.Outcome != SsoCredentialOutcome.HandoffAccepted
+                && result.Outcome != SsoCredentialOutcome.DirectGrantAccepted)
             {
-                _logger.Info("Rejected sign-in for {0}: {1}", ForLog(resolvedUser.Name), result.Reason);
-                throw new Exception(result.Reason);
+                var reason = result.Reason ?? SsoErrors.UnknownUser;
+                _logger.Info("Rejected sign-in for {0}: {1}", ForLog(resolvedUser.Name), reason);
+                throw new Exception(reason);
             }
 
             // The gate applies to accounts that already exist too: losing the
@@ -223,7 +232,21 @@ namespace Emby.Sso.Auth
                 // an unknown user rather than throwing a null message.
                 var reason = result.Reason ?? SsoErrors.UnknownUser;
                 _logger.Info("Rejecting sign-in for unresolved '{0}': {1}", ForLog(username), reason);
-                RecordThrottledFailure(username);
+
+                // The result-carrying overload, and this is the only exit that
+                // may use it: it is the only one where the failure can be the
+                // network's rather than the caller's. An identity provider that
+                // could not be reached tested no password, so counting it would
+                // let an outage plus ordinary retries hold provisioning shut
+                // after the provider recovered - and with a global budget of
+                // 100, hold it shut for everybody during exactly the mass
+                // first-sign-in this branch exists to serve. Every other
+                // failure, the provider's own rejection included, still counts.
+                //
+                // Nothing about the refusal changes: same outcome, same
+                // sentence, same throw. Only the counter is spared.
+                _throttle.RecordFailure(username, result, DateTimeOffset.UtcNow);
+
                 throw new Exception(reason);
             }
 
@@ -487,14 +510,22 @@ namespace Emby.Sso.Auth
         }
 
         /// <summary>
-        /// One counted failure of the provisioning branch. Called at every
-        /// failing exit BELOW the throttle check that reflects the credential
-        /// itself - a rejected password, an identity that names someone else, a
-        /// gate refusal. It is deliberately not called for the configuration
-        /// refusals above the check (nothing was tried, and an operator who has
-        /// not switched provisioning on must not accumulate a lockout), nor for
-        /// the throttle's own refusal, nor for the template and store failures
-        /// after the gate, which are the server's fault and not the caller's.
+        /// One unconditionally counted failure of the provisioning branch.
+        /// Called at the failing exits BELOW the throttle check that can only
+        /// reflect the credential itself: an identity that names someone else,
+        /// and a gate refusal. Both mean the provider answered, so neither has
+        /// anything to weigh - hence no result argument and no exemption.
+        ///
+        /// The third such exit, a validator result that is not a direct grant,
+        /// goes through the throttle's result-carrying overload instead, because
+        /// that is the one place the failure may have been an unreachable
+        /// provider rather than the caller. See the comment at that call.
+        ///
+        /// Nothing here is called for the configuration refusals above the check
+        /// (nothing was tried, and an operator who has not switched provisioning
+        /// on must not accumulate a lockout), nor for the throttle's own
+        /// refusal, nor for the template and store failures after the gate,
+        /// which are the server's fault and not the caller's.
         /// </summary>
         private void RecordThrottledFailure(string username)
         {

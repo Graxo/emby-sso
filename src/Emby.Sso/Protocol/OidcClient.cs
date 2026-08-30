@@ -155,7 +155,10 @@ namespace Emby.Sso.Protocol
             }
             catch (Exception ex)
             {
-                throw new SsoException(SsoErrors.ProviderUnreachable, "provider metadata could not be retrieved", ex);
+                // The typed exception, not the string: nothing was asked of the
+                // provider that it answered, so a failure here tested no
+                // credential. See SsoException.Unreachable.
+                throw SsoException.Unreachable("provider metadata could not be retrieved", ex);
             }
         }
 
@@ -192,7 +195,9 @@ namespace Emby.Sso.Protocol
                 }
                 catch (Exception ex)
                 {
-                    throw new SsoException(SsoErrors.ProviderUnreachable, "token endpoint request failed", ex);
+                    // No response at all, so no verdict on the credential was ever
+                    // learned - by this process or by anyone watching it.
+                    throw SsoException.Unreachable("token endpoint request failed", ex);
                 }
 
                 using (response)
@@ -204,6 +209,18 @@ namespace Emby.Sso.Protocol
                     }
                     catch (Exception ex)
                     {
+                        // NOT marked unreachable, deliberately, even though the
+                        // sentence the caller gets is the same one. An answer
+                        // did arrive - a mid-flight transport failure surfaces
+                        // from SendAsync above, measured, not assumed - so what
+                        // reaches here is a response this process could not
+                        // decode, e.g. one declaring a character set it cannot
+                        // use. The provider was reached; only we could not read
+                        // what it said. That is not "no credential was tested",
+                        // and the rule for the provisioning throttle is that
+                        // anything short of certainly-transport counts. Marking
+                        // this would trade a real brake for an outage case it
+                        // does not cover.
                         throw new SsoException(SsoErrors.ProviderUnreachable, "token endpoint response could not be read", ex);
                     }
 
