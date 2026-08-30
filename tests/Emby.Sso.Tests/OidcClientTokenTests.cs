@@ -194,12 +194,12 @@ namespace Emby.Sso.Tests
             var login = _logins.Create();
             _idp.TokenResponseStatus = HttpStatusCode.BadRequest;
 
-            // The response body itself carries the secret, so this only proves
+            // The response body itself carries the secret and code verifier, so this only proves
             // anything if the implementation is redacting the body rather than
             // simply never having had a secret to leak in the first place.
             _idp.TokenResponseJson =
                 "{\"error\":\"invalid_grant\",\"error_description\":\"invalid client secret: "
-                + FakeIdentityProvider.ClientSecret + "\"}";
+                + FakeIdentityProvider.ClientSecret + ", code verifier: " + login.CodeVerifier + "\"}";
 
             var error = await Assert.ThrowsAsync<SsoException>(
                 () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
