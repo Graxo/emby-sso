@@ -183,7 +183,24 @@ No `AuthentikSso:` line appears at all — the plugin was never consulted. After
 
 ## 5. `IHasNewUserPolicy` — the provider supplies the policy Emby creates with (`probe-policy-*`)
 
-**Observed, 6 runs out of 6 (`probe-policy-one` … `probe-policy-six`), all HTTP 200 with a usable `AccessToken`.**
+**This is the mechanism Task 8 should use, and the strength of the evidence for it differs by claim. Read §5.1 before quoting a run count.**
+
+### 5.1 Where the guarantee actually comes from
+
+The security property — *the account never exists with default access* — rests **primarily on the architectural guarantee in the decompiled construction order quoted in §1 (Source)**, not on a run count. Emby's unknown-username branch reads:
+
+```csharp
+UserPolicy userPolicy = (UserPolicy)((val != null) ? ((object)val.GetNewUserPolicy()) : ((object)new UserPolicy()));
+user = await CreateUser(item.Username ?? username, userPolicy)...;
+```
+
+The policy is a **constructor argument to the account's creation**, not something written to an already-created account. `CreateUser` instantiates the user, adds it to the list and calls `UpdateUserPolicy(val, userPolicy, fireEvent: false)` **before it returns**, all inside `_userListLock` (**Source**, §1). There is therefore no code path in which a default policy is written and then overwritten, and so **no window to race** — which is a categorically stronger guarantee than any number of successful runs, and is independent of how many runs were logged.
+
+The live runs below serve a narrower purpose: confirming that no unexpected quirk of the 4.9.5.0 build breaks that structure in practice — that the hook is reached at all, that the policy object survives Emby's serialisation intact, and that the stamping write in §1's second block really does become a no-op. They are corroboration, not the foundation.
+
+### 5.2 The runs
+
+**Observed. 6 runs (`probe-policy-one` … `probe-policy-six`), all HTTP 200 with a usable `AccessToken`, all ending with the template's restricted policy.** The per-run evidence is **not** uniform, and is set out in §5.3 — it is weaker than §6's fully-logged race table, and should not be read as equivalent to it.
 
 ```
 2026-08-30 16:42:10.775 Info AuthentikSso: PROBE2: reached null-resolvedUser branch for probe-policy-two
@@ -208,12 +225,47 @@ EnablePublicSharing False
 
 A field-by-field diff of `probe-policy-one`'s policy against `template_user`'s differed in **exactly one field**, `AuthenticationProviderId` — and only because the probe deliberately set it to the SSO provider id.
 
+### 5.3 Exactly what evidence exists per run
+
+| Run | Server log lines | Account state |
+|---|---|---|
+| `probe-policy-one` | **full excerpt, quoted below** | field-by-field policy diff against `template_user` (one field differs) + account listing |
+| `probe-policy-two` | **full excerpt, quoted above** | full auth-response body quoted above |
+| `probe-policy-three` | **not captured individually** | account listing only |
+| `probe-policy-four` | **not captured individually** | account listing only |
+| `probe-policy-five` | **not captured individually** | account listing only |
+| `probe-policy-six` | **not captured individually** | configuration comparison in §7 (`allFolders=False`) |
+
+The other fully-logged run, `probe-policy-one` (chronologically the first) — note the 127 ms spent inside `GetNewUserPolicy()`, the first call to `GetUserByName` for the template on a freshly restarted server:
+
+```
+2026-08-30 16:42:01.174 Info AuthentikSso: PROBE2: reached null-resolvedUser branch for probe-policy-one
+2026-08-30 16:42:01.175 Info AuthentikSso: PROBE2: returning success without creating anything
+2026-08-30 16:42:01.175 Info AuthentikSso: PROBE2: returning ProviderAuthenticationResult for probe-policy-one
+2026-08-30 16:42:01.175 Info AuthentikSso: PROBE2: GetNewUserPolicy() called, pending probe username = probe-policy-one
+2026-08-30 16:42:01.302 Info AuthentikSso: PROBE2: GetNewUserPolicy returning template policy EnableAllFolders=False EnabledFolders=[0f9f8082a8c1492bbb5668f59112fd62,11395a5984f341f7ad6f61152d7a222c] providerId=Emby.Sso.Auth.SsoAuthenticationProvider
+```
+
+"Account listing" means these lines, rendered from `GET /emby/Users` by the spike's helper script — the field values are verbatim from the API, the layout is the script's, and the raw JSON body was not saved:
+
+```
+probe-policy-five  id=ecfdf16a3245492f855e0a43c7a0da4a allFolders=False folders=['0f9f8082a8c1492bbb5668f59112fd62', '11395a5984f341f7ad6f61152d7a222c'] provider=Emby.Sso.Auth.SsoAuthenticationProvider admin=False
+probe-policy-four  id=8b0f826a867b4ff18dab5af56e50cac3 allFolders=False folders=['0f9f8082a8c1492bbb5668f59112fd62', '11395a5984f341f7ad6f61152d7a222c'] provider=Emby.Sso.Auth.SsoAuthenticationProvider admin=False
+probe-policy-one   id=4a56c9a7196444f8aeb263076139f38b allFolders=False folders=['0f9f8082a8c1492bbb5668f59112fd62', '11395a5984f341f7ad6f61152d7a222c'] provider=Emby.Sso.Auth.SsoAuthenticationProvider admin=False
+probe-policy-three id=a2bdfa6314cf481791af5ef8ae9b255b allFolders=False folders=['0f9f8082a8c1492bbb5668f59112fd62', '11395a5984f341f7ad6f61152d7a222c'] provider=Emby.Sso.Auth.SsoAuthenticationProvider admin=False
+probe-policy-two   id=7ef2dad348004331b986a6a94bf99275 allFolders=False folders=['0f9f8082a8c1492bbb5668f59112fd62', '11395a5984f341f7ad6f61152d7a222c'] provider=Emby.Sso.Auth.SsoAuthenticationProvider admin=False
+```
+
+So: **`-three`, `-four`, `-five` and `-six` have outcome evidence but no individual log evidence.** Their `GetNewUserPolicy()` log lines were presumably written — the log window that was read simply did not cover them — but they were never captured, so they are not quoted, and none are reconstructed here. This does not weaken the conclusion — §5.1 is what carries it — but a reader comparing "6 runs" with §6's "7 runs" should know the two are not documented to the same standard.
+
+### 5.4 Why the conclusion holds
+
 Two properties matter here and both are important for Task 8:
 
-- **The account never exists with default access, not even for a microsecond.** The policy is passed *into* `CreateUser`, which writes it before the account is visible.
-- **Because the returned policy already carries the right `AuthenticationProviderId`, Emby's post-creation stamping write does not fire at all** (`!string.Equals(...)` is false). There is no second write to race.
+- **The account never exists with default access, not even for a microsecond.** **Source** (§1, §5.1): the policy is passed *into* `CreateUser`, which writes it before the account is visible or the method returns. This is the architectural guarantee; the runs confirm it, they do not establish it.
+- **Because the returned policy already carries the right `AuthenticationProviderId`, Emby's post-creation stamping write does not fire at all** (`!string.Equals(...)` is false — **Source**, §1). There is no second write to race. **Observed** corroboration: unlike every `probe-after-*` run, no probe-policy account's policy was ever seen to change after creation.
 
-`GetNewUserPolicy()` is called **after** `Authenticate` returns and **before** `CreateUser` — observed in every run, including the `probe-create-*` runs, where it was called moments before Emby's `CreateUser` threw.
+`GetNewUserPolicy()` is called **after** `Authenticate` returns and **before** `CreateUser`. **Observed** in every run whose log lines were captured — `probe-policy-one`, `probe-policy-two`, all five `probe-after-*` runs, both `probe-delay-*` runs and `probe-create-beta`, where it was called moments before Emby's `CreateUser` threw — and **Source** in §1, which is why it holds for the runs that were not captured too.
 
 ---
 
@@ -249,7 +301,11 @@ The read-back column is the giveaway: in four runs the value we had *just writte
 2026-08-30 16:43:23.130 Info AuthentikSso: PROBE2-AFTER: UpdateUserPolicy applied at +1500.0344 ms; in-memory now EnableAllFolders=False EnabledFolders=[...] providerId=Emby.Sso.Auth.SsoAuthenticationProvider
 ```
 
-But that is exactly the window the brief asked to be quantified: **the account exists, with `EnableAllFolders: true`, and the client already holds a valid access token, for the entire settle period.** The token is minted by `SessionManager` immediately after `AuthenticateUser` returns — before any post-return fix can land. There is no delay short enough to be safe and long enough to be reliable; ~4 ms already loses, and any duration that wins is a duration during which the new account can read every library. This mechanism should not be used.
+But that is exactly the window the brief asked to be quantified: **the account exists with `EnableAllFolders: true` for the entire settle period.** That much is **Observed** — the policy field's value was read at that point in every run.
+
+**Inference** — that the client can *use* that access during the window. The token is minted by `SessionManager` immediately after `AuthenticateUser` returns (`Creating new access token for user 6 probe-plain-one`, §3), and the probe's fix ran fire-and-forget after the response had already been written, so the token necessarily exists before any post-return fix can land. **No API call was made with an issued token during a settle window to demonstrate the access practically** — the claim rests on the policy field's value, not on an exercised request. What would confirm it is a `GET /emby/Users/{id}/Items` with the new account's token, issued inside the settle window, returning items from a library the template excludes.
+
+Either way there is no delay short enough to be safe and long enough to be reliable; ~4 ms already loses, and any duration that wins is a duration during which the new account's policy grants every library. This mechanism should not be used.
 
 ---
 
@@ -296,6 +352,8 @@ But **Task 8 must not implement outcome 2 the way the brief describes it.** "Ret
 
 > **Task 8 implements `MediaBrowser.Controller.Authentication.IHasNewUserPolicy` on `SsoAuthenticationProvider` and returns the template's policy from `GetNewUserPolicy()`.** Emby creates the account — once — with that policy. There is **no** window of default access: the answer to "how long does the account exist with default access" is **zero**.
 
+That "zero" is a structural claim, not a statistical one. It follows from the decompiled construction order in §1 — the policy is a constructor argument to `CreateUser`, so no default policy is ever written and later replaced — and six live runs confirmed nothing in the 4.9.5.0 build breaks that. §5.1 sets out the reasoning and §5.3 says exactly which of those runs carry individual evidence.
+
 The gate in Task 8 Step 2 is unaffected: `GetNewUserPolicy()` is only reached when `Authenticate` has already returned success, so every guard still runs first, and a rejected identity still never causes an account to exist.
 
 ### What Task 8 must get right
@@ -320,9 +378,9 @@ The gate in Task 8 Step 2 is unaffected: `GetNewUserPolicy()` is only reached wh
 | Two accounts? | **No** — Emby's `CreateUser` throws on the duplicate name; exactly one account exists |
 | Policy hook | `MediaBrowser.Controller.Authentication.IHasNewUserPolicy` → `UserPolicy GetNewUserPolicy()` |
 | When is it called | after `Authenticate` returns success, before `CreateUser`, only when the username did not resolve and the winning provider is not `DefaultAuthenticationProvider` |
-| Does it work | **Yes — 6/6 runs, HTTP 200, template policy, no default-access window** |
+| Does it work | **Yes.** No default-access window — that rests on the **decompiled construction order** (the policy is a constructor argument to `CreateUser`, so no default policy is ever written then overwritten), *confirmed* by 6 live runs, all HTTP 200 with the template's policy. Run-level evidence is uneven — see §5.3 |
 | Does it carry the configuration | **No** — policy only; `CreateUser(name, policy)` uses `new UserConfiguration()` and copies no user settings |
-| Return success then `UpdateUserPolicy` | **Unreliable** — lost the race in 6 of 7 runs at ~4 ms; wins with a ~1.5 s settle, during which the account has every library and the client already holds a token |
+| Return success then `UpdateUserPolicy` | **Unreliable** — lost the race in 6 of 7 fully-logged runs at ~4 ms; wins with a ~1.5 s settle, during which the account's policy grants every library (token use during the window is an inference, §6) |
 | Default auto-created policy | `EnableAllFolders: true`, `EnabledFolders: []` — access to everything |
 | `AuthenticationProviderId` on a template clone | copied from the template; leave it and the account can never sign in through SSO |
 | `IUserManager` constructor injection into a provider | **works** on 4.9.5.0 |
