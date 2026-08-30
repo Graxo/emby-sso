@@ -1,3 +1,5 @@
+using Emby.Sso;
+
 namespace Emby.Sso.Api
 {
     /// <summary>
@@ -37,12 +39,7 @@ namespace Emby.Sso.Api
         private const string Head = @"<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <meta name='referrer' content='no-referrer'>
-<title>Signing in</title><style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-background:#101010;color:#eee;display:flex;min-height:100vh;margin:0;
-align-items:center;justify-content:center;text-align:center}
-main{max-width:32rem;padding:2rem}h1{font-size:1.25rem;font-weight:600}
-p{color:#bbb;line-height:1.5}a{color:#9cf}code{color:#888;font-size:.85em}
+<title>Signing in</title><style>" + PageText.BaseStyle + @"code{color:#888;font-size:.85em}
 </style></head><body><main>
 <div id='working' style='display:none'><h1>Signing you in</h1><p>One moment.</p></div>
 <div id='failed' style='display:none'><h1>Sign-in failed</h1>
@@ -86,7 +83,7 @@ function fail(code) {
   var clean = String(code || 'unknown').replace(/[^A-Za-z0-9 _.:-]/g, '').slice(0, 60);
   hide('working');
   document.getElementById('code').textContent = clean;
-  document.getElementById('retry').href = serverUrl + '/emby/Sso/Start';
+  document.getElementById('retry').href = serverUrl + '/emby" + SsoRoutes.StartPath + @"';
   show('failed');
 }
 
@@ -123,13 +120,16 @@ function authenticate() {
   });
 }
 
-// Exactly the call the web client makes on startup against a stored token. If it
-// does not answer 2xx the client discards the token and shows the login screen,
-// so checking here turns a silent bounce into a stated failure.
+// Exactly the call the web client makes on startup against a stored token
+// (only over a header here rather than the client's own ?api_key= query
+// string, so the token never lands in Emby's own per-request access log). If
+// it does not answer 2xx the client discards the token and shows the login
+// screen, so checking here turns a silent bounce into a stated failure.
 function verify(auth) {
-  return fetch(serverUrl + '/emby/System/Info?api_key=' + encodeURIComponent(auth.AccessToken), {
+  return fetch(serverUrl + '/emby/System/Info', {
     cache: 'no-store',
-    credentials: 'omit'
+    credentials: 'omit',
+    headers: { 'X-Emby-Token': auth.AccessToken }
   }).then(function (response) {
     if (!response.ok) { throw new Error('verify-' + response.status); }
     return response.json();

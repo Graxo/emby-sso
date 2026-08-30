@@ -154,9 +154,20 @@ namespace Emby.Sso.Tests
         {
             var validator = CreateValidator();
 
-            Assert.Equal(SsoCredentialOutcome.Rejected, (await validator.ValidateAsync(null, "x", CancellationToken.None)).Outcome);
-            Assert.Equal(SsoCredentialOutcome.Rejected, (await validator.ValidateAsync("alice", null, CancellationToken.None)).Outcome);
-            Assert.Equal(SsoCredentialOutcome.Rejected, (await validator.ValidateAsync("alice", "", CancellationToken.None)).Outcome);
+            var noUsername = await validator.ValidateAsync(null, "x", CancellationToken.None);
+            var noPassword = await validator.ValidateAsync("alice", null, CancellationToken.None);
+            var emptyPassword = await validator.ValidateAsync("alice", "", CancellationToken.None);
+
+            Assert.Equal(SsoCredentialOutcome.Rejected, noUsername.Outcome);
+            Assert.Equal(SsoCredentialOutcome.Rejected, noPassword.Outcome);
+            Assert.Equal(SsoCredentialOutcome.Rejected, emptyPassword.Outcome);
+
+            // Its own reason, not a borrowed one: nothing here was rejected by
+            // the provider, so ProviderRejected would misdescribe why in both
+            // the log and the response.
+            Assert.Equal(SsoErrors.EmptyCredential, noUsername.Reason);
+            Assert.Equal(SsoErrors.EmptyCredential, noPassword.Reason);
+            Assert.Equal(SsoErrors.EmptyCredential, emptyPassword.Reason);
         }
     }
 }

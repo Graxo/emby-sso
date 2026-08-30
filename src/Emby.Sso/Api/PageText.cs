@@ -34,5 +34,18 @@ namespace Emby.Sso.Api
                 .Replace(">", "\\u003e")
                 .Replace("&", "\\u0026");
         }
+
+        /// <summary>
+        /// The CSS shared by every page this plugin serves directly to a
+        /// browser - the error page and the sign-in completion page - so the two
+        /// stay visually identical without copy-pasting the block. Each page's
+        /// own <c>&lt;style&gt;</c> block may append rules after this one.
+        /// </summary>
+        public const string BaseStyle =
+            "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
+            + "background:#101010;color:#eee;display:flex;min-height:100vh;margin:0;"
+            + "align-items:center;justify-content:center;text-align:center}"
+            + "main{max-width:32rem;padding:2rem}h1{font-size:1.25rem;font-weight:600}"
+            + "p{color:#bbb;line-height:1.5}a{color:#9cf}";
     }
 }

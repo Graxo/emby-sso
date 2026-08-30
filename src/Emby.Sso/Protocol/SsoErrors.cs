@@ -15,6 +15,7 @@ namespace Emby.Sso.Protocol
         public const string SessionExpired = "This sign-in attempt expired. Please try again.";
         public const string UnknownUser = "This account is not set up on this server.";
         public const string DirectGrantDisabled = "Password sign-in is disabled for this account.";
+        public const string EmptyCredential = "A username and password are required.";
     }
 
     /// <summary>

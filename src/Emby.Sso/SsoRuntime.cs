@@ -16,7 +16,7 @@ namespace Emby.Sso
         private static readonly object ClientLock = new object();
 
         private static OidcClient _client;
-        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl) _clientKey;
+        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl, bool AllowInsecureHttp) _clientKey;
 
         public static PendingLoginStore PendingLogins { get; } =
             new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
@@ -65,7 +65,8 @@ namespace Emby.Sso
                 configuration.ClientSecret,
                 configuration.Scopes,
                 configuration.UsernameClaim,
-                configuration.EmbyPublicBaseUrl);
+                configuration.EmbyPublicBaseUrl,
+                configuration.AllowInsecureHttp);
 
             lock (ClientLock)
             {
@@ -82,6 +83,13 @@ namespace Emby.Sso
                     Scopes = configuration.Scopes,
                     RedirectUri = redirectUri,
                     UsernameClaim = configuration.UsernameClaim,
+
+                    // The flag, not the address: Protocol/ never reads
+                    // configuration itself, and deriving this from whether the
+                    // issuer URL happens to start with "https://" would make it
+                    // impossible for this to ever refuse an http:// issuer - the
+                    // exact tautology this replaces.
+                    RequireHttps = !configuration.AllowInsecureHttp,
                 });
                 _clientKey = key;
 
@@ -91,7 +99,7 @@ namespace Emby.Sso
 
         private static string BuildRedirectUri(PluginConfiguration configuration)
         {
-            return configuration.EmbyPublicBaseUrl.TrimEnd('/') + "/emby/Sso/Callback";
+            return configuration.EmbyPublicBaseUrl.TrimEnd('/') + "/emby" + SsoRoutes.CallbackPath;
         }
     }
 }

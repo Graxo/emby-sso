@@ -73,5 +73,35 @@ namespace Emby.Sso.Tests
 
             Assert.Equal(1, _idp.DiscoveryRequestCount);
         }
+
+        [Fact]
+        public async Task An_http_metadata_address_is_refused_when_https_is_required()
+        {
+            // RequireHttps defaults to true, matching every other test in this
+            // file - this is the one place it is exercised against an address
+            // that should be refused rather than an https:// one that should not.
+            var options = new OidcOptions
+            {
+                IssuerUrl = "http://idp.test/application/o/emby/",
+                ClientId = FakeIdentityProvider.ClientId,
+                ClientSecret = FakeIdentityProvider.ClientSecret,
+                Scopes = "openid profile email",
+                RedirectUri = "https://emby.test/emby/Sso/Callback",
+                UsernameClaim = "preferred_username",
+                RequireHttps = true,
+            };
+
+            var client = new OidcClient(new HttpClient(_idp), options);
+            var store = new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => client.BuildAuthorizationUrlAsync(store.Create(), CancellationToken.None));
+
+            Assert.Equal(SsoErrors.ProviderUnreachable, error.UserSafeReason);
+
+            // The refusal happens before any request is sent - RequireHttps on
+            // HttpDocumentRetriever rejects the address itself.
+            Assert.Equal(0, _idp.DiscoveryRequestCount);
+        }
     }
 }

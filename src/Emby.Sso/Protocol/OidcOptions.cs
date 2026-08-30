@@ -14,6 +14,16 @@ namespace Emby.Sso.Protocol
 
         public string UsernameClaim { get; set; } = "preferred_username";
 
+        /// <summary>
+        /// Whether the discovery document and JWKS fetches must use HTTPS.
+        /// Defaults to true (secure by default); the Emby-facing caller sets
+        /// this explicitly from its own "allow insecure HTTP" setting rather
+        /// than leaving it to be inferred from the address itself - an address
+        /// under attacker or administrator-typo control is not evidence that
+        /// fetching it over plain HTTP is acceptable.
+        /// </summary>
+        public bool RequireHttps { get; set; } = true;
+
         public string MetadataAddress => IssuerUrl.TrimEnd('/') + "/.well-known/openid-configuration";
     }
 }

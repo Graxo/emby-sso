@@ -26,10 +26,17 @@ namespace Emby.Sso.Protocol
             _http = http ?? throw new ArgumentNullException(nameof(http));
             _options = options ?? throw new ArgumentNullException(nameof(options));
 
+            // RequireHttps comes from the caller's own configuration, not from
+            // inspecting the address it is about to police - an http:// issuer
+            // must be refused here even though nothing about the address itself
+            // says so. The same retriever instance also fetches the JWKS
+            // (OpenIdConnectConfigurationRetriever reuses it for jwks_uri), so
+            // this one flag covers both the discovery document and the signing
+            // keys.
             _configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
                 _options.MetadataAddress,
                 new OpenIdConnectConfigurationRetriever(),
-                new HttpDocumentRetriever(http) { RequireHttps = _options.MetadataAddress.StartsWith("https://", StringComparison.OrdinalIgnoreCase) });
+                new HttpDocumentRetriever(http) { RequireHttps = _options.RequireHttps });
         }
 
         public Task<OpenIdConnectConfiguration> GetConfigurationAsync(CancellationToken cancellationToken)
@@ -224,6 +231,25 @@ namespace Emby.Sso.Protocol
             return Uri.EscapeDataString(value ?? string.Empty).Replace("%20", "+");
         }
 
+        /// <summary>
+        /// The RSA signing algorithms this client will accept, in the order the
+        /// OIDC signing-algorithm registry lists them. Restricting to this set -
+        /// rather than trusting whatever alg header the token carries - is what
+        /// prevents an algorithm-confusion attack: without a pin, a validator
+        /// that resolves a signing key by <c>kid</c> alone can be tricked into
+        /// verifying an HMAC-signed token against key material that was only
+        /// ever meant to be used as an RSA public key.
+        /// </summary>
+        private static readonly string[] RsaAlgorithms =
+        {
+            SecurityAlgorithms.RsaSha256,
+            SecurityAlgorithms.RsaSha384,
+            SecurityAlgorithms.RsaSha512,
+            SecurityAlgorithms.RsaSsaPssSha256,
+            SecurityAlgorithms.RsaSsaPssSha384,
+            SecurityAlgorithms.RsaSsaPssSha512,
+        };
+
         private OidcIdentity ValidateIdToken(string idToken, string expectedNonce, bool requireNonce, OpenIdConnectConfiguration configuration)
         {
             var parameters = new TokenValidationParameters
@@ -231,6 +257,7 @@ namespace Emby.Sso.Protocol
                 ValidIssuer = configuration.Issuer,
                 ValidAudience = _options.ClientId,
                 IssuerSigningKeys = configuration.SigningKeys,
+                ValidAlgorithms = AllowedRsaAlgorithms(configuration),
                 ValidateIssuer = true,
                 ValidateAudience = true,
                 ValidateIssuerSigningKey = true,
@@ -274,6 +301,38 @@ namespace Emby.Sso.Protocol
             return new OidcIdentity(ReadClaim(token, "sub"), username.Trim(), ReadClaim(token, "name") ?? username.Trim());
         }
 
+        /// <summary>
+        /// The RSA algorithms both this client supports and the discovery
+        /// document advertises. Falls back to RS256 alone when the document
+        /// advertises no RSA algorithm this client recognises, rather than
+        /// producing an empty list - an empty <c>ValidAlgorithms</c> is treated
+        /// by the token handler as "no restriction", which is exactly what
+        /// pinning exists to avoid.
+        /// </summary>
+        private static IList<string> AllowedRsaAlgorithms(OpenIdConnectConfiguration configuration)
+        {
+            var advertised = configuration?.IdTokenSigningAlgValuesSupported;
+            var allowed = new List<string>();
+
+            if (advertised != null)
+            {
+                foreach (var algorithm in RsaAlgorithms)
+                {
+                    if (advertised.Contains(algorithm))
+                    {
+                        allowed.Add(algorithm);
+                    }
+                }
+            }
+
+            if (allowed.Count == 0)
+            {
+                allowed.Add(SecurityAlgorithms.RsaSha256);
+            }
+
+            return allowed;
+        }
+
         private static string ReadClaim(JsonWebToken token, string name)
         {
             return token.TryGetClaim(name, out var claim) ? claim.Value : null;
@@ -291,9 +350,16 @@ namespace Emby.Sso.Protocol
             }
         }
 
+        /// <summary>
+        /// The provider's own "error" field, going straight into an exception
+        /// message that later reaches the server log. Flattened and capped the
+        /// same way <c>SsoService.ForLog</c> treats every other provider-supplied
+        /// string, so a hostile or compromised token endpoint cannot use it to
+        /// forge additional log lines.
+        /// </summary>
         private static string ReadErrorCode(string json)
         {
-            return ReadStringField(json, "error") ?? "unknown_error";
+            return LogSafeText.Flatten(ReadStringField(json, "error") ?? "unknown_error");
         }
     }
 }

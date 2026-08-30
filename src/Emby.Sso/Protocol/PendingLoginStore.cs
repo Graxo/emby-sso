@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Emby.Sso.Protocol
 {
@@ -11,18 +10,34 @@ namespace Emby.Sso.Protocol
     /// </summary>
     public sealed class PendingLoginStore
     {
+        /// <summary>
+        /// /Sso/Start takes no credentials, so this bounds how many logins an
+        /// anonymous caller can have in flight at once. Sized well above any
+        /// realistic legitimate concurrency so raising it further would not
+        /// meaningfully help an attacker who has already reached it.
+        /// </summary>
+        private const int DefaultMaxEntries = 2048;
+
+        /// <summary>
+        /// An entry younger than this is never evicted to make room for a new
+        /// one, however full the store is - see <see cref="Create"/>.
+        /// </summary>
+        private static readonly TimeSpan DefaultMinEvictionAge = TimeSpan.FromSeconds(30);
+
         private readonly Dictionary<string, PendingLogin> _entries = new Dictionary<string, PendingLogin>(StringComparer.Ordinal);
         private readonly List<string> _insertionOrder = new List<string>();
         private readonly object _lock = new object();
         private readonly Func<DateTimeOffset> _clock;
         private readonly TimeSpan _ttl;
         private readonly int _maxEntries;
+        private readonly TimeSpan _minEvictionAge;
 
-        public PendingLoginStore(Func<DateTimeOffset> clock, TimeSpan ttl, int maxEntries = 256)
+        public PendingLoginStore(Func<DateTimeOffset> clock, TimeSpan ttl, int maxEntries = DefaultMaxEntries, TimeSpan? minEvictionAge = null)
         {
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _ttl = ttl;
             _maxEntries = maxEntries > 0 ? maxEntries : throw new ArgumentOutOfRangeException(nameof(maxEntries));
+            _minEvictionAge = minEvictionAge ?? DefaultMinEvictionAge;
         }
 
         public PendingLogin Create()
@@ -36,14 +51,9 @@ namespace Emby.Sso.Protocol
 
             lock (_lock)
             {
-                RemoveExpired();
-
-                while (_insertionOrder.Count >= _maxEntries)
-                {
-                    var oldest = _insertionOrder[0];
-                    _insertionOrder.RemoveAt(0);
-                    _entries.Remove(oldest);
-                }
+                var now = _clock();
+                RemoveExpired(now);
+                EvictForSpace(now);
 
                 _entries[login.State] = login;
                 _insertionOrder.Add(login.State);
@@ -61,7 +71,7 @@ namespace Emby.Sso.Protocol
 
             lock (_lock)
             {
-                RemoveExpired();
+                RemoveExpired(_clock());
 
                 if (!_entries.TryGetValue(state, out var login))
                 {
@@ -74,16 +84,47 @@ namespace Emby.Sso.Protocol
             }
         }
 
-        private void RemoveExpired()
+        /// <summary>
+        /// Evicts the oldest entries, one at a time, while the store is at
+        /// capacity - but only entries already at least <see cref="_minEvictionAge"/>
+        /// old. A flood of anonymous <c>/Sso/Start</c> requests must not be able
+        /// to evict a legitimate, freshly-created login before its browser has
+        /// had a chance to complete the round trip: if the oldest entry is still
+        /// within that protected window, every entry is, so nothing is evicted
+        /// and the store is briefly allowed to exceed <see cref="_maxEntries"/>
+        /// instead. It self-corrects as soon as an entry ages past the floor or
+        /// expires, so the store stays bounded rather than becoming unbounded.
+        /// </summary>
+        private void EvictForSpace(DateTimeOffset now)
         {
-            var now = _clock();
-            var stale = _entries.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToList();
-
-            foreach (var key in stale)
+            while (_insertionOrder.Count >= _maxEntries)
             {
-                _entries.Remove(key);
-                _insertionOrder.Remove(key);
+                var oldest = _insertionOrder[0];
+
+                if (!_entries.TryGetValue(oldest, out var oldestLogin))
+                {
+                    // The two collections are kept in sync everywhere else; if
+                    // this ever happened, drop the stale index entry and move on
+                    // rather than spin forever on it.
+                    _insertionOrder.RemoveAt(0);
+                    continue;
+                }
+
+                var createdAt = oldestLogin.ExpiresAt - _ttl;
+
+                if (now - createdAt < _minEvictionAge)
+                {
+                    break;
+                }
+
+                _insertionOrder.RemoveAt(0);
+                _entries.Remove(oldest);
             }
+        }
+
+        private void RemoveExpired(DateTimeOffset now)
+        {
+            ExpiryPolicy.RemoveExpired(_entries, login => login.ExpiresAt, now, key => _insertionOrder.Remove(key));
         }
     }
 }

@@ -73,7 +73,7 @@ namespace Emby.Sso.Protocol
         {
             if (string.IsNullOrWhiteSpace(embyUsername) || string.IsNullOrEmpty(password))
             {
-                return SsoCredentialResult.Reject(SsoErrors.ProviderRejected);
+                return SsoCredentialResult.Reject(SsoErrors.EmptyCredential);
             }
 
             if (_handoff.TryConsume(embyUsername, password))

@@ -1,3 +1,5 @@
+using Emby.Sso;
+
 namespace Emby.Sso.Api
 {
     /// <summary>
@@ -23,17 +25,13 @@ namespace Emby.Sso.Api
                     : userSafeReason);
             var prefix = baseUrl ?? string.Empty;
             var home = PageText.Html(prefix + "/web/index.html");
-            var retry = PageText.Html(prefix + "/emby/Sso/Start");
+            var retry = PageText.Html(prefix + "/emby" + SsoRoutes.StartPath);
 
             return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
                 + "<meta name=\"referrer\" content=\"no-referrer\">"
-                + "<title>Sign-in failed</title><style>"
-                + "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
-                + "background:#101010;color:#eee;display:flex;min-height:100vh;margin:0;"
-                + "align-items:center;justify-content:center;text-align:center}"
-                + "main{max-width:32rem;padding:2rem}h1{font-size:1.25rem;font-weight:600}"
-                + "p{color:#bbb;line-height:1.5}a{color:#9cf}</style></head><body><main>"
+                + "<title>Sign-in failed</title><style>" + PageText.BaseStyle
+                + "</style></head><body><main>"
                 + "<h1>Sign-in failed</h1><p>" + reason + "</p>"
                 + "<p><a href=\"" + retry + "\">Try again</a> &middot; "
                 + "<a href=\"" + home + "\">Back to Emby</a></p>"

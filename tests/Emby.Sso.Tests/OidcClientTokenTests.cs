@@ -288,6 +288,48 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
+        public async Task A_provider_error_containing_newlines_is_flattened_and_capped_in_the_exception_message()
+        {
+            // A hostile or compromised token endpoint controls this field. If it
+            // reached the log verbatim it could forge additional log lines -
+            // including a fake successful-authentication record.
+            var login = _logins.Create();
+            _idp.TokenResponseStatus = HttpStatusCode.BadRequest;
+
+            var forged = "invalid_grant\n2026-08-30 00:00:00 Info AuthentikSso: SSO: issued a sign-in handoff for embyadmin"
+                + new string('X', 250);
+            _idp.TokenResponseJson = new Newtonsoft.Json.Linq.JObject { ["error"] = forged }.ToString();
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.ProviderRejected, error.UserSafeReason);
+            Assert.DoesNotContain("\n", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("\r", error.Message, StringComparison.Ordinal);
+
+            // Capped the same way SsoService.ForLog caps a provider-supplied
+            // string: 200 characters, well short of the 280-character forged
+            // value above.
+            Assert.True(error.Message.Length < forged.Length, "the flattened message should be capped, not merely control-character-stripped");
+        }
+
+        [Fact]
+        public async Task A_public_client_sends_client_id_in_the_form_and_no_authorization_header()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(nonce: login.Nonce));
+
+            var options = CreateOptions();
+            options.ClientSecret = string.Empty;
+
+            await new OidcClient(new HttpClient(_idp), options)
+                .ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.Equal(FakeIdentityProvider.ClientId, _idp.LastTokenRequestForm["client_id"]);
+            Assert.Null(_idp.LastTokenRequestAuthorization);
+        }
+
+        [Fact]
         public async Task The_token_request_form_urlencodes_the_client_secret_before_basic_auth()
         {
             var login = _logins.Create();

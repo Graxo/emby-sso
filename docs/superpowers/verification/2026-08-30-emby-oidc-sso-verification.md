@@ -142,3 +142,34 @@ See the working report for the exact commands and command output this summary is
 | 11 | Ordinary `claude` login still works | PASS |
 
 Full browser round trip, MFA enforcement, native/direct-grant flow, callback/handoff-secret replay, the 30-second handoff expiry, the disabled-account check, and the browser `localStorage` write are all **out of scope for this pass** — no Authentik instance exists for this deployment yet.
+
+## Notes for future review
+
+Two deviations from the design doc, noted here (not fixed — both are accepted
+by the final whole-branch review) so a future reader checking implementation
+against design does not have to rediscover them:
+
+- **`iat` (issued-at) is not independently validated.** The design
+  (`docs/superpowers/specs/2026-08-30-emby-oidc-sso-design.md`, step 4 of the
+  browser flow) calls for validating "`exp` and `iat` within a small clock
+  skew" alongside signature, `iss`, `aud` and `nonce`. `OidcClient.ValidateIdToken`
+  (`src/Emby.Sso/Protocol/OidcClient.cs`) validates signature, issuer,
+  audience, expiry and nonce, but the underlying token handler does not check
+  `iat` at all — only `exp`/`nbf` are library-validated lifetime claims. This
+  is a narrower reading of "freshness" than the design describes; it was
+  triaged as accept in the final review (`iat` is advisory in OIDC, and `exp`
+  plus the single-use `state`/nonce/handoff-secret already bound the token's
+  usable window) rather than fixed. Flagged here since it is a common item on
+  an OIDC verification checklist and a reviewer checking this document against
+  the design should not have to rediscover the gap.
+- **The design's `UserResolver` component became two call sites, not one.**
+  The design's component table (same document, "Components") describes a
+  single `UserResolver` responsible for "resolves the username claim to an
+  existing Emby user; rejects unknown users." The shipped code has no class by
+  that name; the same responsibility is split across
+  `SsoService.HandleCallbackAsync`'s `_userManager.GetUserByName` check (for
+  the browser flow) and `SsoAuthenticationProvider.Authenticate`'s
+  `resolvedUser == null` check (fed by Emby's own username resolution, and
+  covering both the browser and direct-grant flows). They are functionally
+  equivalent to the design's intent, but a future change to "how an OIDC
+  identity resolves to an Emby user" needs to touch both places, not one.

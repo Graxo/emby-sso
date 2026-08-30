@@ -92,6 +92,21 @@ namespace Emby.Sso.Api
                     "refusing to start sign-in: the public base URL is not HTTPS and insecure HTTP is not allowed");
             }
 
+            // Independent of the base-URL check above: a public base URL can be
+            // HTTPS while the issuer is not, and it is the issuer's discovery
+            // document and JWKS - fetched by the server, over the network - that
+            // an on-path attacker could otherwise substitute to forge an id_token
+            // for any username. SsoRuntime.GetClient() also enforces this deeper
+            // in the stack (OidcOptions.RequireHttps), but refusing here means
+            // the flow never even calls the provider, and the log line is
+            // explicit about which URL failed the check.
+            if (!IsHttps(configuration.IssuerUrl) && !configuration.AllowInsecureHttp)
+            {
+                return Error(
+                    SsoErrors.NotConfigured,
+                    "refusing to start sign-in: the issuer URL is not HTTPS and insecure HTTP is not allowed");
+            }
+
             try
             {
                 var client = SsoRuntime.GetClient();
@@ -213,7 +228,7 @@ namespace Emby.Sso.Api
 
         private void IssueBrowserBinding(PendingLogin login)
         {
-            if (login == null || !IsCookieSafe(login.BrowserBinding))
+            if (login == null || !HeaderSafety.IsCookieValueSafe(login.BrowserBinding))
             {
                 return;
             }
@@ -243,7 +258,7 @@ namespace Emby.Sso.Api
                 return "the pending login carried no browser binding";
             }
 
-            var presented = ReadBindingCookies();
+            var presented = CookieBinding.ExtractCookieValues(CookieHeaderValues(), BindingCookieName);
 
             if (presented.Count == 0)
             {
@@ -251,15 +266,9 @@ namespace Emby.Sso.Api
                     + "than the one that started, or something between the browser and Emby drops cookies";
             }
 
-            foreach (var candidate in presented)
-            {
-                if (FixedTime.Equals(login.BrowserBinding, candidate))
-                {
-                    return null;
-                }
-            }
-
-            return "the browser-binding cookie did not match the pending login";
+            return CookieBinding.BindingMatches(login.BrowserBinding, presented)
+                ? null
+                : "the browser-binding cookie did not match the pending login";
         }
 
         private void SetCookie(string value, long maxAgeSeconds)
@@ -268,6 +277,11 @@ namespace Emby.Sso.Api
 
             if (response == null)
             {
+                // IRequiresRequest injection has never been seen to fail, but if
+                // it ever does, a sign-in that silently proceeds without a
+                // binding cookie is worse than one that fails loudly - log it
+                // rather than the previous silent return.
+                _logger.Error("SSO: the request was not injected into the service; cannot set the browser-binding cookie");
                 return;
             }
 
@@ -289,44 +303,30 @@ namespace Emby.Sso.Api
             response.AddHeader("Set-Cookie", cookie.ToString());
         }
 
-        private List<string> ReadBindingCookies()
+        /// <summary>
+        /// Every value of every <c>Cookie</c> header on the current request. The
+        /// parsing that turns these into candidate binding-cookie values is pure
+        /// string handling and lives in <see cref="CookieBinding"/> instead, so
+        /// it can be tested without an <see cref="IRequest"/> to fake.
+        /// </summary>
+        private IEnumerable<string> CookieHeaderValues()
         {
-            var found = new List<string>();
             var headers = Request?.Headers;
 
             if (headers == null)
             {
-                return found;
+                yield break;
             }
-
-            var prefix = BindingCookieName + "=";
 
             foreach (var header in headers)
             {
-                if (header == null || !string.Equals(header.Name, "Cookie", StringComparison.OrdinalIgnoreCase))
+                if (header != null
+                    && string.Equals(header.Name, "Cookie", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(header.Value))
                 {
-                    continue;
-                }
-
-                if (string.IsNullOrEmpty(header.Value))
-                {
-                    continue;
-                }
-
-                // A browser may send several cookies of the same name when their
-                // paths differ; try them all rather than only the first.
-                foreach (var part in header.Value.Split(';'))
-                {
-                    var item = part.Trim();
-
-                    if (item.StartsWith(prefix, StringComparison.Ordinal) && item.Length > prefix.Length)
-                    {
-                        found.Add(item.Substring(prefix.Length));
-                    }
+                    yield return header.Value;
                 }
             }
-
-            return found;
         }
 
         /// <summary>
@@ -343,7 +343,7 @@ namespace Emby.Sso.Api
                 var path = uri.AbsolutePath;
                 var lastSlash = path.LastIndexOf('/');
 
-                if (lastSlash > 0 && IsPathSafe(path))
+                if (lastSlash > 0 && HeaderSafety.IsPathSafe(path))
                 {
                     return path.Substring(0, lastSlash);
                 }
@@ -353,78 +353,15 @@ namespace Emby.Sso.Api
         }
 
         /// <summary>
-        /// Nothing that could end an attribute or the header itself: the base URL
-        /// this is derived from is administrator-supplied.
-        /// </summary>
-        private static bool IsPathSafe(string path)
-        {
-            foreach (var character in path)
-            {
-                var allowed = (character >= 'a' && character <= 'z')
-                    || (character >= 'A' && character <= 'Z')
-                    || (character >= '0' && character <= '9')
-                    || character == '/' || character == '-' || character == '_'
-                    || character == '.' || character == '~' || character == '%';
-
-                if (!allowed)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// SecureRandom emits base64url, so this always holds; it exists so a
-        /// future change to the token alphabet cannot become header injection.
-        /// </summary>
-        private static bool IsCookieSafe(string value)
-        {
-            if (string.IsNullOrEmpty(value))
-            {
-                return false;
-            }
-
-            foreach (var character in value)
-            {
-                var allowed = (character >= 'a' && character <= 'z')
-                    || (character >= 'A' && character <= 'Z')
-                    || (character >= '0' && character <= '9')
-                    || character == '-' || character == '_';
-
-                if (!allowed)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Flattens an untrusted string for a single log line and caps its length.
+        /// Flattens an untrusted string for a single log line and caps its
+        /// length. Delegates to the Protocol layer's copy of this policy so the
+        /// Api and Protocol layers cannot drift apart on what "safe to log"
+        /// means - see <see cref="OidcClient"/>'s use of the same policy for a
+        /// provider's OAuth error code.
         /// </summary>
         private static string ForLog(string value)
         {
-            if (string.IsNullOrEmpty(value))
-            {
-                return string.Empty;
-            }
-
-            var builder = new System.Text.StringBuilder(Math.Min(value.Length, 200));
-
-            foreach (var character in value)
-            {
-                if (builder.Length >= 200)
-                {
-                    break;
-                }
-
-                builder.Append(char.IsControl(character) ? ' ' : character);
-            }
-
-            return builder.ToString();
+            return LogSafeText.Flatten(value);
         }
 
         private static bool IsHttps(string url)
@@ -439,19 +376,7 @@ namespace Emby.Sso.Api
         /// </summary>
         private static string SafeBaseUrl()
         {
-            var url = SsoRuntime.Configuration?.EmbyPublicBaseUrl;
-
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                return string.Empty;
-            }
-
-            url = url.Trim().TrimEnd('/');
-
-            var acceptable = url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
-
-            return acceptable ? url : string.Empty;
+            return HeaderSafety.SanitizeBaseUrl(SsoRuntime.Configuration?.EmbyPublicBaseUrl);
         }
 
         private object Error(string userSafeReason, string logDetail, Exception exception = null)

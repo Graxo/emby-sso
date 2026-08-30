@@ -68,21 +68,7 @@ namespace Emby.Sso.Protocol
 
         private void RemoveExpired()
         {
-            var now = _clock();
-            var stale = new List<string>();
-
-            foreach (var pair in _entries)
-            {
-                if (pair.Value.ExpiresAt <= now)
-                {
-                    stale.Add(pair.Key);
-                }
-            }
-
-            foreach (var key in stale)
-            {
-                _entries.Remove(key);
-            }
+            ExpiryPolicy.RemoveExpired(_entries, entry => entry.ExpiresAt, _clock());
         }
 
         private sealed class Entry

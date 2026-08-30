@@ -1,3 +1,4 @@
+using Emby.Sso;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Services;
 
@@ -13,7 +14,7 @@ namespace Emby.Sso.Api
     /// an existing sign-in is useless. The attribute belongs on the request DTO,
     /// not on the service.
     /// </remarks>
-    [Route("/Sso/Start", "GET")]
+    [Route(SsoRoutes.StartPath, "GET")]
     [Unauthenticated]
     public class SsoStart : IReturnVoid
     {
@@ -22,7 +23,7 @@ namespace Emby.Sso.Api
     /// <summary>
     /// The identity provider's redirect target. Completes the sign-in.
     /// </summary>
-    [Route("/Sso/Callback", "GET")]
+    [Route(SsoRoutes.CallbackPath, "GET")]
     [Unauthenticated]
     public class SsoCallback : IReturnVoid
     {

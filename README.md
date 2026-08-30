@@ -90,6 +90,17 @@ including this one.
 There is no button on Emby's login page, and there cannot be one — see
 the next section.
 
+**A browser that signs in through SSO gets its own device row.** The
+completion page authenticates as an ordinary API client identified as
+`Emby Web` with its own generated device ID (stored in that browser's
+`localStorage`, separate from the web client's own device ID for the same
+browser), so Dashboard → Devices ends up showing **two** "Emby Web" rows for
+one browser: the one the web client itself registers on ordinary interactive
+login, and this plugin's. They look like duplicates but are not — each
+backs a live session. **Do not delete either one as a cleanup step**: deleting
+the row this plugin's completion page created revokes the access token it
+minted, which signs that browser out of its current SSO session immediately.
+
 ---
 
 ## Starting a sign-in: there is no button on the login page

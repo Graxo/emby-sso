@@ -87,15 +87,39 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public void The_store_evicts_the_oldest_entries_past_its_limit()
+        public void The_store_evicts_the_oldest_entries_past_its_limit_once_they_are_old_enough()
         {
             var store = CreateStore(maxEntries: 3);
             var first = store.Create();
+
+            // Past the store's default eviction-age floor, so the oldest entry
+            // is a legitimate target for eviction rather than a fresh, in-flight
+            // login that a burst of new creates must not be able to displace.
+            _clock.Advance(TimeSpan.FromSeconds(31));
+
             store.Create();
             store.Create();
             store.Create();
 
             Assert.Null(store.Consume(first.State));
+        }
+
+        [Fact]
+        public void A_burst_of_anonymous_creates_cannot_evict_a_fresh_login_within_the_age_floor()
+        {
+            // /Sso/Start takes no credentials, so nothing stops a flood of
+            // requests arriving within the same instant. None of them may evict
+            // an entry created moments ago - that entry could belong to a real
+            // user mid-redirect to the identity provider.
+            var store = CreateStore(maxEntries: 3);
+            var first = store.Create();
+
+            store.Create();
+            store.Create();
+            store.Create();
+            store.Create();
+
+            Assert.NotNull(store.Consume(first.State));
         }
     }
 }
