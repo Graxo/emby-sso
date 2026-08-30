@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Emby.Sso.Protocol;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Logging;
 
 namespace Emby.Sso.Auth
@@ -27,9 +28,17 @@ namespace Emby.Sso.Auth
     {
         private readonly ILogger _logger;
 
-        public SsoAuthenticationProvider(ILogManager logManager)
+        // Not used yet. Emby resolves this from its own container at startup -
+        // verified on 4.9.5.0, see docs/superpowers/spikes/2026-08-30-provisioning-mechanics.md
+        // - and group-gated provisioning needs it to read the template user and
+        // create the account, so the dependency is taken here rather than
+        // reached for through a static.
+        private readonly IUserManager _userManager;
+
+        public SsoAuthenticationProvider(ILogManager logManager, IUserManager userManager)
         {
             _logger = logManager.GetLogger("AuthentikSso");
+            _userManager = userManager;
         }
 
         public string Name => "Authentik SSO";
