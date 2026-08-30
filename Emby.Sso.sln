@@ -1,0 +1,27 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{3017FF75-755A-4CBB-A40F-334C84A1D6BB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Emby.Sso", "src\Emby.Sso\Emby.Sso.csproj", "{210FB9D3-287B-426E-9208-67DD6A17483C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{210FB9D3-287B-426E-9208-67DD6A17483C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{210FB9D3-287B-426E-9208-67DD6A17483C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{210FB9D3-287B-426E-9208-67DD6A17483C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{210FB9D3-287B-426E-9208-67DD6A17483C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{210FB9D3-287B-426E-9208-67DD6A17483C} = {3017FF75-755A-4CBB-A40F-334C84A1D6BB}
+	EndGlobalSection
+EndGlobal

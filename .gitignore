@@ -1,0 +1,6 @@
+.superpowers/
+bin/
+obj/
+*.user
+.dotnet/
+artifacts/
