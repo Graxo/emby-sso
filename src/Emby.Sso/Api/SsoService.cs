@@ -115,6 +115,29 @@ namespace Emby.Sso.Api
                     "refusing to start sign-in: the issuer URL is not HTTPS and insecure HTTP is not allowed");
             }
 
+            // The fourth configuration refusal, and the same reordering the
+            // native path got: GroupGate answers NotConfigured for an unset
+            // required group from configuration alone, so this flow can be
+            // refused before it starts rather than after the user has been sent
+            // to the identity provider, signed in there, and come back to a
+            // callback that was always going to refuse them (the gate in
+            // HandleCallbackAsync, which cannot move any earlier - it needs the
+            // verified identity).
+            //
+            // Nobody's access changes: an unset required group refuses every SSO
+            // sign-in either way. What changes is that the server stops
+            // redirecting users to the provider for a round trip that cannot
+            // succeed, and the log says so at the point an operator can act on
+            // it. Nothing has left this server when it refuses here - the
+            // discovery document is not fetched until the authorization URL is
+            // built below.
+            if (string.IsNullOrWhiteSpace(configuration.RequiredGroup))
+            {
+                return Error(
+                    SsoErrors.NotConfigured,
+                    "refusing to start sign-in: no required group is configured, so the callback could only refuse");
+            }
+
             try
             {
                 var client = SsoRuntime.GetClient();
