@@ -1,0 +1,19 @@
+<Project>
+  <Target Name="MergeDependencies" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <MergeInput Include="$(OutputPath)$(AssemblyName).dll" />
+      <MergeInput Include="$(OutputPath)Microsoft.IdentityModel.*.dll" />
+      <MergeInput Include="$(OutputPath)Newtonsoft.Json.dll" />
+      <MergeInput Include="$(OutputPath)System.IdentityModel.Tokens.Jwt.dll" />
+      <MergeLibDir Include="$(OutputPath)" />
+      <MergeLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
+    </ItemGroup>
+    <ILRepack
+      Parallel="true"
+      Internalize="true"
+      InputAssemblies="@(MergeInput->'%(FullPath)')"
+      LibraryPath="@(MergeLibDir)"
+      TargetKind="Dll"
+      OutputFile="$(OutputPath)merged/$(AssemblyName).dll" />
+  </Target>
+</Project>
