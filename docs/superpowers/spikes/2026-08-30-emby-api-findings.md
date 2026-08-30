@@ -109,7 +109,25 @@ HTTP response: **401**, body `Invalid username or password entered.`
 **1j. Emby STAMPS the winning provider onto the user.** *(added in the 2026-08-30 addendum; observed)*
 A successful authentication writes `Policy.AuthenticationProviderId` with the id of the provider that succeeded. Verified twice:
 - `claude` with the key **absent**, signing in with the correct Emby password → afterwards `Policy.AuthenticationProviderId == "Emby.Server.Implementations.Library.DefaultAuthenticationProvider"`.
-- `claude` with the key **absent**, signing in with a password only the plugin accepts → afterwards `Policy.AuthenticationProviderId == "Emby.Sso.Auth.ProbeProvider"`.
+- `claude` with the key **absent**, signing in with a password only the plugin accepts → afterwards `Policy.AuthenticationProviderId == "Emby.Sso.Auth.ProbeProvider"` (this is the same run as §1k, whose log lines are quoted there).
+
+Captured output for the first of those two runs — the `Policy.AuthenticationProviderId` field read back from `GET /emby/Users/5c2bf06fe9434e5ebb333ebe53a33445` before and after a single successful login, plus the resulting on-disk `policy.xml`:
+
+```
+  POST baseline policy=204
+  after clear -> key present: False          # GET /emby/Users/{id} -> 'AuthenticationProviderId' not in Policy
+-- now log in once --
+  login=200                                  # POST /emby/Users/AuthenticateByName, claude / claude123
+  after login ->  'Emby.Server.Implementations.Library.DefaultAuthenticationProvider'
+```
+
+and, verbatim from `sudo grep AuthenticationProviderId /config/users/5c2bf06fe9434e5ebb333ebe53a33445/policy.xml` afterwards:
+
+```xml
+  <AuthenticationProviderId>Emby.Server.Implementations.Library.DefaultAuthenticationProvider</AuthenticationProviderId>
+```
+
+*Precision about this evidence:* the three `after …` lines are the `Policy.AuthenticationProviderId` value extracted from the `GET /emby/Users/{id}` JSON at the time, not a verbatim dump of the full response body — that body was not saved, and the server has since been restored, so it was deliberately **not** re-fetched to improve this document. The `policy.xml` line above is verbatim. §1l independently corroborates the same behaviour from the server log.
 
 **1k. A user with NO provider assigned is offered to EVERY provider.** *(added in the addendum; observed)*
 With `claude`'s `AuthenticationProviderId` key removed and the probe plugin installed, `POST /emby/Users/AuthenticateByName` with a password that only the plugin accepts returned **200**, and the log shows Emby trying Default first and then the plugin:
@@ -504,6 +522,13 @@ and `appstorage-localstorage.js` is a one-line passthrough: `setItem(name,value)
 
 ### 6.2 The exact stored shape
 
+> ### ⚠️ Evidence boundary for everything in §6.2 — read before implementing
+> **The credential format below is read from the shipped 4.9.5.0 client JavaScript. It was NOT observed in a browser** — no browser, headless or otherwise, was available in the probe environment, so no `localStorage` write was ever executed and no DOM behaviour was witnessed. Full statement of what *is* observed vs read: **§6.8**.
+>
+> The source is unambiguous and I do not hedge the claims — but the boundary travels with the data, so:
+>
+> **First acceptance test for Task 12/13, before building on this table:** complete an SSO sign-in through `/emby/Sso/Callback`, then confirm the browser lands on the **home screen** at `/web/index.html` and **not** the login screen. If it lands on the login screen, the format below is where to look first (most likely suspects, in order: the token written to `Servers[].AccessToken` instead of `Servers[].Users[]`, then an `ManualAddress` mismatch — §6.4).
+
 The value is `JSON.stringify({ Servers: [ ... ] })` (plus optional `ConnectUserId` / `ConnectAccessToken` for Emby Connect, which we do not touch).
 
 **The access token does NOT live at the server level. It lives in a per-user `Users[]` array.** This is the single most important detail, and it is easy to get wrong. `connectionmanager.js`:
@@ -578,7 +603,7 @@ Literal `localStorage` value (one line, no whitespace — `JSON.stringify` outpu
 {"Servers":[{"Id":"c5bc6e91458540caa295c4efdda1a58a","Name":"KC Bios","ManualAddress":"http://10.10.140.5:8090","ManualAddressOnly":true,"IsLocalServer":true,"LastConnectionMode":2,"DateLastAccessed":1788123456789,"UserId":"5c2bf06fe9434e5ebb333ebe53a33445","Users":[{"UserId":"5c2bf06fe9434e5ebb333ebe53a33445","AccessToken":"bf40735059274247a4f2df38247a58f6"}]}]}
 ```
 
-Field by field:
+Field by field — **read from client source, not browser-observed (§6.8); verify with the acceptance test above**:
 
 | Field | Required? | Where it comes from | Notes |
 |---|---|---|---|
@@ -757,7 +782,11 @@ SessionInfo keys: PlayState, AdditionalUsers, RemoteEndPoint, Protocol, Playable
 
 **Everything the credential store needs is in this one response** — `AccessToken`, `ServerId`, `User.Id`. `SessionInfo` is not used by the store. `Name` (nice-to-have) comes from `GET /emby/System/Info` → `.ServerName`, or `GET /emby/System/Info/Public` → `.ServerName` if you want an anonymous call.
 
-### 6.7 The completion page's sequence
+### 6.7 Decision forced — the completion page's sequence
+
+**Decision:** the browser flow's final step is served by the plugin itself. `/emby/Sso/Callback` returns an HTML page whose inline script authenticates against `/emby/Users/AuthenticateByName` with the one-time handoff secret as the password, merges the result into `localStorage["servercredentials3"]` (token into `Users[]`, per §6.2), and then redirects to `/web/index.html`. No injection into any Emby-owned page is required, and no `sessionStorage` or cookie is involved. Task 12 implements this page; Task 13 documents the lock-out consequences from §1l.
+
+**Acceptance test that closes the §6.8 evidence gap:** open `/emby/Sso/Callback` in a real browser and confirm it lands on the home screen, not the login screen. Do this first, before building anything else on §6.2.
 
 Our `/emby/Sso/Callback` handler validates the OIDC code, resolves the Emby user, mints a one-time handoff secret, and returns an HTML page (per §2g: `Request.ResponseContentType = "text/html"` first). That page's inline script does:
 
@@ -896,10 +925,10 @@ So: a token minted by `AuthenticateByName` from a non-browser client satisfies p
 | HTML body | `Request.ResponseContentType = "text/html";` then `resultFactory.GetResult(Request, html.AsSpan(), "text/html", null)` |
 | Login-page script injection | **impossible** — bookmarkable `/emby/Sso/Start` is the only entry point |
 | Completing sign-in without injection | the plugin's own `/emby/Sso/Callback` page writes the web client's credential store (§6) |
-| Credential store | `localStorage["servercredentials3"]` — plain `localStorage` in a browser; the only key involved |
-| Stored value | `JSON.stringify({Servers:[{...}]})` |
-| **Where the token goes** | `Servers[].Users[] = [{UserId, AccessToken}]` — **never** `Servers[].AccessToken` (the client deletes that and nothing reads it) |
-| Other required entry fields | `Id`, `UserId`, `ManualAddress`, `ManualAddressOnly:true`, `IsLocalServer:true`, `LastConnectionMode:2`, `DateLastAccessed` |
+| Credential store *(read from client source, not browser-observed — §6.8)* | `localStorage["servercredentials3"]` — plain `localStorage` in a browser; the only key involved |
+| Stored value *(read from source — §6.8)* | `JSON.stringify({Servers:[{...}]})` |
+| **Where the token goes** *(read from source — §6.8)* | `Servers[].Users[] = [{UserId, AccessToken}]` — **never** `Servers[].AccessToken` (the client deletes that and nothing reads it) |
+| Other required entry fields *(read from source — §6.8)* | `Id`, `UserId`, `ManualAddress`, `ManualAddressOnly:true`, `IsLocalServer:true`, `LastConnectionMode:2`, `DateLastAccessed` |
 | `ManualAddress` must equal | the address `app.js` computes: `location.href.toLowerCase()` truncated at `lastIndexOf("/web")`, else `protocol//hostname[:port]`. Mismatch ⇒ a second credential-less entry wins and the login screen appears (§6.4) |
 | Auth call | `POST /emby/Users/AuthenticateByName`, body `{"Username","Pw"}`, **client-identity headers mandatory** (`X-Emby-Client`, `X-Emby-Device-Name`, `X-Emby-Device-Id`, `X-Emby-Client-Version`) — without them `400 Value cannot be null. (Parameter 'appName')` |
 | Auth response | `{User, SessionInfo, AccessToken, ServerId}` — `AccessToken`, `ServerId`, `User.Id` are all the store needs |
@@ -908,6 +937,7 @@ So: a token minted by `AuthenticateByName` from a non-browser client satisfies p
 | sessionStorage / cookies | not used for auth (`sessionStorage["pinvalidated"]` only; no cookies anywhere) |
 | `?accessToken=&userId=&e=1` on `/web/` | exists in `app.js` but stores the token where nothing reads it — **do not rely on it** (§6.5) |
 | Redirect after writing the store | `location.replace(base + "/web/index.html")` |
+| **First acceptance test for the credential format** | complete a sign-in via `/emby/Sso/Callback` in a real browser and confirm it lands on the **home screen**, not the login screen. Nothing in §6.2 was browser-verified (§6.8) — do this before building on it |
 | Shipping artifact | `src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll` (single file, deps internalised) |
 | `AuthenticationException` | does not exist — use `System.Exception` |
 
