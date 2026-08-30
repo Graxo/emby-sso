@@ -19,6 +19,10 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#enableDirectGrant').checked = config.EnableDirectGrant === true;
         page.querySelector('#enableButtonInjection').checked = config.EnableButtonInjection === true;
         page.querySelector('#allowInsecureHttp').checked = config.AllowInsecureHttp === true;
+        page.querySelector('#requiredGroup').value = config.RequiredGroup || '';
+        page.querySelector('#groupsClaim').value = config.GroupsClaim || 'groups';
+        page.querySelector('#templateUserName').value = config.TemplateUserName || '';
+        page.querySelector('#enableAutoCreate').checked = config.EnableAutoCreate === true;
         showUrls(page, config.EmbyPublicBaseUrl);
 
         loading.hide();
@@ -50,6 +54,10 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             config.EnableDirectGrant = form.querySelector('#enableDirectGrant').checked;
             config.EnableButtonInjection = form.querySelector('#enableButtonInjection').checked;
             config.AllowInsecureHttp = form.querySelector('#allowInsecureHttp').checked;
+            config.RequiredGroup = form.querySelector('#requiredGroup').value.trim();
+            config.GroupsClaim = form.querySelector('#groupsClaim').value.trim();
+            config.TemplateUserName = form.querySelector('#templateUserName').value.trim();
+            config.EnableAutoCreate = form.querySelector('#enableAutoCreate').checked;
 
             return ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                 loading.hide();

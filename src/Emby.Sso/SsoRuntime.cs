@@ -16,7 +16,7 @@ namespace Emby.Sso
         private static readonly object ClientLock = new object();
 
         private static OidcClient _client;
-        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl, bool AllowInsecureHttp) _clientKey;
+        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl, bool AllowInsecureHttp, string GroupsClaim, string RequiredGroup) _clientKey;
 
         public static PendingLoginStore PendingLogins { get; } =
             new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
@@ -66,7 +66,9 @@ namespace Emby.Sso
                 configuration.Scopes,
                 configuration.UsernameClaim,
                 configuration.EmbyPublicBaseUrl,
-                configuration.AllowInsecureHttp);
+                configuration.AllowInsecureHttp,
+                configuration.GroupsClaim,
+                configuration.RequiredGroup);
 
             lock (ClientLock)
             {
@@ -83,6 +85,7 @@ namespace Emby.Sso
                     Scopes = configuration.Scopes,
                     RedirectUri = redirectUri,
                     UsernameClaim = configuration.UsernameClaim,
+                    GroupsClaim = configuration.GroupsClaim,
 
                     // The flag, not the address: Protocol/ never reads
                     // configuration itself, and deriving this from whether the

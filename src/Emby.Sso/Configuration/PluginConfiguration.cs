@@ -13,6 +13,10 @@ namespace Emby.Sso.Configuration
         public bool EnableDirectGrant { get; set; } = false;
         public bool EnableButtonInjection { get; set; } = false;
         public bool AllowInsecureHttp { get; set; } = false;
+        public bool EnableAutoCreate { get; set; } = false;
+        public string RequiredGroup { get; set; } = string.Empty;
+        public string TemplateUserName { get; set; } = string.Empty;
+        public string GroupsClaim { get; set; } = "groups";
 
         public bool IsConfigured =>
             !string.IsNullOrWhiteSpace(IssuerUrl) &&

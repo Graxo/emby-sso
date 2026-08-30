@@ -88,6 +88,49 @@
       <br />
 
       <div class="inputContainer">
+        <label for="requiredGroup">Required group</label>
+        <input is="emby-input" type="text" id="requiredGroup" />
+        <div class="fieldDescription">
+          The Authentik group a user must hold to sign in. Leaving this empty
+          blocks all group-gated sign-in.
+        </div>
+      </div>
+
+      <div class="inputContainer">
+        <label for="groupsClaim">Groups claim</label>
+        <input is="emby-input" type="text" id="groupsClaim" />
+        <div class="fieldDescription">
+          The claim the group list is read from. Authentik must be configured
+          to emit it &mdash; on the direct-grant flow too, if native sign-in
+          is enabled.
+        </div>
+      </div>
+
+      <div class="inputContainer">
+        <label for="templateUserName">Template user</label>
+        <input is="emby-input" type="text" id="templateUserName" />
+        <div class="fieldDescription">
+          The existing Emby user whose libraries and permissions new accounts
+          are cloned from. New accounts are never administrators, regardless
+          of the template.
+        </div>
+      </div>
+
+      <div class="checkboxContainer checkboxContainer-withDescription">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="enableAutoCreate" />
+          <span>Automatically create accounts for group holders</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          Creates an Emby account automatically for a group holder who does
+          not have one, cloned from the template user above. This is the
+          setting that lets the plugin create users at all.
+        </div>
+      </div>
+
+      <br />
+
+      <div class="inputContainer">
         <label>Redirect URI to configure in Authentik</label>
         <p id="redirectUri" style="user-select: all; font-family: monospace;"></p>
       </div>
