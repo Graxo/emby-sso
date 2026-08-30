@@ -44,7 +44,11 @@ namespace Emby.Sso.Protocol
                 throw new ArgumentNullException(nameof(login));
             }
 
-            var configuration = await GetConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            // Via the throwing helper, so a discovery failure at login initiation
+            // surfaces as SsoException with a user-safe reason like every other
+            // provider fetch, instead of an HttpRequestException the caller would
+            // have to guess at.
+            var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
 
             var parameters = new Dictionary<string, string>
             {
