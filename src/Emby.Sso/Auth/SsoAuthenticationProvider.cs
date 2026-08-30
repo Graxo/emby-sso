@@ -25,16 +25,31 @@ namespace Emby.Sso.Auth
     /// That branch used to throw unconditionally, and the throw was the only thing
     /// standing between an unauthenticated caller and account creation. It is now
     /// OPEN, narrowly. What guards it in its place is the ordered chain in
-    /// <see cref="ProvisionOrRefuse"/>: auto-create must be enabled, a template
-    /// user must be configured AND exist, direct grant must be enabled, the
-    /// attempt must be within <see cref="ProvisioningThrottle"/>'s budget, the
-    /// identity provider must accept the supplied password on the direct-grant
-    /// path, the verified identity must name the very username that was asked for,
-    /// and that identity must hold the operator's required group. Every one of
-    /// those throws on failure, and the success return is reachable only after all
-    /// of them have passed. A future reader must not weaken any link in that chain
-    /// believing some other check makes it redundant - nothing else in Emby will
-    /// stop the account being created.
+    /// <see cref="ProvisionOrRefuse"/>, in this order:
+    ///
+    /// 1. auto-create must be enabled;
+    /// 2. a template user must be CONFIGURED (that it exists is checked at 8);
+    /// 3. direct grant must be enabled;
+    /// 4. a required group must be configured;
+    /// 5. the attempt must be within <see cref="ProvisioningThrottle"/>'s budget;
+    /// 6. the identity provider must accept the supplied password;
+    /// 7. the verified identity must name the very username that was asked for,
+    ///    and must hold the operator's required group;
+    /// 8. the configured template user must EXIST and its policy must clone.
+    ///
+    /// 1-5 are <see cref="ProvisioningPreconditions"/>, which is where that order
+    /// is asserted by tests rather than only described in prose; 1-4 of them are
+    /// decided from configuration alone, so a server that is not provisioning
+    /// refuses before the throttle is consulted and before anything is sent
+    /// anywhere. 8 is last deliberately: it is a lookup in Emby's user store, and
+    /// an unauthenticated caller must not be able to drive one. It is still a
+    /// guard, because it runs before the success return - if the template cannot
+    /// be read, no account is created.
+    ///
+    /// Every one of those throws on failure, and the success return is reachable
+    /// only after all of them have passed. A future reader must not weaken any
+    /// link in that chain believing some other check makes it redundant - nothing
+    /// else in Emby will stop the account being created.
     ///
     /// This provider does NOT create the account itself. Emby resolves the
     /// username once, before any provider runs, and then unconditionally calls its
@@ -72,10 +87,23 @@ namespace Emby.Sso.Auth
         // InvalidLoginAttemptCount counting against it, while an unknown
         // username has no account for Emby to count against and is exactly the
         // case that forwards a stranger's guess to the identity provider.
-        // One instance per provider, which is one per server: Emby resolves its
-        // authentication providers once, so the counters are shared across every
-        // sign-in the way they must be to mean anything.
-        private readonly ProvisioningThrottle _throttle = new ProvisioningThrottle();
+        //
+        // STATIC, and it must stay static. Emby's registration
+        // (IUserManager.AddParts(IEnumerable<IAuthenticationProvider>, ...),
+        // reflected from MediaBrowser.Controller 4.9.1.90) hands over provider
+        // INSTANCES once, so one instance per server is very probably true - but
+        // whether Emby materialises or re-enumerates that sequence is not
+        // visible from the reference assemblies, and this is the one piece of
+        // shared state in the plugin whose assumption fails OPEN. A second
+        // instance would meet a zero-count throttle on every attempt: the brake
+        // would be silently and completely absent, with no log line and no
+        // failing test. (_pendingPolicies below is deliberately per-instance and
+        // is safe either way - Emby recovers IHasNewUserPolicy from the very
+        // object that authenticated, spike §1, and a miss fails closed.)
+        //
+        // Counters that must be shared across every sign-in to mean anything
+        // belong to the process, not to whichever object Emby happened to build.
+        private static readonly ProvisioningThrottle _throttle = new ProvisioningThrottle();
 
         public SsoAuthenticationProvider(ILogManager logManager, IUserManager userManager)
         {
@@ -107,6 +135,40 @@ namespace Emby.Sso.Auth
                 return await ProvisionOrRefuse(username, password).ConfigureAwait(false);
             }
 
+            // One read of Configuration for this whole call - the early refusal
+            // below and the gate further down decide from the same snapshot, so
+            // a settings save racing this sign-in cannot refuse against one
+            // configuration and gate against another. It is not a snapshot of
+            // the whole decision: SsoRuntime.Validator re-reads Configuration
+            // independently, both to build the client (which is what fixes the
+            // claim the groups are read OUT of) and to check whether a direct
+            // grant is permitted at all.
+            var configuration = SsoRuntime.Configuration;
+
+            // Decided BEFORE the credential is forwarded, because it can be:
+            // GroupGate answers NotConfigured for an unset required group from
+            // configuration alone, needing no identity, no token and no network.
+            // A server in that state refuses every SSO sign-in - the ratified
+            // stance, unchanged here - so forwarding the password first would
+            // hand the identity provider a real credential in a loop that cannot
+            // succeed. Who is admitted does not change; only the order does.
+            //
+            // It applies to a handoff secret as well, which the gate below
+            // cannot: a handoff carries no identity. That is not a hole being
+            // opened, it is the same refusal arriving earlier - the browser
+            // callback already refuses to issue a handoff secret at all while no
+            // required group is configured (SsoService: GroupGateOutcome
+            // .NotConfigured), so the only way to hold one here is for the
+            // setting to have been cleared inside the secret's thirty-second
+            // life, and refusing that is the fail-closed direction.
+            if (string.IsNullOrWhiteSpace(configuration?.RequiredGroup))
+            {
+                _logger.Error(
+                    "Rejecting sign-in for {0} without contacting the provider: no required group is configured",
+                    ForLog(resolvedUser.Name));
+                throw new Exception(SsoErrors.NotConfigured);
+            }
+
             var result = await SsoRuntime.Validator
                 .ValidateAsync(resolvedUser.Name, password, CancellationToken.None)
                 .ConfigureAwait(false);
@@ -135,16 +197,10 @@ namespace Emby.Sso.Auth
             // issued the secret; re-checking here is impossible, not redundant.
             if (result.Identity != null)
             {
-                // One read of Configuration for the two values THIS method
-                // decides from - the required group and the claim name it logs -
-                // so a settings save racing this call cannot gate against one
-                // configuration and log against another. It is not a snapshot of
-                // the whole decision: SsoRuntime.Validator re-reads Configuration
-                // independently above, both to build the client (which is what
-                // fixes the claim the groups are read OUT of) and to check
-                // EnableDirectGrant. A null configuration leaves RequiredGroup
-                // null, which the gate reports as NotConfigured - a refusal.
-                var configuration = SsoRuntime.Configuration;
+                // The same snapshot the early refusal above used. A null
+                // configuration would have been refused there; if one somehow
+                // reached here it leaves RequiredGroup null, which the gate
+                // reports as NotConfigured - a refusal either way.
                 var gate = GroupGate.Evaluate(result.Identity, configuration?.RequiredGroup);
 
                 if (gate != GroupGateOutcome.Allowed)
@@ -166,58 +222,34 @@ namespace Emby.Sso.Auth
         /// The only route from an unresolved username to a successful sign-in, and
         /// therefore to an account being created. Every guard below throws; the
         /// success return at the end is reachable only when all of them passed.
-        /// The order is deliberate - the three configuration checks come first, so
-        /// a server that is not provisioning never sends a credential anywhere,
-        /// and the throttle comes fourth, so a server that IS provisioning stops
-        /// forwarding a stranger's guesses before it forwards them rather than
-        /// after.
+        /// The order is deliberate and lives in <see cref="ProvisioningPreconditions"/>
+        /// - the four configuration checks come first, so a server that is not
+        /// provisioning never sends a credential anywhere and never consumes
+        /// throttle budget, and the throttle comes fifth, so a server that IS
+        /// provisioning stops forwarding a stranger's guesses before it forwards
+        /// them rather than after.
         /// </summary>
         private async Task<ProviderAuthenticationResult> ProvisionOrRefuse(string username, string password)
         {
             var configuration = SsoRuntime.Configuration;
 
-            // 1. Auto-create off is the default, and is indistinguishable to the
-            //    caller from the account simply not existing.
-            if (configuration?.EnableAutoCreate != true)
+            // 1-5. The configuration checks and then the brake, in that order,
+            //      decided in Protocol/ where the order itself is under test.
+            //      Nothing has been sent anywhere at this point, and nothing
+            //      here records a failure: by this class's own rule, a refusal
+            //      for something nobody tried must not cost budget.
+            var precondition = ProvisioningPreconditions.Evaluate(
+                Settings(configuration),
+                username,
+                _throttle,
+                DateTimeOffset.UtcNow);
+
+            if (precondition != ProvisioningPreconditionOutcome.MayContactProvider)
             {
-                _logger.Info("Rejecting sign-in: no matching Emby user and auto-create is off");
-                throw new Exception(SsoErrors.UnknownUser);
+                throw new Exception(RefuseByPrecondition(precondition, username));
             }
 
-            // 2. Without a template there is no policy to create the account with,
-            //    and Emby's default grants every library.
-            if (string.IsNullOrWhiteSpace(configuration.TemplateUserName))
-            {
-                _logger.Error("Rejecting sign-in: auto-create is on but no template user is configured");
-                throw new Exception(SsoErrors.NotConfigured);
-            }
-
-            // 3. Only a native sign-in reaches this branch: the browser path
-            //    provisions in the callback handler and hands over a secret for an
-            //    account that exists by then, so it never arrives here unresolved.
-            //    A native sign-in is exactly what EnableDirectGrant governs.
-            if (!configuration.EnableDirectGrant)
-            {
-                _logger.Info("Rejecting sign-in: direct grant is disabled");
-                throw new Exception(SsoErrors.DirectGrantDisabled);
-            }
-
-            // 4. The brake, and it is consulted BEFORE anything is sent: from
-            //    here on this method hands the supplied password to the identity
-            //    provider, and an unknown username has no Emby account for
-            //    Emby's own throttle to count against. The refusal is the same
-            //    sentence an ordinary unknown username gets - see
-            //    ProvisioningThrottle.RefusalReason for why it must stay that
-            //    way - and only the log says a limit was involved.
-            if (_throttle.IsThrottled(username, DateTimeOffset.UtcNow))
-            {
-                _logger.Warn(
-                    "Rejecting sign-in for unresolved '{0}' without contacting the provider: the provisioning throttle is closed",
-                    ForLog(username));
-                throw new Exception(ProvisioningThrottle.RefusalReason);
-            }
-
-            // 5. There is no resolved user, so the supplied username is all there
+            // 6. There is no resolved user, so the supplied username is all there
             //    is to check the password against.
             var result = await SsoRuntime.Validator
                 .ValidateAsync(username, password, CancellationToken.None)
@@ -250,7 +282,7 @@ namespace Emby.Sso.Auth
                 throw new Exception(reason);
             }
 
-            // 6. The identity the provider verified must be the one that was asked
+            // 7. The identity the provider verified must be the one that was asked
             //    for. The validator checks this too; it is repeated here because
             //    this is the branch that creates accounts, and the name checked
             //    here is the name the account gets.
@@ -261,7 +293,10 @@ namespace Emby.Sso.Auth
                 throw new Exception(SsoErrors.UnknownUser);
             }
 
-            // 7. The group gate. A non-holder must never cause an account to exist.
+            // 7 (continued). The group gate. A non-holder must never cause an
+            //    account to exist. The required group was already established to
+            //    be configured, at precondition 4; this is the part of the same
+            //    decision that needs the verified identity.
             var gateOutcome = GroupGate.Evaluate(result.Identity, configuration.RequiredGroup);
 
             if (gateOutcome != GroupGateOutcome.Allowed)
@@ -464,6 +499,87 @@ namespace Emby.Sso.Auth
             {
                 _logger.Error("Rejecting sign-in: the template user's policy could not be serialised");
                 throw new Exception(SsoErrors.NotConfigured);
+            }
+        }
+
+        /// <summary>
+        /// The four settings the provisioning preconditions are decided from,
+        /// lifted out of the plugin's configuration in one place. Null for a
+        /// null configuration, which <see cref="ProvisioningPreconditions"/>
+        /// treats as a server that is not provisioning.
+        /// </summary>
+        private static ProvisioningSettings Settings(Configuration.PluginConfiguration configuration)
+        {
+            if (configuration == null)
+            {
+                return null;
+            }
+
+            return new ProvisioningSettings
+            {
+                EnableAutoCreate = configuration.EnableAutoCreate,
+                TemplateUserName = configuration.TemplateUserName,
+                EnableDirectGrant = configuration.EnableDirectGrant,
+                RequiredGroup = configuration.RequiredGroup,
+            };
+        }
+
+        /// <summary>
+        /// Logs why a precondition refused and returns the sentence to throw.
+        /// Every arm refuses; the caller has already established that the
+        /// outcome is not <see cref="ProvisioningPreconditionOutcome.MayContactProvider"/>.
+        ///
+        /// NONE of these record a failure against the throttle, and none may be
+        /// made to. Four of the five are an operator's omission rather than a
+        /// caller's attempt - nothing was tried, so there is nothing to count -
+        /// and charging them is precisely what turns a misconfigured upgrade
+        /// into a fifteen-minute outage for every user, including the fifteen
+        /// minutes after the operator fixes it. The fifth, Throttled, is the
+        /// brake's own refusal; counting that would let a locked-out caller keep
+        /// their own lockout alive.
+        /// </summary>
+        private string RefuseByPrecondition(ProvisioningPreconditionOutcome outcome, string username)
+        {
+            switch (outcome)
+            {
+                case ProvisioningPreconditionOutcome.AutoCreateDisabled:
+                    _logger.Info("Rejecting sign-in: no matching Emby user and auto-create is off");
+                    return SsoErrors.UnknownUser;
+
+                case ProvisioningPreconditionOutcome.TemplateNotConfigured:
+                    _logger.Error("Rejecting sign-in: auto-create is on but no template user is configured");
+                    return SsoErrors.NotConfigured;
+
+                case ProvisioningPreconditionOutcome.DirectGrantDisabled:
+                    _logger.Info("Rejecting sign-in: direct grant is disabled");
+                    return SsoErrors.DirectGrantDisabled;
+
+                case ProvisioningPreconditionOutcome.RequiredGroupNotConfigured:
+                    _logger.Error(
+                        "Rejecting sign-in for unresolved '{0}' without contacting the provider: "
+                        + "no required group is configured",
+                        ForLog(username));
+                    return SsoErrors.NotConfigured;
+
+                case ProvisioningPreconditionOutcome.Throttled:
+                    // The refusal is the same sentence an ordinary unknown
+                    // username gets - see ProvisioningThrottle.RefusalReason for
+                    // why it must stay that way - and only the log says a limit
+                    // was involved.
+                    _logger.Warn(
+                        "Rejecting sign-in for unresolved '{0}' without contacting the provider: "
+                        + "the provisioning throttle is closed",
+                        ForLog(username));
+                    return ProvisioningThrottle.RefusalReason;
+
+                default:
+                    // Including MayContactProvider, which the caller must never
+                    // route here, and any future member. An outcome this method
+                    // does not recognise refuses.
+                    _logger.Error(
+                        "Rejecting sign-in: unrecognised provisioning precondition outcome {0}",
+                        (int)outcome);
+                    return SsoErrors.UnknownUser;
             }
         }
 
