@@ -102,7 +102,7 @@ namespace Emby.Sso.Auth
 
             if (result.Outcome == SsoCredentialOutcome.Rejected)
             {
-                _logger.Info("Rejected sign-in for {0}: {1}", resolvedUser.Name, result.Reason);
+                _logger.Info("Rejected sign-in for {0}: {1}", ForLog(resolvedUser.Name), result.Reason);
                 throw new Exception(result.Reason);
             }
 
@@ -115,9 +115,14 @@ namespace Emby.Sso.Auth
             // issued the secret; re-checking here is impossible, not redundant.
             if (result.Identity != null)
             {
-                // One read of Configuration for the whole decision, so a settings
-                // save racing this call cannot gate against one configuration and
-                // log against another. A null configuration leaves RequiredGroup
+                // One read of Configuration for the two values THIS method
+                // decides from - the required group and the claim name it logs -
+                // so a settings save racing this call cannot gate against one
+                // configuration and log against another. It is not a snapshot of
+                // the whole decision: SsoRuntime.Validator re-reads Configuration
+                // independently above, both to build the client (which is what
+                // fixes the claim the groups are read OUT of) and to check
+                // EnableDirectGrant. A null configuration leaves RequiredGroup
                 // null, which the gate reports as NotConfigured - a refusal.
                 var configuration = SsoRuntime.Configuration;
                 var gate = GroupGate.Evaluate(result.Identity, configuration?.RequiredGroup);
@@ -128,7 +133,7 @@ namespace Emby.Sso.Auth
                 }
             }
 
-            _logger.Info("Accepted {0} sign-in for {1}", result.Outcome, resolvedUser.Name);
+            _logger.Info("Accepted {0} sign-in for {1}", result.Outcome, ForLog(resolvedUser.Name));
 
             return new ProviderAuthenticationResult
             {
@@ -373,7 +378,7 @@ namespace Emby.Sso.Auth
                 // opposite, that a throw from this provider surfaces to the
                 // client as HTTP 401 "Invalid username or password entered." and
                 // the message reaches only the log
-                // (docs/superpowers/spikes/2026-08-30-emby-api-findings.md §1f).
+                // (docs/superpowers/spikes/2026-08-30-emby-api-findings.md §5).
                 // The reason is narrower and does not depend on Emby's behaviour:
                 // ex.Message is diagnostic text this code did not author, and the
                 // only thing that should ever leave here is a fixed, user-safe
@@ -396,6 +401,12 @@ namespace Emby.Sso.Auth
         /// telling a stranger which one it was leaks membership. Group values are
         /// never rendered - only the configured claim's name, which is the
         /// operator's own setting.
+        ///
+        /// Note that on THIS path nobody sees the sentence - Emby reports a
+        /// generic 401 for any throw out of Authenticate. The constants earn
+        /// their keep on the browser path, where SsoService renders them; they
+        /// are returned here so the two paths cannot drift apart about who gets
+        /// in and what they are told.
         /// </summary>
         private string RefuseByGate(GroupGateOutcome outcome, string identityUsername, string groupsClaim)
         {
@@ -417,6 +428,9 @@ namespace Emby.Sso.Auth
                     // No required group configured is an operator omission, not
                     // something a user did - the same stance the browser callback
                     // takes, so the two paths cannot disagree about who gets in.
+                    // `default` also catches a future GroupGateOutcome member: any
+                    // outcome this method does not recognise refuses, and only the
+                    // caller's explicit `== Allowed` test lets anyone in.
                     _logger.Error("Rejected sign-in for '{0}': no required group is configured", ForLog(identityUsername));
                     return SsoErrors.NotConfigured;
             }

@@ -219,6 +219,12 @@ namespace Emby.Sso.Api
 
             switch (gateOutcome)
             {
+                case GroupGateOutcome.Allowed:
+                    // Falls through to provisioning below. Spelled out rather
+                    // than left to the absence of a case, so that `default` can
+                    // refuse.
+                    break;
+
                 case GroupGateOutcome.NotConfigured:
                     // No required group is set - an operator omission, not
                     // something a user did, so it maps to the same reason as an
@@ -242,6 +248,16 @@ namespace Emby.Sso.Api
                         "SSO: rejected sign-in for '{0}': required group not held",
                         ForLog(identity.Username));
                     return Error(SsoErrors.GroupNotHeld, null);
+
+                default:
+                    // An outcome this switch does not know about. Without this
+                    // case a new GroupGateOutcome member would fall out of the
+                    // switch and be treated exactly like Allowed - a fail-OPEN
+                    // default on an authorisation decision, decided by whoever
+                    // adds the enum member rather than by anyone reading this.
+                    // Only the cases listed above may proceed.
+                    _logger.Error("SSO: rejected sign-in: unrecognised group gate outcome {0}", (int)gateOutcome);
+                    return Error(SsoErrors.NotConfigured, "the group gate returned an outcome this build does not handle");
             }
 
             // The plugin never creates an Emby account on its own initiative. An
