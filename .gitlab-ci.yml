@@ -1,21 +1,123 @@
+# Every push runs the test suite, then a Release build whose output is checked
+# to be the ILRepack-merged plugin. Pushing a tag like v1.4.0 additionally
+# uploads that build to the package registry and creates a GitLab Release
+# pointing at it.
+#
+# The version an operator sees in Emby's dashboard comes from the tag and
+# nowhere else: ci/version.sh turns v1.4.0 into 1.4.0, the build is handed it
+# with -p:Version, and ci/verify-artifact.sh refuses to continue unless that
+# version is genuinely inside the DLL about to be shipped.
+
 stages:
   - test
   - build
+  - publish
+  - release
+
+variables:
+  # Pinned: rebuilding an old tag should use the SDK that tag was tested with.
+  SDK_IMAGE: "mcr.microsoft.com/dotnet/sdk:8.0.424-bookworm-slim"
+  # NuGet's cache has to sit inside the project directory for GitLab to cache it.
+  NUGET_PACKAGES: "$CI_PROJECT_DIR/.nuget/packages"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  PACKAGE_NAME: "emby-sso"
+  MERGED_DLL: "src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll"
 
 default:
-  image: mcr.microsoft.com/dotnet/sdk:8.0
+  image: $SDK_IMAGE
+
+.nuget-cache:
+  cache:
+    key:
+      files:
+        - src/Emby.Sso/Emby.Sso.csproj
+        - tests/Emby.Sso.Tests/Emby.Sso.Tests.csproj
+    paths:
+      - .nuget/packages
+
+# Publishing is a deliberate act, so only a version tag does it.
+.release-tags-only:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
 
 test:
+  extends: .nuget-cache
   stage: test
   script:
     - dotnet test tests/Emby.Sso.Tests --logger "console;verbosity=normal"
 
 build:
+  extends: .nuget-cache
   stage: build
+  # Explicit, not incidental: no artifact exists unless the suite passed.
+  needs:
+    - job: test
   script:
-    - dotnet build -c Release
+    - VERSION="$(ci/version.sh)"
+    - INFORMATIONAL_VERSION="$VERSION+$CI_COMMIT_SHA"
+    - echo "Building $VERSION from $CI_COMMIT_SHA"
+    - dotnet build -c Release -p:Version="$VERSION" -p:SourceRevisionId="$CI_COMMIT_SHA"
+    - ci/verify-artifact.sh "$MERGED_DLL" "$INFORMATIONAL_VERSION"
+    - rm -rf dist && mkdir dist
+    - cp "$MERGED_DLL" dist/Emby.Sso.dll
+    - (cd dist && sha256sum Emby.Sso.dll > Emby.Sso.dll.sha256)
+    - cat dist/Emby.Sso.dll.sha256
+    - echo "VERSION=$VERSION" > build.env
   artifacts:
-    name: "emby-sso-$CI_COMMIT_SHORT_SHA"
+    name: "emby-sso-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
     paths:
-      - src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
+      - dist/
+    reports:
+      # Carries VERSION to the publish and release jobs.
+      dotenv: build.env
     expire_in: 30 days
+
+publish:
+  extends: .release-tags-only
+  stage: publish
+  needs:
+    - job: build
+      artifacts: true
+  script:
+    - PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION"
+    - |
+      for file in Emby.Sso.dll Emby.Sso.dll.sha256; do
+        echo "Uploading $file to $PACKAGE_URL/$file"
+        curl --fail-with-body --silent --show-error --retry 3 \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          --upload-file "dist/$file" \
+          "$PACKAGE_URL/$file"
+        echo
+      done
+    - ci/release-notes.sh "$VERSION" "$CI_COMMIT_SHA" dist/Emby.Sso.dll.sha256 "$PACKAGE_URL" "$CI_COMMIT_TAG_MESSAGE" > release-notes.md
+    - cat release-notes.md
+  artifacts:
+    paths:
+      - release-notes.md
+    expire_in: 30 days
+
+release:
+  extends: .release-tags-only
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:v0.24.0
+  needs:
+    # build for VERSION, publish for the notes the release is described with.
+    - job: build
+      artifacts: true
+    - job: publish
+      artifacts: true
+  script:
+    - echo "Creating the GitLab Release for $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Emby SSO $CI_COMMIT_TAG"
+    description: "./release-notes.md"
+    assets:
+      links:
+        - name: "Emby.Sso.dll"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/Emby.Sso.dll"
+          link_type: package
+        - name: "Emby.Sso.dll.sha256"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/Emby.Sso.dll.sha256"
+          link_type: other

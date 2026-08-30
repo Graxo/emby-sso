@@ -4,3 +4,7 @@ obj/
 *.user
 .dotnet/
 artifacts/
+
+# CI build staging and NuGet package cache
+dist/
+.nuget/
