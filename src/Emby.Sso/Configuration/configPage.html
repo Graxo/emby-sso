@@ -130,13 +130,18 @@
         showUrls(page, config.EmbyPublicBaseUrl);
       }
 
+      function handleError(err) {
+        Dashboard.hideLoadingMsg();
+        Dashboard.processErrorResponse(err);
+      }
+
       document.querySelector('#authentikSsoConfigPage').addEventListener('pageshow', function () {
         var page = this;
         Dashboard.showLoadingMsg();
         ApiClient.getPluginConfiguration(pluginId).then(function (config) {
           load(page, config);
           Dashboard.hideLoadingMsg();
-        });
+        }).catch(handleError);
       });
 
       document.querySelector('#authentikSsoConfigForm').addEventListener('submit', function (event) {
@@ -155,11 +160,11 @@
           config.EnableButtonInjection = page.querySelector('#enableButtonInjection').checked;
           config.AllowInsecureHttp = page.querySelector('#allowInsecureHttp').checked;
 
-          ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+          return ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
             showUrls(page, config.EmbyPublicBaseUrl);
           });
-        });
+        }).catch(handleError);
 
         return false;
       });
