@@ -14,6 +14,21 @@ namespace Emby.Sso.Protocol
         public const string InvalidToken = "The sign-in response could not be verified.";
         public const string SessionExpired = "This sign-in attempt expired. Please try again.";
         public const string UnknownUser = "This account is not set up on this server.";
+
+        /// <summary>
+        /// The token carried no groups claim at all. Deliberately identical text to UnknownUser:
+        /// the log distinguishes this case and the browser must not, because telling a stranger
+        /// "you exist but lack a group" leaks membership.
+        /// </summary>
+        public const string GroupsClaimMissing = "This account is not set up on this server.";
+
+        /// <summary>
+        /// The identity is real and the claim was present, but the group is not among them.
+        /// Deliberately identical text to UnknownUser: the log distinguishes this case and the
+        /// browser must not, because telling a stranger "you exist but lack a group" leaks membership.
+        /// </summary>
+        public const string GroupNotHeld = "This account is not set up on this server.";
+
         public const string DirectGrantDisabled = "Password sign-in is disabled for this account.";
         public const string EmptyCredential = "A username and password are required.";
     }
