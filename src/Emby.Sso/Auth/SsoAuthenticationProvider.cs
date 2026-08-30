@@ -187,6 +187,25 @@ namespace Emby.Sso.Auth
             {
                 var reason = result.Reason ?? SsoErrors.UnknownUser;
                 _logger.Info("Rejected sign-in for {0}: {1}", ForLog(resolvedUser.Name), reason);
+
+                // Says out loud what the refusal above cannot. On this branch a
+                // credential may be either a browser handoff secret or a real
+                // password, and which one it was is only known inside the
+                // validator - so the mutual exclusion of "Allow plain HTTP" and
+                // native password sign-in is enforced there
+                // (SsoRuntime.DirectGrantPermitted), where it surfaces as the
+                // ordinary "password sign-in is disabled" refusal with no clue
+                // as to why. Checked here rather than moved above ValidateAsync
+                // because refusing this branch outright would also refuse the
+                // browser handoff, which is legitimate on an insecure lab
+                // server: the password never passes through this process there.
+                if (configuration.AllowInsecureHttp && configuration.EnableDirectGrant)
+                {
+                    _logger.Error(
+                        "Native password sign-in is refused while 'Allow plain HTTP' is on: it would send this "
+                        + "password in cleartext. Turn one of the two settings off.");
+                }
+
                 throw new Exception(reason);
             }
 
