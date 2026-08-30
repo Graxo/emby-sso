@@ -102,7 +102,9 @@
         <div class="fieldDescription">
           The claim the group list is read from. Authentik must be configured
           to emit it &mdash; on the direct-grant flow too, if native sign-in
-          is enabled.
+          is enabled. If a user's token does not include this claim, their
+          sign-in is rejected by design; the browser shows a generic refusal,
+          but the server log records the specific reason.
         </div>
       </div>
 
