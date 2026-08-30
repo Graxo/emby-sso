@@ -44,7 +44,22 @@
         <div class="fieldDescription">
           The claim matched against the Emby username. Unless automatic
           account creation is enabled below, the Emby account must already
-          exist, and its authentication provider must be set to Authentik SSO.
+          exist, and its authentication provider must be set to Authentik SSO
+          &mdash; this plugin refuses any account that is not already assigned
+          to it, including accounts with no provider assigned at all.
+          <br /><br />
+          <strong>This claim must be immutable and unique in your provider.</strong>
+          It is what names a person here, so a claim a user can edit is a claim
+          a user can use to name somebody else. <code>email</code> is a poor
+          choice for exactly that reason &mdash; many providers let users change
+          their own address and do not enforce uniqueness &mdash; and if you set
+          it anyway, sign-in is refused unless the token asserts
+          <code>email_verified</code>. <code>preferred_username</code> is the
+          default and the safe choice.
+          <br /><br />
+          Each account is additionally bound, on its first successful sign-in,
+          to the provider&#39;s <code>sub</code> for that person; afterwards a
+          different <code>sub</code> presenting the same name is refused.
         </div>
       </div>
 
@@ -121,8 +136,10 @@
         <input is="emby-input" type="text" id="templateUserName" />
         <div class="fieldDescription">
           The existing Emby user whose libraries and permissions new accounts
-          are cloned from. New accounts are never administrators, regardless
-          of the template.
+          are cloned from. New accounts are never administrators and are never
+          disabled, regardless of the template &mdash; so this account can
+          safely be left disabled, and should be, since it is otherwise an
+          ordinary sign-in-able Emby user.
         </div>
       </div>
 

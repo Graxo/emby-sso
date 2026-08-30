@@ -348,6 +348,30 @@ namespace Emby.Sso.Protocol
                     "id_token did not contain the configured username claim '" + _options.UsernameClaim + "'");
             }
 
+            // S1c. The configured claim is what this plugin treats as a
+            // person's NAME, and `email` is a claim many identity providers let
+            // the user set for themselves - OpenID Connect says outright that
+            // it is neither stable nor unique. So an operator who has chosen it
+            // gets it only on tokens that positively assert email_verified;
+            // absent counts as unverified, because silence is not verification.
+            //
+            // Refused here, inside token validation, rather than at either
+            // call site: both the browser callback and the direct grant come
+            // through this method, and a guard placed on one of them is a guard
+            // on neither.
+            var emailVerified = ReadBooleanClaim(token, "email_verified");
+            var claimOutcome = UsernameClaimPolicy.Evaluate(_options.UsernameClaim, emailVerified);
+
+            if (!UsernameClaimPolicy.Permits(claimOutcome))
+            {
+                throw new SsoException(
+                    SsoErrors.InvalidToken,
+                    "the username claim is '" + UsernameClaimPolicy.EmailClaim
+                    + "' but the id_token does not assert a verified address ("
+                    + claimOutcome + "); configure an immutable, provider-enforced claim such as "
+                    + "'preferred_username' instead");
+            }
+
             var groups = ReadClaims(token, _options.GroupsClaim);
             var hasGroupsClaim = ClaimExistsInPayload(token, _options.GroupsClaim);
 
@@ -356,7 +380,8 @@ namespace Emby.Sso.Protocol
                 username.Trim(),
                 ReadClaim(token, "name") ?? username.Trim(),
                 groups,
-                hasGroupsClaim);
+                hasGroupsClaim,
+                emailVerified);
         }
 
         /// <summary>
@@ -420,17 +445,74 @@ namespace Emby.Sso.Protocol
         /// </summary>
         private static bool ClaimExistsInPayload(JsonWebToken token, string name)
         {
+            var payload = ReadPayload(token);
+
+            return payload != null && payload.ContainsKey(name);
+        }
+
+        /// <summary>
+        /// A boolean claim, read from the raw payload rather than the flattened
+        /// claim collection: IdentityModel renders a JSON boolean as a string
+        /// whose exact spelling is not something an authentication decision
+        /// should depend on. Returns null when the claim is absent, and null
+        /// when it is present but is not something this code can read as a
+        /// boolean.
+        ///
+        /// Null is the fail-closed answer for every caller here - "the token
+        /// does not say" - so a strange or hostile value can never be mistaken
+        /// for a true. The string forms are accepted because providers do emit
+        /// <c>"email_verified": "true"</c>; nothing else is.
+        /// </summary>
+        private static bool? ReadBooleanClaim(JsonWebToken token, string name)
+        {
+            var value = ReadPayload(token)?[name];
+
+            if (value == null || value.Type == Newtonsoft.Json.Linq.JTokenType.Null)
+            {
+                return null;
+            }
+
+            if (value.Type == Newtonsoft.Json.Linq.JTokenType.Boolean)
+            {
+                return (bool)value;
+            }
+
+            if (value.Type == Newtonsoft.Json.Linq.JTokenType.String)
+            {
+                var text = ((string)value ?? string.Empty).Trim();
+
+                if (string.Equals(text, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (string.Equals(text, "false", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The token's raw JSON payload, or null if it cannot be read. Shared by
+        /// the two readers that need the payload's real JSON types rather than
+        /// IdentityModel's flattened, stringified claims.
+        /// </summary>
+        private static Newtonsoft.Json.Linq.JObject ReadPayload(JsonWebToken token)
+        {
             try
             {
                 var payloadBytes = Base64UrlEncoder.DecodeBytes(token.EncodedPayload);
                 var payloadJson = System.Text.Encoding.UTF8.GetString(payloadBytes);
-                var payload = Newtonsoft.Json.Linq.JObject.Parse(payloadJson);
-                return payload.ContainsKey(name);
+                return Newtonsoft.Json.Linq.JObject.Parse(payloadJson);
             }
             catch (Newtonsoft.Json.JsonException)
             {
-                // Payload exists but is not valid JSON. This should not happen for a valid token.
-                return false;
+                // Payload exists but is not valid JSON. This should not happen
+                // for a token whose signature has already validated.
+                return null;
             }
         }
 
