@@ -28,9 +28,40 @@ namespace Emby.Sso
             new SsoCredentialValidator(
                 HandoffSecrets,
                 GetClient,
-                () => Configuration?.EnableDirectGrant == true);
+                DirectGrantPermitted);
 
         public static PluginConfiguration Configuration => Plugin.Instance?.Configuration;
+
+        /// <summary>
+        /// Whether a direct grant - a native client's real password, handed to
+        /// this process and re-transmitted to the identity provider - may be
+        /// performed at all.
+        ///
+        /// It is NOT simply EnableDirectGrant. "Allow plain HTTP (testing only)"
+        /// switches off the scheme refusals that stand in front of the browser
+        /// flow, and with both settings on this server would relay every native
+        /// client's password in cleartext and fetch the id_token whose groups
+        /// claim decides authorisation over an unauthenticated channel - the
+        /// exact substitution attack /Sso/Start refuses to start a flow for. The
+        /// browser flow's insecure mode is not the same bargain: there the
+        /// password goes from the user's own browser to the identity provider
+        /// and this server never sees it. So the two settings are mutually
+        /// exclusive, and the direction of the refusal is the safe one - plain
+        /// HTTP turns password sign-in OFF, it never turns a protection off.
+        ///
+        /// A single read of Configuration, so a settings save racing this call
+        /// cannot have one clause read one configuration and the other another.
+        /// Refusing here surfaces as the ordinary "password sign-in is
+        /// disabled" refusal, which is what it is.
+        /// </summary>
+        private static bool DirectGrantPermitted()
+        {
+            var configuration = Configuration;
+
+            return configuration != null
+                && configuration.EnableDirectGrant
+                && !configuration.AllowInsecureHttp;
+        }
 
         /// <summary>The callback URL registered with the identity provider.</summary>
         public static string RedirectUri()

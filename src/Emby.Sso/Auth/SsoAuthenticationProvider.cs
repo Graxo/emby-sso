@@ -28,20 +28,22 @@ namespace Emby.Sso.Auth
     /// <see cref="ProvisionOrRefuse"/>, in this order:
     ///
     /// 1. auto-create must be enabled;
-    /// 2. a template user must be CONFIGURED (that it exists is checked at 8);
+    /// 2. a template user must be CONFIGURED (that it exists is checked at 9);
     /// 3. direct grant must be enabled;
-    /// 4. a required group must be configured;
-    /// 5. the attempt must be within <see cref="ProvisioningThrottle"/>'s budget;
-    /// 6. the identity provider must accept the supplied password;
-    /// 7. the verified identity must name the very username that was asked for,
+    /// 4. plain HTTP must not be allowed, because that plus direct grant would
+    ///    relay the caller's password in cleartext;
+    /// 5. a required group must be configured;
+    /// 6. the attempt must be within <see cref="ProvisioningThrottle"/>'s budget;
+    /// 7. the identity provider must accept the supplied password;
+    /// 8. the verified identity must name the very username that was asked for,
     ///    and must hold the operator's required group;
-    /// 8. the configured template user must EXIST and its policy must clone.
+    /// 9. the configured template user must EXIST and its policy must clone.
     ///
-    /// 1-5 are <see cref="ProvisioningPreconditions"/>, which is where that order
-    /// is asserted by tests rather than only described in prose; 1-4 of them are
+    /// 1-6 are <see cref="ProvisioningPreconditions"/>, which is where that order
+    /// is asserted by tests rather than only described in prose; 1-5 of them are
     /// decided from configuration alone, so a server that is not provisioning
     /// refuses before the throttle is consulted and before anything is sent
-    /// anywhere. 8 is last deliberately: it is a lookup in Emby's user store, and
+    /// anywhere. 9 is last deliberately: it is a lookup in Emby's user store, and
     /// an unauthenticated caller must not be able to drive one. It is still a
     /// guard, because it runs before the success return - if the template cannot
     /// be read, no account is created.
@@ -223,9 +225,9 @@ namespace Emby.Sso.Auth
         /// therefore to an account being created. Every guard below throws; the
         /// success return at the end is reachable only when all of them passed.
         /// The order is deliberate and lives in <see cref="ProvisioningPreconditions"/>
-        /// - the four configuration checks come first, so a server that is not
+        /// - the five configuration checks come first, so a server that is not
         /// provisioning never sends a credential anywhere and never consumes
-        /// throttle budget, and the throttle comes fifth, so a server that IS
+        /// throttle budget, and the throttle comes sixth, so a server that IS
         /// provisioning stops forwarding a stranger's guesses before it forwards
         /// them rather than after.
         /// </summary>
@@ -233,7 +235,7 @@ namespace Emby.Sso.Auth
         {
             var configuration = SsoRuntime.Configuration;
 
-            // 1-5. The configuration checks and then the brake, in that order,
+            // 1-6. The configuration checks and then the brake, in that order,
             //      decided in Protocol/ where the order itself is under test.
             //      Nothing has been sent anywhere at this point, and nothing
             //      here records a failure: by this class's own rule, a refusal
@@ -249,7 +251,7 @@ namespace Emby.Sso.Auth
                 throw new Exception(RefuseByPrecondition(precondition, username));
             }
 
-            // 6. There is no resolved user, so the supplied username is all there
+            // 7. There is no resolved user, so the supplied username is all there
             //    is to check the password against.
             var result = await SsoRuntime.Validator
                 .ValidateAsync(username, password, CancellationToken.None)
@@ -282,7 +284,7 @@ namespace Emby.Sso.Auth
                 throw new Exception(reason);
             }
 
-            // 7. The identity the provider verified must be the one that was asked
+            // 8. The identity the provider verified must be the one that was asked
             //    for. The validator checks this too; it is repeated here because
             //    this is the branch that creates accounts, and the name checked
             //    here is the name the account gets.
@@ -293,9 +295,9 @@ namespace Emby.Sso.Auth
                 throw new Exception(SsoErrors.UnknownUser);
             }
 
-            // 7 (continued). The group gate. A non-holder must never cause an
+            // 8 (continued). The group gate. A non-holder must never cause an
             //    account to exist. The required group was already established to
-            //    be configured, at precondition 4; this is the part of the same
+            //    be configured, at precondition 5; this is the part of the same
             //    decision that needs the verified identity.
             var gateOutcome = GroupGate.Evaluate(result.Identity, configuration.RequiredGroup);
 
@@ -503,7 +505,7 @@ namespace Emby.Sso.Auth
         }
 
         /// <summary>
-        /// The four settings the provisioning preconditions are decided from,
+        /// The five settings the provisioning preconditions are decided from,
         /// lifted out of the plugin's configuration in one place. Null for a
         /// null configuration, which <see cref="ProvisioningPreconditions"/>
         /// treats as a server that is not provisioning.
@@ -520,6 +522,7 @@ namespace Emby.Sso.Auth
                 EnableAutoCreate = configuration.EnableAutoCreate,
                 TemplateUserName = configuration.TemplateUserName,
                 EnableDirectGrant = configuration.EnableDirectGrant,
+                AllowInsecureHttp = configuration.AllowInsecureHttp,
                 RequiredGroup = configuration.RequiredGroup,
             };
         }
@@ -552,6 +555,14 @@ namespace Emby.Sso.Auth
 
                 case ProvisioningPreconditionOutcome.DirectGrantDisabled:
                     _logger.Info("Rejecting sign-in: direct grant is disabled");
+                    return SsoErrors.DirectGrantDisabled;
+
+                case ProvisioningPreconditionOutcome.InsecureHttpWithDirectGrant:
+                    _logger.Error(
+                        "Rejecting sign-in for unresolved '{0}' without contacting the provider: "
+                        + "'Allow plain HTTP' is on together with native password sign-in, which would send this "
+                        + "password in cleartext. Turn one of the two off.",
+                        ForLog(username));
                     return SsoErrors.DirectGrantDisabled;
 
                 case ProvisioningPreconditionOutcome.RequiredGroupNotConfigured:

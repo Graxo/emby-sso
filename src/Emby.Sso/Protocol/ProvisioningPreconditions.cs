@@ -23,16 +23,23 @@ namespace Emby.Sso.Protocol
         DirectGrantDisabled = 2,
 
         /// <summary>
+        /// Plain HTTP is allowed AND native password sign-in is on - the one
+        /// combination that would have this server relay every native client's
+        /// real password in cleartext.
+        /// </summary>
+        InsecureHttpWithDirectGrant = 3,
+
+        /// <summary>
         /// No required group is configured, so the gate this branch ends in
         /// cannot admit anyone. Decided from configuration alone.
         /// </summary>
-        RequiredGroupNotConfigured = 3,
+        RequiredGroupNotConfigured = 4,
 
         /// <summary>The brute-force brake is closed for this username or globally.</summary>
-        Throttled = 4,
+        Throttled = 5,
 
         /// <summary>Every precondition passed; the credential may now be forwarded.</summary>
-        MayContactProvider = 5,
+        MayContactProvider = 6,
     }
 
     /// <summary>
@@ -49,6 +56,8 @@ namespace Emby.Sso.Protocol
         public string TemplateUserName { get; set; }
 
         public bool EnableDirectGrant { get; set; }
+
+        public bool AllowInsecureHttp { get; set; }
 
         public string RequiredGroup { get; set; }
     }
@@ -109,6 +118,19 @@ namespace Emby.Sso.Protocol
             if (!settings.EnableDirectGrant)
             {
                 return ProvisioningPreconditionOutcome.DirectGrantDisabled;
+            }
+
+            // "Allow plain HTTP (testing only)" plus native password sign-in is
+            // refused outright rather than honoured. The browser flow's insecure
+            // mode never hands this server a password - the user types it into
+            // the identity provider themselves - but a direct grant hands every
+            // native client's real password to this process and has it
+            // re-transmitted, and fetches over the same unauthenticated channel
+            // the id_token whose groups claim decides authorisation. There is no
+            // combination of settings that may send a cleartext password.
+            if (settings.AllowInsecureHttp)
+            {
+                return ProvisioningPreconditionOutcome.InsecureHttpWithDirectGrant;
             }
 
             // The fourth configuration check, and the reason this whole chain

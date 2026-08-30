@@ -439,6 +439,60 @@ namespace Emby.Sso.Tests
             Assert.Equal(displayName, identity.DisplayName);
         }
 
+        [Fact]
+        public async Task A_token_endpoint_that_is_not_https_is_refused_before_the_credential_is_sent()
+        {
+            // RequireHttps governs fetching the discovery document and the JWKS.
+            // It says nothing about the address that document then points at, so
+            // an https issuer can advertise an http token endpoint - and this
+            // POST carries an authorization code, or on the native path a user's
+            // real password.
+            _idp.TokenEndpointOverride = "http://idp.test/application/o/emby/token/";
+
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(nonce: login.Nonce));
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None));
+
+            Assert.Equal(SsoErrors.NotConfigured, error.UserSafeReason);
+            Assert.Null(_idp.LastTokenRequestForm);
+        }
+
+        [Fact]
+        public async Task A_direct_grant_to_a_non_https_token_endpoint_never_sends_the_password()
+        {
+            _idp.TokenEndpointOverride = "http://idp.test/application/o/emby/token/";
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken());
+
+            var error = await Assert.ThrowsAsync<SsoException>(
+                () => CreateClient().DirectGrantAsync("alice", "hunter2", CancellationToken.None));
+
+            Assert.Equal(SsoErrors.NotConfigured, error.UserSafeReason);
+            Assert.Null(_idp.LastTokenRequestForm);
+        }
+
+        [Fact]
+        public async Task An_operator_who_allowed_plain_http_still_gets_a_working_token_exchange()
+        {
+            // The refusal is governed by the same flag as the metadata fetch, so
+            // a deliberately insecure lab still works. (Password sign-in is a
+            // separate matter - SsoRuntime refuses a direct grant outright while
+            // plain HTTP is allowed.) Without this test the check above would
+            // pass just as well against an implementation that refuses every
+            // token endpoint.
+            _idp.TokenEndpointOverride = "http://idp.test/application/o/emby/token/";
+
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(nonce: login.Nonce));
+
+            var client = CreateClient(options => options.RequireHttps = false);
+            var identity = await client.ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.Equal("alice", identity.Username);
+            Assert.NotNull(_idp.LastTokenRequestForm);
+        }
+
         /// <summary>Every request fails, as if the provider (or DNS, or the network) were down.</summary>
         private sealed class ThrowingHandler : HttpMessageHandler
         {

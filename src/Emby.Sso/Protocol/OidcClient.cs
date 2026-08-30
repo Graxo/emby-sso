@@ -166,6 +166,28 @@ namespace Emby.Sso.Protocol
         {
             var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
 
+            // The one place a credential leaves this process, and until this
+            // check the only thing that ever asserted a scheme was
+            // HttpDocumentRetriever.RequireHttps - which governs fetching the
+            // discovery document and the JWKS, NOT the address that document
+            // then points at. An https issuer may advertise an http token
+            // endpoint, and this POST carries either an authorization code or,
+            // on the native path, a user's real password. Refuse rather than
+            // send it in cleartext.
+            //
+            // Governed by the same RequireHttps flag as the metadata fetch, so
+            // an operator who has deliberately allowed plain HTTP still gets a
+            // lab that works - but see SsoRuntime.DirectGrantPermitted: allowing
+            // plain HTTP switches password sign-in off entirely, so the form
+            // this branch can still carry over http is an authorization code,
+            // never a password.
+            if (_options.RequireHttps && !IsHttps(configuration.TokenEndpoint))
+            {
+                throw new SsoException(
+                    SsoErrors.NotConfigured,
+                    "the provider's advertised token endpoint is not HTTPS");
+            }
+
             using (var request = new HttpRequestMessage(HttpMethod.Post, configuration.TokenEndpoint))
             {
                 if (string.IsNullOrEmpty(_options.ClientSecret))
@@ -242,6 +264,16 @@ namespace Emby.Sso.Protocol
                     return idToken;
                 }
             }
+        }
+
+        /// <summary>
+        /// True only for an absolute https URL. A missing or unparseable address
+        /// is not HTTPS, so it is refused rather than attempted.
+        /// </summary>
+        private static bool IsHttps(string url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                && string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string FormUrlEncode(string value)

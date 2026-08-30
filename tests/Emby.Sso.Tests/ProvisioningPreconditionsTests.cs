@@ -24,6 +24,7 @@ namespace Emby.Sso.Tests
                 EnableAutoCreate = true,
                 TemplateUserName = "sso-template",
                 EnableDirectGrant = true,
+                AllowInsecureHttp = false,
                 RequiredGroup = "emby-users",
             };
         }
@@ -147,11 +148,15 @@ namespace Emby.Sso.Tests
             var directGrantOff = Ready();
             directGrantOff.EnableDirectGrant = false;
 
+            var insecure = Ready();
+            insecure.AllowInsecureHttp = true;
+
             for (var i = 0; i < ProvisioningThrottle.MaxFailuresGlobally + 1; i++)
             {
                 Evaluate(autoCreateOff, throttle, "a-" + i);
                 Evaluate(noTemplate, throttle, "b-" + i);
                 Evaluate(directGrantOff, throttle, "c-" + i);
+                Evaluate(insecure, throttle, "d-" + i);
                 Evaluate(null, throttle, "e-" + i);
             }
 
@@ -171,6 +176,7 @@ namespace Emby.Sso.Tests
                 EnableAutoCreate = false,
                 TemplateUserName = null,
                 EnableDirectGrant = false,
+                AllowInsecureHttp = true,
                 RequiredGroup = null,
             };
 
@@ -194,6 +200,32 @@ namespace Emby.Sso.Tests
             var settings = Ready();
             settings.EnableDirectGrant = false;
             settings.RequiredGroup = null;
+
+            Assert.Equal(ProvisioningPreconditionOutcome.DirectGrantDisabled, Evaluate(settings));
+        }
+
+        [Fact]
+        public void Plain_http_plus_direct_grant_is_refused_without_contacting_anything()
+        {
+            // The combination that would have this server relay a native
+            // client's real password in cleartext. It is refused as a
+            // precondition - above the throttle, above the credential forward -
+            // rather than being allowed to reach the identity provider at all.
+            var settings = Ready();
+            settings.AllowInsecureHttp = true;
+
+            Assert.Equal(ProvisioningPreconditionOutcome.InsecureHttpWithDirectGrant, Evaluate(settings));
+        }
+
+        [Fact]
+        public void Plain_http_alone_does_not_refuse_when_direct_grant_is_off()
+        {
+            // The refusal is about the pair. With direct grant off, the branch
+            // refuses for that reason instead - and an operator reading the log
+            // should be told the setting they actually have to change.
+            var settings = Ready();
+            settings.AllowInsecureHttp = true;
+            settings.EnableDirectGrant = false;
 
             Assert.Equal(ProvisioningPreconditionOutcome.DirectGrantDisabled, Evaluate(settings));
         }
