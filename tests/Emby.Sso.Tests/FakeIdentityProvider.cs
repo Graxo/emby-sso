@@ -45,7 +45,8 @@ namespace Emby.Sso.Tests
             string audience = ClientId,
             DateTime? expires = null,
             DateTime? notBefore = null,
-            IDictionary<string, object> extraClaims = null)
+            IDictionary<string, object> extraClaims = null,
+            string[] groups = null)
         {
             var claims = new Dictionary<string, object> { ["sub"] = subject };
 
@@ -72,6 +73,11 @@ namespace Emby.Sso.Tests
                 {
                     claims[pair.Key] = pair.Value;
                 }
+            }
+
+            if (groups != null)
+            {
+                claims["groups"] = groups;
             }
 
             var key = new RsaSecurityKey(_rsa) { KeyId = KeyId };

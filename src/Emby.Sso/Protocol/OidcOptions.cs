@@ -14,6 +14,8 @@ namespace Emby.Sso.Protocol
 
         public string UsernameClaim { get; set; } = "preferred_username";
 
+        public string GroupsClaim { get; set; } = "groups";
+
         /// <summary>
         /// Whether the discovery document and JWKS fetches must use HTTPS.
         /// Defaults to true (secure by default); the Emby-facing caller sets

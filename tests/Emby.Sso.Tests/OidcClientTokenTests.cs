@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -31,7 +32,14 @@ namespace Emby.Sso.Tests
 
         private OidcClient CreateClient()
         {
-            return new OidcClient(new HttpClient(_idp), CreateOptions());
+            return CreateClient(options => { });
+        }
+
+        private OidcClient CreateClient(Action<OidcOptions> configure)
+        {
+            var options = CreateOptions();
+            configure(options);
+            return new OidcClient(new HttpClient(_idp), options);
         }
 
         [Fact]
@@ -347,6 +355,57 @@ namespace Emby.Sso.Tests
             // RFC 6749 §2.3.1: form-urlencoded, not raw concatenation. ':' -> %3A,
             // '@' -> %40, ' ' -> '+', '+' -> %2B, '%' -> %25.
             Assert.Equal(FakeIdentityProvider.ClientId + ":p%40ss%3Aw+rd%2B%25", decoded);
+        }
+
+        [Fact]
+        public async Task Groups_are_read_from_the_token()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(
+                _idp.CreateIdToken(nonce: login.Nonce, groups: new[] { "emby-users", "staff" }));
+
+            var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.True(identity.HasGroupsClaim);
+            Assert.Equal(new[] { "emby-users", "staff" }, identity.Groups);
+        }
+
+        [Fact]
+        public async Task An_absent_groups_claim_is_distinguishable_from_an_empty_one()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(nonce: login.Nonce));
+
+            var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.False(identity.HasGroupsClaim);
+            Assert.Empty(identity.Groups);
+        }
+
+        [Fact]
+        public async Task An_empty_groups_claim_is_present_but_empty()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(
+                _idp.CreateIdToken(nonce: login.Nonce, groups: new string[0]));
+
+            var identity = await CreateClient().ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.Empty(identity.Groups);
+        }
+
+        [Fact]
+        public async Task The_groups_claim_name_is_configurable()
+        {
+            var login = _logins.Create();
+            _idp.TokenResponseJson = _idp.CreateTokenResponse(_idp.CreateIdToken(
+                nonce: login.Nonce,
+                extraClaims: new Dictionary<string, object> { ["roles"] = new[] { "emby-users" } }));
+
+            var client = CreateClient(options => options.GroupsClaim = "roles");
+            var identity = await client.ExchangeCodeAsync("the-code", login, CancellationToken.None);
+
+            Assert.Equal(new[] { "emby-users" }, identity.Groups);
         }
 
         /// <summary>Every request fails, as if the provider (or DNS, or the network) were down.</summary>

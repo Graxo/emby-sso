@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -298,7 +299,14 @@ namespace Emby.Sso.Protocol
                     "id_token did not contain the configured username claim '" + _options.UsernameClaim + "'");
             }
 
-            return new OidcIdentity(ReadClaim(token, "sub"), username.Trim(), ReadClaim(token, "name") ?? username.Trim());
+            var groups = ReadClaims(token, _options.GroupsClaim);
+
+            return new OidcIdentity(
+                ReadClaim(token, "sub"),
+                username.Trim(),
+                ReadClaim(token, "name") ?? username.Trim(),
+                groups,
+                token.Claims.Any(c => string.Equals(c.Type, _options.GroupsClaim, StringComparison.Ordinal)));
         }
 
         /// <summary>
@@ -336,6 +344,21 @@ namespace Emby.Sso.Protocol
         private static string ReadClaim(JsonWebToken token, string name)
         {
             return token.TryGetClaim(name, out var claim) ? claim.Value : null;
+        }
+
+        private static IReadOnlyList<string> ReadClaims(JsonWebToken token, string name)
+        {
+            var values = new List<string>();
+
+            foreach (var claim in token.Claims)
+            {
+                if (string.Equals(claim.Type, name, StringComparison.Ordinal))
+                {
+                    values.Add(claim.Value);
+                }
+            }
+
+            return values;
         }
 
         private static string ReadStringField(string json, string field)
