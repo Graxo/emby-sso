@@ -7,6 +7,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{3017FF75-755
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Emby.Sso", "src\Emby.Sso\Emby.Sso.csproj", "{210FB9D3-287B-426E-9208-67DD6A17483C}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{91186B43-093C-4D4E-9B2E-93835035BBB9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Emby.Sso.Tests", "tests\Emby.Sso.Tests\Emby.Sso.Tests.csproj", "{3168027C-9EFE-45CE-9A0F-48128DCB3C30}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +24,13 @@ Global
 		{210FB9D3-287B-426E-9208-67DD6A17483C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{210FB9D3-287B-426E-9208-67DD6A17483C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{210FB9D3-287B-426E-9208-67DD6A17483C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3168027C-9EFE-45CE-9A0F-48128DCB3C30}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3168027C-9EFE-45CE-9A0F-48128DCB3C30}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3168027C-9EFE-45CE-9A0F-48128DCB3C30}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3168027C-9EFE-45CE-9A0F-48128DCB3C30}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{210FB9D3-287B-426E-9208-67DD6A17483C} = {3017FF75-755A-4CBB-A40F-334C84A1D6BB}
+		{3168027C-9EFE-45CE-9A0F-48128DCB3C30} = {91186B43-093C-4D4E-9B2E-93835035BBB9}
 	EndGlobalSection
 EndGlobal
