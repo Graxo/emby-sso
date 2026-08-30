@@ -1,0 +1,168 @@
+<div id="authentikSsoConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+  <div data-role="content">
+    <div class="content-primary">
+      <form id="authentikSsoConfigForm">
+
+        <div class="inputContainer">
+          <label for="issuerUrl">Issuer URL</label>
+          <input is="emby-input" type="url" id="issuerUrl" required />
+          <div class="fieldDescription">
+            The OpenID Connect issuer, for example
+            https://auth.example.com/application/o/emby/ . Every other endpoint
+            is read from its discovery document.
+          </div>
+        </div>
+
+        <div class="inputContainer">
+          <label for="clientId">Client ID</label>
+          <input is="emby-input" type="text" id="clientId" required />
+        </div>
+
+        <div class="inputContainer">
+          <label for="clientSecret">Client secret</label>
+          <input is="emby-input" type="password" id="clientSecret" />
+          <div class="fieldDescription">Leave empty for a public client.</div>
+        </div>
+
+        <div class="inputContainer">
+          <label for="scopes">Scopes</label>
+          <input is="emby-input" type="text" id="scopes" />
+        </div>
+
+        <div class="inputContainer">
+          <label for="embyPublicBaseUrl">Emby public base URL</label>
+          <input is="emby-input" type="url" id="embyPublicBaseUrl" required />
+          <div class="fieldDescription">
+            The address users reach this server on, for example
+            https://emby.example.com . Used to build the redirect URI.
+          </div>
+        </div>
+
+        <div class="inputContainer">
+          <label for="usernameClaim">Username claim</label>
+          <input is="emby-input" type="text" id="usernameClaim" />
+          <div class="fieldDescription">
+            The claim matched against the Emby username. Users are never created
+            automatically: the Emby account must already exist, and its
+            authentication provider must be set to Authentik SSO.
+          </div>
+        </div>
+
+        <div class="checkboxContainer">
+          <label>
+            <input is="emby-checkbox" type="checkbox" id="enableDirectGrant" />
+            <span>Allow native apps to sign in with a password</span>
+          </label>
+          <div class="fieldDescription">
+            Lets phone and TV apps sign in by sending the password to the
+            provider directly. This path cannot perform multi-factor
+            authentication, and needs a direct-grant authentication flow bound to
+            the provider in Authentik.
+          </div>
+        </div>
+
+        <div class="checkboxContainer">
+          <label>
+            <input is="emby-checkbox" type="checkbox" id="enableButtonInjection" />
+            <span>Reserve a sign-in button on the login page (not yet supported by Emby's web client)</span>
+          </label>
+          <div class="fieldDescription">
+            Emby's web login page cannot render a custom sign-in button: the
+            login disclaimer is displayed as plain text and the login page's
+            styling is served as an external stylesheet, so neither can inject
+            working script. Until a future update finds another way to surface
+            a button, give users the bookmarkable sign-in URL shown below
+            instead &mdash; you can also paste that URL as plain text into the
+            login disclaimer field in Emby's server settings so it is visible
+            on the login page.
+          </div>
+        </div>
+
+        <div class="checkboxContainer">
+          <label>
+            <input is="emby-checkbox" type="checkbox" id="allowInsecureHttp" />
+            <span>Allow plain HTTP (testing only)</span>
+          </label>
+        </div>
+
+        <br />
+
+        <div class="inputContainer">
+          <label>Redirect URI to configure in Authentik</label>
+          <p id="redirectUri" style="user-select: all; font-family: monospace;"></p>
+        </div>
+
+        <div class="inputContainer">
+          <label>Sign-in URL for users to bookmark</label>
+          <p id="startUrl" style="user-select: all; font-family: monospace;"></p>
+        </div>
+
+        <div>
+          <button is="emby-button" type="submit" class="raised button-submit block">
+            <span>Save</span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <script type="text/javascript">
+    (function () {
+      var pluginId = 'ad89f430-b0d0-4e9a-996d-c088f6961158';
+
+      function showUrls(page, baseUrl) {
+        var base = (baseUrl || '').replace(/[\/]+$/, '');
+        page.querySelector('#redirectUri').textContent = base + '/emby/Sso/Callback';
+        page.querySelector('#startUrl').textContent = base + '/emby/Sso/Start';
+      }
+
+      function load(page, config) {
+        page.querySelector('#issuerUrl').value = config.IssuerUrl || '';
+        page.querySelector('#clientId').value = config.ClientId || '';
+        page.querySelector('#clientSecret').value = config.ClientSecret || '';
+        page.querySelector('#scopes').value = config.Scopes || 'openid profile email';
+        page.querySelector('#embyPublicBaseUrl').value = config.EmbyPublicBaseUrl || '';
+        page.querySelector('#usernameClaim').value = config.UsernameClaim || 'preferred_username';
+        page.querySelector('#enableDirectGrant').checked = config.EnableDirectGrant === true;
+        page.querySelector('#enableButtonInjection').checked = config.EnableButtonInjection === true;
+        page.querySelector('#allowInsecureHttp').checked = config.AllowInsecureHttp === true;
+        showUrls(page, config.EmbyPublicBaseUrl);
+      }
+
+      document.querySelector('#authentikSsoConfigPage').addEventListener('pageshow', function () {
+        var page = this;
+        Dashboard.showLoadingMsg();
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+          load(page, config);
+          Dashboard.hideLoadingMsg();
+        });
+      });
+
+      document.querySelector('#authentikSsoConfigForm').addEventListener('submit', function (event) {
+        event.preventDefault();
+        var page = document.querySelector('#authentikSsoConfigPage');
+        Dashboard.showLoadingMsg();
+
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+          config.IssuerUrl = page.querySelector('#issuerUrl').value.trim();
+          config.ClientId = page.querySelector('#clientId').value.trim();
+          config.ClientSecret = page.querySelector('#clientSecret').value;
+          config.Scopes = page.querySelector('#scopes').value.trim();
+          config.EmbyPublicBaseUrl = page.querySelector('#embyPublicBaseUrl').value.trim();
+          config.UsernameClaim = page.querySelector('#usernameClaim').value.trim();
+          config.EnableDirectGrant = page.querySelector('#enableDirectGrant').checked;
+          config.EnableButtonInjection = page.querySelector('#enableButtonInjection').checked;
+          config.AllowInsecureHttp = page.querySelector('#allowInsecureHttp').checked;
+
+          ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            showUrls(page, config.EmbyPublicBaseUrl);
+          });
+        });
+
+        return false;
+      });
+    })();
+  </script>
+</div>

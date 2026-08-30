@@ -1,12 +1,14 @@
 using System;
+using System.Collections.Generic;
 using Emby.Sso.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
 namespace Emby.Sso
 {
-    public class Plugin : BasePlugin<PluginConfiguration>
+    public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         public static Plugin Instance { get; private set; }
 
@@ -22,5 +24,17 @@ namespace Emby.Sso
 
         public override string Description =>
             "Sign in to Emby with an OpenID Connect provider such as Authentik.";
+
+        public IEnumerable<PluginPageInfo> GetPages()
+        {
+            return new[]
+            {
+                new PluginPageInfo
+                {
+                    Name = "AuthentikSso",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+                },
+            };
+        }
     }
 }
