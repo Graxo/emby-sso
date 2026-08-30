@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Emby.Sso.Auth;
 using Emby.Sso.Protocol;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
@@ -26,6 +27,7 @@ namespace Emby.Sso.Api
         private readonly ILogger _logger;
         private readonly IUserManager _userManager;
         private readonly IHttpResultFactory _resultFactory;
+        private readonly UserProvisioner _provisioner;
 
         private const string BindingCookieName = "emby_sso_binding";
 
@@ -46,6 +48,12 @@ namespace Emby.Sso.Api
             _logger = logManager.GetLogger("AuthentikSso");
             _userManager = userManager;
             _resultFactory = resultFactory;
+
+            // Built here, from the constructor arguments Emby's DI already
+            // supplies, rather than taken as an extra constructor parameter -
+            // adding one would change the signature Emby reflects over to
+            // construct this service.
+            _provisioner = new UserProvisioner(userManager, _logger);
         }
 
         public IRequest Request { get; set; }
@@ -193,15 +201,95 @@ namespace Emby.Sso.Api
                 return Error(ex.UserSafeReason, "code exchange failed", ex);
             }
 
-            // The plugin never creates an Emby account. An identity the provider
-            // vouches for that has no Emby user ends the flow here - before any
-            // handoff secret exists.
+            // GetClient() above already returning non-null means Configuration was
+            // non-null and IsConfigured a moment ago; re-read and re-check rather
+            // than trust that, since a settings save can race this call and clear
+            // it in between - see SsoRuntime.GetClient()'s own note on the same race.
+            var configuration = SsoRuntime.Configuration;
+
+            if (configuration == null)
+            {
+                return Error(SsoErrors.NotConfigured, "callback arrived while the plugin was not configured");
+            }
+
+            // Evaluated before any user lookup, and unconditionally: a non-holder
+            // must never cause an account to be created, and must not be able to
+            // learn whether an Emby account already exists for their username.
+            var gateOutcome = GroupGate.Evaluate(identity, configuration.RequiredGroup);
+
+            switch (gateOutcome)
+            {
+                case GroupGateOutcome.NotConfigured:
+                    // No required group is set - an operator omission, not
+                    // something a user did, so it maps to the same reason as an
+                    // unconfigured plugin.
+                    return Error(SsoErrors.NotConfigured, "callback arrived while no required group was configured");
+
+                case GroupGateOutcome.GroupsClaimMissing:
+                    // Deliberately distinct in the log, identical to UnknownUser
+                    // in the browser: this is the provider not emitting the
+                    // configured claim at all, an operator misconfiguration, not
+                    // a user problem - but saying so to the browser would tell a
+                    // stranger that a group check exists.
+                    _logger.Info(
+                        "SSO: rejected sign-in for '{0}': the token carried no '{1}' claim",
+                        ForLog(identity.Username),
+                        ForLog(configuration.GroupsClaim));
+                    return Error(SsoErrors.GroupsClaimMissing, null);
+
+                case GroupGateOutcome.GroupNotHeld:
+                    _logger.Info(
+                        "SSO: rejected sign-in for '{0}': required group not held",
+                        ForLog(identity.Username));
+                    return Error(SsoErrors.GroupNotHeld, null);
+            }
+
+            // The plugin never creates an Emby account on its own initiative. An
+            // identity that passed the group gate still needs a resolvable Emby
+            // user before any handoff secret exists, unless auto-create is on -
+            // in which case one is provisioned below, after the gate, so a
+            // non-holder can never trigger it.
             var user = _userManager.GetUserByName(identity.Username);
 
             if (user == null || !UsernameMatcher.Matches(identity.Username, user.Name))
             {
-                _logger.Info("SSO: rejected sign-in, no Emby user named '{0}'", ForLog(identity.Username));
-                return Error(SsoErrors.UnknownUser, null);
+                if (!configuration.EnableAutoCreate)
+                {
+                    _logger.Info("SSO: rejected sign-in, no Emby user named '{0}'", ForLog(identity.Username));
+                    return Error(SsoErrors.UnknownUser, null);
+                }
+
+                try
+                {
+                    user = await _provisioner.ProvisionAsync(identity.Username, configuration.TemplateUserName)
+                        .ConfigureAwait(false);
+                }
+                catch (SsoException ex)
+                {
+                    // Renders an error page like any other failure - nothing
+                    // provisioning-specific escapes to Emby's own error handling.
+                    return Error(ex.UserSafeReason, "auto-provisioning failed", ex);
+                }
+                catch (ArgumentException ex)
+                {
+                    // IUserManager.CreateUser throws a plain ArgumentException on
+                    // a duplicate username, which UserProvisioner deliberately
+                    // does not translate. The realistic trigger is two concurrent
+                    // first sign-ins for the same new user: both saw no account,
+                    // both provisioned, one lost this race. That is not an
+                    // operator or provider failure - by the time this is caught,
+                    // the account exists - so it is logged at Info, not Error,
+                    // with the framework's own message for detail. The browser
+                    // gets the same generic sentence as any other unexpected
+                    // failure, whose page already offers "Try again"; a retry
+                    // finds the account the other request created and signs in
+                    // normally.
+                    _logger.Info(
+                        "SSO: provisioning raced with a concurrent sign-in for '{0}': {1}",
+                        ForLog(identity.Username),
+                        ForLog(ex.Message));
+                    return Error(null, null);
+                }
             }
 
             // Keyed on Emby's own spelling of the name, which is what Emby will
