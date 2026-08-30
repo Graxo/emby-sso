@@ -52,35 +52,68 @@ namespace Emby.Sso.Auth
                     "the configured template user does not exist: '" + templateUserName + "'");
             }
 
-            // UserData is deliberately excluded: watch history belongs to the
-            // template's owner, not to every account cloned from it.
-            var created = await _userManager.CreateUser(
-                username,
-                template,
-                new[] { UserCopyOptions.UserPolicy, UserCopyOptions.UserConfiguration })
-                .ConfigureAwait(false);
+            // The policy is built BEFORE the account exists and handed to
+            // CreateUser(name, policy) as a constructor argument, so the account
+            // is never - not for one write, not for one instant - an
+            // administrator, and never carries the template's
+            // AuthenticationProviderId.
+            //
+            // The alternative overload, CreateUser(name, template, [UserPolicy,
+            // UserConfiguration]), copies the template's policy verbatim and
+            // would need a second write to demote. That is exactly the
+            // return-then-patch shape the spike measured on the native path and
+            // rejected (§4, §5, §6): between the two writes the account exists
+            // with the template's rights and with a provider id that is not this
+            // plugin's. UserPolicy.IsAdministrator is not a field to fix
+            // afterwards.
+            //
+            // TemplateClone is shared with the native path deliberately: the
+            // demotion must not be able to drift between the two provisioners.
+            var policy = TemplateClone.ClonePolicy(_userManager.GetUserPolicy(template));
 
-            var policy = created.Policy;
+            var created = await _userManager.CreateUser(username, policy).ConfigureAwait(false);
 
-            // Enforced here rather than trusted to the operator's choice of
-            // template: a template that happens to be an administrator would
-            // otherwise make every group holder an Emby administrator.
-            policy.IsAdministrator = false;
-
-            // Stamp this provider at creation so the account is never offered
-            // to any other provider on a later sign-in.
-            policy.AuthenticationProviderId = typeof(SsoAuthenticationProvider).FullName;
-
-            // created.InternalId is the Int64 identifier UpdateUserPolicy(long, UserPolicy)
-            // expects - confirmed by reflecting over MediaBrowser.Controller.dll 4.9.1.90:
-            // User inherits BaseItem.InternalId (Int64, get/set), and IUserManager's only
-            // UpdateUserPolicy overload takes (System.Int64 userId, UserPolicy userPolicy).
-            // User.Id is a Guid and would not compile against that overload.
-            _userManager.UpdateUserPolicy(created.InternalId, policy);
+            // Configuration is display preference and carries no access, so
+            // unlike the policy it is safe to apply after creation - and it must
+            // not be able to fail the sign-in. UserData is still deliberately not
+            // copied: watch history belongs to the template's owner, not to every
+            // account cloned from it.
+            CopyConfigurationBestEffort(template, created);
 
             _logger.Info("Provisioned Emby account {0} from template {1}", created.Name, templateUserName);
 
             return created;
+        }
+
+        private void CopyConfigurationBestEffort(User template, User created)
+        {
+            try
+            {
+                var configuration = TemplateClone.CloneConfiguration(_userManager.GetUserConfiguration(template));
+
+                if (configuration == null)
+                {
+                    return;
+                }
+
+                // created.InternalId is the Int64 identifier the
+                // UpdateConfiguration(long, UserConfiguration) overload expects -
+                // User inherits BaseItem.InternalId (Int64), confirmed by
+                // reflecting over MediaBrowser.Controller.dll 4.9.1.90. User.Id is
+                // a Guid and would not compile against it.
+                _userManager.UpdateConfiguration(created.InternalId, configuration);
+            }
+            catch (Exception ex)
+            {
+                // Broad on purpose. The account exists and its access is already
+                // correct; losing the template's display preferences is a cosmetic
+                // regression and must never turn a successful sign-in into a
+                // failed one.
+                _logger.ErrorException(
+                    "Provisioned account {0} but could not copy the template user's configuration",
+                    ex,
+                    LogSafeText.Flatten(created.Name));
+            }
         }
     }
 }
