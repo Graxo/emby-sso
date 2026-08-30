@@ -36,6 +36,31 @@ namespace Emby.Sso.Tests
 
         public int DiscoveryRequestCount { get; private set; }
 
+        /// <summary>
+        /// What the discovery document advertises as
+        /// <c>id_token_signing_alg_values_supported</c>. Defaults to the single
+        /// algorithm a real Authentik advertises; tests that exercise the
+        /// algorithm pin vary it.
+        /// </summary>
+        public string[] AdvertisedSigningAlgorithms { get; set; } = { "RS256" };
+
+        /// <summary>
+        /// The optional <c>alg</c> member published for the signing key in the
+        /// JWKS, or null to omit it. RFC 7517 §4.4 makes it optional, and a JWKS
+        /// that omits it is what leaves the id_token's own <c>alg</c> header
+        /// unconstrained by key resolution - i.e. constrained only by
+        /// <c>ValidAlgorithms</c>, which is what the pinning tests need to
+        /// isolate.
+        /// </summary>
+        public string JwksAlgorithm { get; set; } = "RS256";
+
+        /// <summary>
+        /// The <c>token_endpoint</c> the discovery document advertises, or null
+        /// for the issuer's own HTTPS endpoint. A provider can advertise
+        /// anything here, including a plain-HTTP address.
+        /// </summary>
+        public string TokenEndpointOverride { get; set; }
+
         public string CreateIdToken(
             string subject = "sub-1",
             string username = "alice",
@@ -46,7 +71,9 @@ namespace Emby.Sso.Tests
             DateTime? expires = null,
             DateTime? notBefore = null,
             IDictionary<string, object> extraClaims = null,
-            string[] groups = null)
+            string[] groups = null,
+            string signingAlgorithm = SecurityAlgorithms.RsaSha256,
+            bool signed = true)
         {
             var claims = new Dictionary<string, object> { ["sub"] = subject };
 
@@ -88,7 +115,11 @@ namespace Emby.Sso.Tests
                 Claims = claims,
                 NotBefore = notBefore ?? DateTime.UtcNow.AddMinutes(-1),
                 Expires = expires ?? DateTime.UtcNow.AddMinutes(5),
-                SigningCredentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256),
+
+                // No credentials at all produces an "alg": "none" token with an
+                // empty signature - the shape RequireSignedTokens exists to
+                // refuse.
+                SigningCredentials = signed ? new SigningCredentials(key, signingAlgorithm) : null,
             };
 
             return new JsonWebTokenHandler().CreateToken(descriptor);
@@ -155,18 +186,25 @@ namespace Emby.Sso.Tests
             return form;
         }
 
-        private static string DiscoveryDocument()
+        private string DiscoveryDocument()
         {
+            var advertised = new JArray();
+
+            foreach (var algorithm in AdvertisedSigningAlgorithms ?? new string[0])
+            {
+                advertised.Add(algorithm);
+            }
+
             return new JObject
             {
                 ["issuer"] = Issuer,
                 ["authorization_endpoint"] = Issuer + "authorize/",
-                ["token_endpoint"] = Issuer + "token/",
+                ["token_endpoint"] = TokenEndpointOverride ?? (Issuer + "token/"),
                 ["jwks_uri"] = Issuer + "jwks/",
                 ["userinfo_endpoint"] = Issuer + "userinfo/",
                 ["response_types_supported"] = new JArray("code"),
                 ["subject_types_supported"] = new JArray("public"),
-                ["id_token_signing_alg_values_supported"] = new JArray("RS256"),
+                ["id_token_signing_alg_values_supported"] = advertised,
             }.ToString();
         }
 
@@ -174,18 +212,21 @@ namespace Emby.Sso.Tests
         {
             var parameters = _rsa.ExportParameters(false);
 
-            return new JObject
+            var key = new JObject
             {
-                ["keys"] = new JArray(new JObject
-                {
-                    ["kty"] = "RSA",
-                    ["use"] = "sig",
-                    ["alg"] = "RS256",
-                    ["kid"] = KeyId,
-                    ["n"] = Base64UrlEncoder.Encode(parameters.Modulus),
-                    ["e"] = Base64UrlEncoder.Encode(parameters.Exponent),
-                }),
-            }.ToString();
+                ["kty"] = "RSA",
+                ["use"] = "sig",
+                ["kid"] = KeyId,
+                ["n"] = Base64UrlEncoder.Encode(parameters.Modulus),
+                ["e"] = Base64UrlEncoder.Encode(parameters.Exponent),
+            };
+
+            if (JwksAlgorithm != null)
+            {
+                key["alg"] = JwksAlgorithm;
+            }
+
+            return new JObject { ["keys"] = new JArray(key) }.ToString();
         }
 
         private static HttpResponseMessage Json(HttpStatusCode status, string body)
