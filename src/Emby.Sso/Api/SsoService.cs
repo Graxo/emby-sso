@@ -288,6 +288,24 @@ namespace Emby.Sso.Api
             // user before any handoff secret exists, unless auto-create is on -
             // in which case one is provisioned below, after the gate, so a
             // non-holder can never trigger it.
+            // Checked BEFORE the account is looked up or created, and not
+            // recorded yet. A subject already bound to a different account must
+            // be refused before provisioning leaves a second, orphaned account
+            // behind for it - one identity provider principal must not be able
+            // to farm Emby accounts by editing its own username claim.
+            //
+            // The name checked here and the name bound below are the same key:
+            // Emby's spelling and the claim's spelling are UsernameMatcher-equal
+            // by the test just below, and the store keys accounts with that same
+            // comparison.
+            var precheck = SsoRuntime.SubjectBindings.Check(identity.Subject, identity.Username);
+
+            if (!SubjectBindingStore.Permits(precheck))
+            {
+                LogSubjectBindingRefusal(precheck, identity.Username);
+                return Error(SsoErrors.UnknownUser, null);
+            }
+
             var user = _userManager.GetUserByName(identity.Username);
 
             if (user != null && UsernameMatcher.Matches(identity.Username, user.Name))
@@ -357,12 +375,82 @@ namespace Emby.Sso.Api
                 }
             }
 
+            // Record the binding - trust on first use - before any secret is
+            // issued. Re-evaluated from scratch inside the store, so the
+            // pre-check above is not carried forward: a concurrent first sign-in
+            // may have claimed this account in between.
+            //
+            // This must stay above the handoff issue. The secret is the sign-in;
+            // once it exists the browser can complete without ever coming back
+            // through here, and the native provider that consumes it cannot
+            // re-check a subject it is never given.
+            var bound = SsoRuntime.SubjectBindings.Bind(identity.Subject, user.Name);
+
+            if (!SubjectBindingStore.Permits(bound))
+            {
+                LogSubjectBindingRefusal(bound, user.Name);
+                return Error(SsoErrors.UnknownUser, null);
+            }
+
             // Keyed on Emby's own spelling of the name, which is what Emby will
             // hand the authentication provider when the page authenticates.
             var secret = SsoRuntime.HandoffSecrets.Issue(user.Name);
             _logger.Info("SSO: issued a sign-in handoff for {0}", user.Name);
 
             return Html(CompletionPage.Render(user.Name, secret));
+        }
+
+        /// <summary>
+        /// Says in the log why a subject binding refused. The browser is always
+        /// told the same indistinguishable sentence, so a stranger cannot learn
+        /// whether the account exists, whether it is claimed, or by whom.
+        ///
+        /// The twin of <c>SsoAuthenticationProvider.RefuseBySubjectBinding</c>;
+        /// the two must keep saying the same things about the same outcomes.
+        /// Subject values are never logged - they are stable per-person
+        /// identifiers from the identity provider, and the account name is what
+        /// an operator needs.
+        /// </summary>
+        private void LogSubjectBindingRefusal(SubjectBindingOutcome outcome, string accountName)
+        {
+            switch (outcome)
+            {
+                case SubjectBindingOutcome.SubjectMissing:
+                    _logger.Error(
+                        "SSO: rejected sign-in for '{0}': the token carried no 'sub' claim, so the account cannot "
+                        + "be bound to an identity",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.SubjectBoundToAnotherAccount:
+                    _logger.Error(
+                        "SSO: rejected sign-in for '{0}': this identity provider subject is already bound to a "
+                        + "different Emby account. Either the username claim was reassigned, or the person was "
+                        + "renamed and an operator must update the subject-binding store.",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.AccountBoundToAnotherSubject:
+                    _logger.Error(
+                        "SSO: rejected sign-in for '{0}': this Emby account is already bound to a different "
+                        + "identity provider subject. A different principal is presenting a claim that names it.",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.StoreUnavailable:
+                    _logger.Error(
+                        "SSO: rejected sign-in for '{0}': the subject-binding store could not be read or written. "
+                        + "Sign-in fails closed rather than falling back to matching on the username alone.",
+                        ForLog(accountName));
+                    break;
+
+                default:
+                    _logger.Error(
+                        "SSO: rejected sign-in for '{0}': unrecognised subject binding outcome {1}",
+                        ForLog(accountName),
+                        (int)outcome);
+                    break;
+            }
         }
 
         /// <summary>

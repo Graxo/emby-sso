@@ -32,6 +32,52 @@ namespace Emby.Sso
 
         public static PluginConfiguration Configuration => Plugin.Instance?.Configuration;
 
+        private static readonly object SubjectBindingLock = new object();
+        private static SubjectBindingStore _subjectBindings;
+
+        /// <summary>
+        /// The durable map from identity-provider subject to Emby account, which
+        /// both sign-in paths consult before they admit anybody. See
+        /// <see cref="SubjectBindingStore"/> for what it defends and why every
+        /// one of its failure modes is a refusal.
+        ///
+        /// Built lazily rather than in a static initialiser because the path
+        /// comes from <see cref="Plugin"/>, and nothing in the reference
+        /// assemblies promises that Emby has constructed the plugin before it
+        /// constructs the authentication provider or the API service. Until it
+        /// has, this hands back <see cref="SubjectBindingStore.Unavailable"/> -
+        /// which refuses everything - and does NOT cache it, so a sign-in that
+        /// arrives a moment later gets the real store.
+        ///
+        /// One instance per process once built, because a second instance would
+        /// hold a second in-memory view of the same file and two concurrent
+        /// first sign-ins could each bind the same account.
+        /// </summary>
+        public static SubjectBindingStore SubjectBindings
+        {
+            get
+            {
+                lock (SubjectBindingLock)
+                {
+                    if (_subjectBindings != null)
+                    {
+                        return _subjectBindings;
+                    }
+
+                    var path = Plugin.Instance?.SubjectBindingFilePath;
+
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        return SubjectBindingStore.Unavailable;
+                    }
+
+                    _subjectBindings = new SubjectBindingStore(path, () => DateTimeOffset.UtcNow);
+
+                    return _subjectBindings;
+                }
+            }
+        }
+
         /// <summary>
         /// Whether a direct grant - a native client's real password, handed to
         /// this process and re-transmitted to the identity provider - may be

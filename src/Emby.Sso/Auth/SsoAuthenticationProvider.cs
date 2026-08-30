@@ -261,6 +261,20 @@ namespace Emby.Sso.Auth
                 {
                     throw new Exception(RefuseByGate(gate, result.Identity.Username, configuration?.GroupsClaim));
                 }
+
+                // Bind this sign-in to the identity provider's `sub`, or refuse
+                // it (assessment F1 / S1b). Like the gate above, this can only
+                // be done where an identity is carried - the direct-grant path.
+                // A handoff secret carries none, and needs none: the browser
+                // callback applied this same binding check before it issued the
+                // secret, and the secret is single-use, per-username and lives
+                // thirty seconds.
+                var binding = SsoRuntime.SubjectBindings.Bind(result.Identity.Subject, resolvedUser.Name);
+
+                if (!SubjectBindingStore.Permits(binding))
+                {
+                    throw new Exception(RefuseBySubjectBinding(binding, resolvedUser.Name));
+                }
             }
 
             _logger.Info("Accepted {0} sign-in for {1}", result.Outcome, ForLog(resolvedUser.Name));
@@ -448,6 +462,39 @@ namespace Emby.Sso.Auth
                 // would leave a budget-free way to probe the gate.
                 RecordThrottledFailure(username);
                 throw new Exception(RefuseByGate(gateOutcome, result.Identity.Username, configuration.GroupsClaim));
+            }
+
+            // 8 (continued). The subject binding, and the last thing decided
+            //    from the identity itself. It goes ABOVE RecordSuccess
+            //    deliberately: everything below that line is by this method's
+            //    own rule "not the credential's fault", and a subject that
+            //    contradicts a recorded binding very much is - it is either an
+            //    identity provider reassigning a username or somebody claiming
+            //    an account that is not theirs.
+            //
+            //    The account does not exist yet; Emby creates it after this
+            //    method returns. Binding first is the right order anyway: if
+            //    creation then fails, the sign-in is retried, the subject is
+            //    already bound to that same name, and the retry reads as an
+            //    ordinary Bound.
+            var accountBinding = SsoRuntime.SubjectBindings.Bind(
+                result.Identity.Subject,
+                result.Identity.Username.Trim());
+
+            if (!SubjectBindingStore.Permits(accountBinding))
+            {
+                // Counted like the gate refusal above - the provider answered,
+                // so this is a caller-caused failure and must cost budget -
+                // EXCEPT when the store itself is the problem. An unwritable or
+                // unreadable store is the server's fault, exactly like the
+                // template failures below, and charging it would turn a disk
+                // problem into a fifteen-minute lockout for everybody.
+                if (accountBinding != SubjectBindingOutcome.StoreUnavailable)
+                {
+                    RecordThrottledFailure(username);
+                }
+
+                throw new Exception(RefuseBySubjectBinding(accountBinding, result.Identity.Username));
             }
 
             // The credential was the caller's own and it was right, so the
@@ -773,6 +820,70 @@ namespace Emby.Sso.Auth
                     _logger.Error("Rejected sign-in for '{0}': no required group is configured", ForLog(identityUsername));
                     return SsoErrors.NotConfigured;
             }
+        }
+
+        /// <summary>
+        /// Logs why the subject binding refused and returns the sentence to
+        /// throw. Every sentence is the same indistinguishable "not set up on
+        /// this server" the gate and the unknown-user refusal use, for the same
+        /// reason: a stranger must not learn from the response whether the
+        /// account exists, whether it is claimed, or by whom.
+        ///
+        /// The mismatches are logged at Error and say what an operator has to
+        /// decide, because they are the two things this mechanism exists to
+        /// surface: either an attack, or a legitimate rename in the identity
+        /// provider that nobody recorded here. Neither may be resolved by this
+        /// code guessing.
+        ///
+        /// Subject values are never written to the log. They are stable,
+        /// unique, per-person identifiers from the identity provider; the
+        /// account name is what an operator needs and is already theirs.
+        /// </summary>
+        private string RefuseBySubjectBinding(SubjectBindingOutcome outcome, string accountName)
+        {
+            switch (outcome)
+            {
+                case SubjectBindingOutcome.SubjectMissing:
+                    _logger.Error(
+                        "Rejecting sign-in for '{0}': the token carried no 'sub' claim, so the account cannot be "
+                        + "bound to an identity",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.SubjectBoundToAnotherAccount:
+                    _logger.Error(
+                        "Rejecting sign-in for '{0}': this identity provider subject is already bound to a "
+                        + "different Emby account. Either the username claim was reassigned, or the person was "
+                        + "renamed and an operator must update the subject-binding store.",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.AccountBoundToAnotherSubject:
+                    _logger.Error(
+                        "Rejecting sign-in for '{0}': this Emby account is already bound to a different identity "
+                        + "provider subject. A different principal is presenting a claim that names this account.",
+                        ForLog(accountName));
+                    break;
+
+                case SubjectBindingOutcome.StoreUnavailable:
+                    _logger.Error(
+                        "Rejecting sign-in for '{0}': the subject-binding store could not be read or written. "
+                        + "Sign-in fails closed rather than falling back to matching on the username alone.",
+                        ForLog(accountName));
+                    break;
+
+                default:
+                    // Including Refused, and any future member. An outcome this
+                    // method does not recognise refuses; only the caller's
+                    // explicit SubjectBindingStore.Permits lets anyone in.
+                    _logger.Error(
+                        "Rejecting sign-in for '{0}': unrecognised subject binding outcome {1}",
+                        ForLog(accountName),
+                        (int)outcome);
+                    break;
+            }
+
+            return SsoErrors.UnknownUser;
         }
 
         /// <summary>
