@@ -308,6 +308,65 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
+        public void AFailedWriteRollsBackWithoutLosingExistingBindings()
+        {
+            var store = NewStore();
+            Assert.Equal(SubjectBindingOutcome.BoundOnFirstUse, store.Bind("sub-1", "alice"));
+
+            // Block the temporary file the atomic write goes through, so the
+            // write fails after the store has loaded successfully.
+            Directory.CreateDirectory(_path + ".tmp");
+
+            Assert.Equal(SubjectBindingOutcome.StoreUnavailable, store.Bind("sub-2", "bob"));
+
+            // The failed binding left nothing behind, and the one that had
+            // already been made is untouched - a failed write must not be able
+            // to destroy the records that were protecting other accounts.
+            Assert.Null(store.BoundAccountFor("sub-2"));
+            Assert.Equal("alice", store.BoundAccountFor("sub-1"));
+
+            Directory.Delete(_path + ".tmp");
+
+            var reloaded = NewStore();
+
+            Assert.Equal(SubjectBindingOutcome.Bound, reloaded.Check("sub-1", "alice"));
+            Assert.Equal(SubjectBindingOutcome.AccountBoundToAnotherSubject, reloaded.Check("sub-2", "alice"));
+            Assert.Equal(SubjectBindingOutcome.BindingAvailable, reloaded.Check("sub-2", "bob"));
+        }
+
+        [Fact]
+        public void ConcurrentFirstSignInsForOneAccountProduceExactlyOneBinding()
+        {
+            // Trust on first use means exactly one first use. If two racing
+            // sign-ins could both bind the same account, the guarantee the whole
+            // mechanism rests on would hold only when nobody was in a hurry.
+            var store = NewStore();
+            var outcomes = new System.Collections.Concurrent.ConcurrentBag<SubjectBindingOutcome>();
+
+            System.Threading.Tasks.Parallel.For(0, 16, i => outcomes.Add(store.Bind("sub-" + i, "alice")));
+
+            Assert.Equal(1, System.Linq.Enumerable.Count(outcomes, o => o == SubjectBindingOutcome.BoundOnFirstUse));
+            Assert.Equal(
+                15,
+                System.Linq.Enumerable.Count(outcomes, o => o == SubjectBindingOutcome.AccountBoundToAnotherSubject));
+
+            // And the winner is the one that persisted.
+            var winner = NewStore().BoundAccountFor("sub-0");
+            var persisted = 0;
+
+            for (var i = 0; i < 16; i++)
+            {
+                if (NewStore().BoundAccountFor("sub-" + i) != null)
+                {
+                    persisted++;
+                }
+            }
+
+            Assert.Equal(1, persisted);
+            Assert.True(winner == null || winner == "alice");
+        }
+
+        [Fact]
         public void ZeroIsARefusalAndOnlyThreeOutcomesPermit()
         {
             Assert.Equal(SubjectBindingOutcome.Refused, default(SubjectBindingOutcome));
