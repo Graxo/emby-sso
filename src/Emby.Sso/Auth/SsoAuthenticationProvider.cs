@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Emby.Sso.Protocol;
@@ -223,7 +222,23 @@ namespace Emby.Sso.Auth
             // trimmed values and an account name with edge whitespace is a trap.
             var accountName = result.Identity.Username.Trim();
 
-            _pendingPolicies.Arm(accountName, policyJson, DateTimeOffset.UtcNow);
+            try
+            {
+                _pendingPolicies.Arm(accountName, policyJson, DateTimeOffset.UtcNow);
+            }
+            catch (SsoException ex)
+            {
+                // The store is full - more first sign-ins are in flight at once
+                // than it will hold. It refuses rather than evicting, so this is
+                // the point at which that refusal becomes a failed sign-in.
+                // Failing here is the whole intent: the alternative was to evict
+                // an armed policy and let some other caller's account be created
+                // from whatever the claim-failure path produced. ex.Message is
+                // the operator-facing detail and stays in the log; only the
+                // user-safe constant is thrown onward.
+                _logger.Warn("Rejecting sign-in for unresolved '{0}': {1}", ForLog(accountName), ex.Message);
+                throw new Exception(ex.UserSafeReason);
+            }
 
             _logger.Info(
                 "Accepted DirectGrantAccepted sign-in for unknown user '{0}'; Emby will create the account from template '{1}'",
@@ -244,7 +259,10 @@ namespace Emby.Sso.Auth
         /// arguments, so the sign-in it belongs to is recovered from the slot armed
         /// at the end of <see cref="ProvisionOrRefuse"/>.
         ///
-        /// Never returns null: Emby dereferences the result.
+        /// Never returns null and never returns a substitute policy: when the
+        /// pending sign-in cannot be identified unambiguously, it throws. See the
+        /// comment at the throw site for why that is the safe direction, and for
+        /// what about it is unverified.
         /// </summary>
         public UserPolicy GetNewUserPolicy()
         {
@@ -252,34 +270,64 @@ namespace Emby.Sso.Auth
 
             if (pending == null)
             {
-                // Deliberately NOT `new UserPolicy()`, which is what Emby would
-                // have used and which grants every library. Reaching here means
-                // Emby is about to create an account this provider cannot match to
-                // a gated sign-in, so it is created with nothing: an operator can
-                // widen an account, but nobody can un-see media handed out by
-                // mistake. Not expected to happen - every success return from the
-                // provisioning branch arms a slot first.
-                _logger.Warn("GetNewUserPolicy: no unambiguous pending provisioning; creating a disabled account with no access");
-                return LockedDownPolicy();
+                // Throwing rather than returning a locked-down policy, which is
+                // what this did before.
+                //
+                // Emby calls this between assigning its `userPolicy` local and
+                // calling its own CreateUser - spike §1, decompiled from the
+                // running 4.9.5.0 server:
+                //
+                //     UserPolicy userPolicy = val != null ? val.GetNewUserPolicy()
+                //                                        : new UserPolicy();
+                //     user = await CreateUser(item.Username ?? username, userPolicy);
+                //
+                // so an exception here means CreateUser is never reached and NO
+                // ACCOUNT IS CREATED AT ALL. Returning a disabled, no-access
+                // policy instead let Emby create the account anyway, under the
+                // user's real name, and that account is unrecoverable by the
+                // user: Emby resolves the name from then on, so this provisioning
+                // branch is never re-entered, and its AuthenticationProviderId
+                // names this plugin, so Emby's default provider will not take it
+                // either (spike §4 observed exactly that dead end). A failed
+                // sign-in can be retried; a bricked account needs an operator.
+                //
+                // UNVERIFIED - this is reasoned from decompiled Emby source, not
+                // measured. The plugin is not installed on any server that can be
+                // signed into, so no live sign-in exercised it. Two specifics need
+                // live confirmation: (a) that no account is left behind, and (b)
+                // what the caller sees. Unlike a throw from Authenticate, which
+                // Emby catches and reports as a generic 401, this call site is
+                // outside AuthenticateLocalUser, so the exception most likely
+                // reaches the HTTP layer the way CreateUser's own ArgumentException
+                // was observed to (spike §4: HTTP 400 with the message in the
+                // body). The message is therefore a user-safe SsoErrors constant
+                // and must stay one.
+                _logger.Warn("GetNewUserPolicy: no unambiguous pending provisioning; refusing to create the account");
+                throw new Exception(SsoErrors.UnknownUser);
             }
 
             try
             {
-                var policy = JsonConvert.DeserializeObject<UserPolicy>(pending.PolicyJson);
+                var policy = TemplateClone.PolicyFromJson(pending.PolicyJson);
 
                 if (policy == null)
                 {
-                    _logger.Error("GetNewUserPolicy: the pending template policy did not deserialise; creating a disabled account with no access");
-                    return LockedDownPolicy();
+                    _logger.Error("GetNewUserPolicy: the pending template policy did not deserialise; refusing to create the account");
+                    throw new Exception(SsoErrors.NotConfigured);
                 }
 
-                _logger.Info("GetNewUserPolicy: supplying the template policy for new account '{0}'", ForLog(pending.Username));
+                // Indicative only: Take returns the oldest live entry, not one
+                // matched to this claim, so under concurrent first sign-ins the
+                // name below may belong to a different pending account. The policy
+                // is not affected - a claim is only answered when every live entry
+                // carries the same policy.
+                _logger.Info("GetNewUserPolicy: supplying the template policy; oldest pending sign-in is '{0}' (indicative)", ForLog(pending.Username));
                 return policy;
             }
             catch (JsonException)
             {
-                _logger.Error("GetNewUserPolicy: the pending template policy could not be read; creating a disabled account with no access");
-                return LockedDownPolicy();
+                _logger.Error("GetNewUserPolicy: the pending template policy could not be read; refusing to create the account");
+                throw new Exception(SsoErrors.NotConfigured);
             }
         }
 
@@ -300,6 +348,9 @@ namespace Emby.Sso.Auth
         /// alias the template user's live policy, and so that two crossed claims
         /// (see <see cref="PendingPolicies"/>) each get their own instance.
         /// Throws rather than returning a default: no template means no account.
+        /// The clone and the two fields it forces live in
+        /// <see cref="TemplateClone"/>, shared with the browser path so the
+        /// demotion cannot drift between the two provisioners.
         /// </summary>
         private string BuildNewAccountPolicyJson(string templateUserName)
         {
@@ -311,69 +362,31 @@ namespace Emby.Sso.Auth
                 throw new Exception(SsoErrors.NotConfigured);
             }
 
-            UserPolicy clone;
-
             try
             {
-                var templatePolicy = _userManager.GetUserPolicy(template);
-
-                if (templatePolicy == null)
-                {
-                    _logger.Error("Rejecting sign-in: the template user '{0}' has no policy", ForLog(templateUserName));
-                    throw new Exception(SsoErrors.NotConfigured);
-                }
-
-                clone = JsonConvert.DeserializeObject<UserPolicy>(JsonConvert.SerializeObject(templatePolicy));
+                return TemplateClone.PolicyToJson(TemplateClone.ClonePolicy(_userManager.GetUserPolicy(template)));
+            }
+            catch (SsoException ex)
+            {
+                // Deliberately does not carry ex.Message outward. Not because
+                // Emby would show it - the project's earlier spike observed the
+                // opposite, that a throw from this provider surfaces to the
+                // client as HTTP 401 "Invalid username or password entered." and
+                // the message reaches only the log
+                // (docs/superpowers/spikes/2026-08-30-emby-api-findings.md §1f).
+                // The reason is narrower and does not depend on Emby's behaviour:
+                // ex.Message is diagnostic text this code did not author, and the
+                // only thing that should ever leave here is a fixed, user-safe
+                // SsoErrors constant. Anything else is a leak waiting for the
+                // day some caller does render it.
+                _logger.Error("Rejecting sign-in: {0}", ex.Message);
+                throw new Exception(ex.UserSafeReason);
             }
             catch (JsonException)
             {
-                // Deliberately does not carry the serialiser's message outward:
-                // Emby puts an exception message from here into the HTTP response.
-                _logger.Error("Rejecting sign-in: the template user's policy could not be copied");
+                _logger.Error("Rejecting sign-in: the template user's policy could not be serialised");
                 throw new Exception(SsoErrors.NotConfigured);
             }
-
-            if (clone == null)
-            {
-                _logger.Error("Rejecting sign-in: the template user's policy could not be copied");
-                throw new Exception(SsoErrors.NotConfigured);
-            }
-
-            // Enforced here rather than trusted to the operator's choice of
-            // template: a template that happens to be an administrator would
-            // otherwise make every group holder an Emby administrator.
-            clone.IsAdministrator = false;
-
-            // The template almost certainly carries Emby's default provider id.
-            // Copying that would make the account unreachable through SSO, and
-            // pre-setting it here also makes Emby's post-creation stamping write a
-            // no-op, so no second policy write ever races this one. Spike §5.4.
-            clone.AuthenticationProviderId = typeof(SsoAuthenticationProvider).FullName;
-
-            return JsonConvert.SerializeObject(clone);
-        }
-
-        /// <summary>
-        /// The policy for an account Emby is about to create that this provider
-        /// cannot account for. Disabled, no libraries, no channels, no remote
-        /// access - visible to an operator and useless to whoever triggered it.
-        /// </summary>
-        private static UserPolicy LockedDownPolicy()
-        {
-            return new UserPolicy
-            {
-                IsAdministrator = false,
-                IsDisabled = true,
-                EnableAllFolders = false,
-                EnabledFolders = new string[0],
-                EnableAllChannels = false,
-                EnabledChannels = new string[0],
-                EnableRemoteAccess = false,
-                EnableLiveTvAccess = false,
-                EnableLiveTvManagement = false,
-                EnablePublicSharing = false,
-                AuthenticationProviderId = typeof(SsoAuthenticationProvider).FullName,
-            };
         }
 
         /// <summary>
@@ -412,118 +425,6 @@ namespace Emby.Sso.Auth
         private static string ForLog(string value)
         {
             return LogSafeText.Flatten(value);
-        }
-
-        /// <summary>
-        /// Correlates a gated sign-in with Emby's follow-up call to
-        /// <see cref="GetNewUserPolicy"/>, which takes no arguments and so cannot
-        /// say which sign-in it is asking about. An AsyncLocal set inside
-        /// Authenticate does not flow back to Emby's continuation (spike §9), so
-        /// the correlation has to be shared state; the probe used one static
-        /// volatile string, which is not safe to ship.
-        ///
-        /// Every entry holds an already-serialised policy, a username for the log,
-        /// and an expiry. Reads consume. Concurrency is handled by refusing to
-        /// guess: a claim is answered only when every live entry carries the same
-        /// policy, in which case which one it belongs to cannot matter, and
-        /// otherwise the whole set is dropped and the caller gets nothing - two
-        /// crossed sign-ins then produce two locked-down accounts an operator can
-        /// see and fix, rather than one account holding the other's access.
-        /// </summary>
-        private sealed class PendingPolicies
-        {
-            /// <summary>
-            /// A ceiling on entries that were armed but never claimed. Arming
-            /// requires a full gate pass, so this is not an anonymous DoS surface;
-            /// it is here so a pathological caller cannot grow the list without
-            /// bound inside one expiry window.
-            /// </summary>
-            private const int Capacity = 32;
-
-            private readonly List<PendingPolicy> _entries = new List<PendingPolicy>();
-            private readonly object _lock = new object();
-            private readonly TimeSpan _lifetime;
-
-            public PendingPolicies(TimeSpan lifetime)
-            {
-                _lifetime = lifetime;
-            }
-
-            public void Arm(string username, string policyJson, DateTimeOffset now)
-            {
-                lock (_lock)
-                {
-                    Purge(now);
-
-                    if (_entries.Count >= Capacity)
-                    {
-                        _entries.RemoveAt(0);
-                    }
-
-                    _entries.Add(new PendingPolicy
-                    {
-                        Username = username,
-                        PolicyJson = policyJson,
-                        ExpiresAt = now + _lifetime,
-                    });
-                }
-            }
-
-            /// <summary>
-            /// The entry to create the account from, or null when this provider
-            /// cannot say which sign-in the caller means. Null is the fail-closed
-            /// answer, never an empty or default policy.
-            /// </summary>
-            public PendingPolicy Take(DateTimeOffset now)
-            {
-                lock (_lock)
-                {
-                    Purge(now);
-
-                    if (_entries.Count == 0)
-                    {
-                        return null;
-                    }
-
-                    var candidate = _entries[0];
-
-                    for (var index = 1; index < _entries.Count; index++)
-                    {
-                        if (!string.Equals(_entries[index].PolicyJson, candidate.PolicyJson, StringComparison.Ordinal))
-                        {
-                            // Not unanimous, so answering would mean picking one
-                            // sign-in's policy for another's account. Drop them
-                            // all: every racing claim in this burst fails closed.
-                            _entries.Clear();
-                            return null;
-                        }
-                    }
-
-                    _entries.RemoveAt(0);
-                    return candidate;
-                }
-            }
-
-            private void Purge(DateTimeOffset now)
-            {
-                for (var index = _entries.Count - 1; index >= 0; index--)
-                {
-                    if (_entries[index].ExpiresAt <= now)
-                    {
-                        _entries.RemoveAt(index);
-                    }
-                }
-            }
-        }
-
-        private sealed class PendingPolicy
-        {
-            /// <summary>For the log only. Nothing is ever decided from it.</summary>
-            public string Username { get; set; }
-
-            public string PolicyJson { get; set; }
-
-            public DateTimeOffset ExpiresAt { get; set; }
         }
     }
 }
