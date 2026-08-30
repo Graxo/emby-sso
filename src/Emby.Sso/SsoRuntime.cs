@@ -16,7 +16,7 @@ namespace Emby.Sso
         private static readonly object ClientLock = new object();
 
         private static OidcClient _client;
-        private static string _clientKey;
+        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl) _clientKey;
 
         public static PendingLoginStore PendingLogins { get; } =
             new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
@@ -37,9 +37,7 @@ namespace Emby.Sso
         {
             var configuration = Configuration;
 
-            return configuration == null
-                ? null
-                : configuration.EmbyPublicBaseUrl.TrimEnd('/') + "/emby/Sso/Callback";
+            return configuration == null ? null : BuildRedirectUri(configuration);
         }
 
         /// <summary>Returns null when the plugin has not been configured.</summary>
@@ -52,8 +50,16 @@ namespace Emby.Sso
                 return null;
             }
 
-            // Rebuild whenever a setting that shapes the client changes.
-            var key = string.Join("|",
+            // Single read of Configuration for this call: everything below is derived
+            // from this one snapshot, so a settings save racing this call cannot mix
+            // fields from two different configurations into one OidcOptions.
+            var redirectUri = BuildRedirectUri(configuration);
+
+            // Rebuild whenever a setting that shapes the client changes. Compared as
+            // individual fields (not a delimited string) so a delimiter appearing
+            // inside one field - a ClientSecret containing '|', say - can never make
+            // two different configurations collide onto the same key.
+            var key = (
                 configuration.IssuerUrl,
                 configuration.ClientId,
                 configuration.ClientSecret,
@@ -63,7 +69,7 @@ namespace Emby.Sso
 
             lock (ClientLock)
             {
-                if (_client != null && string.Equals(_clientKey, key, StringComparison.Ordinal))
+                if (_client != null && _clientKey.Equals(key))
                 {
                     return _client;
                 }
@@ -74,13 +80,18 @@ namespace Emby.Sso
                     ClientId = configuration.ClientId,
                     ClientSecret = configuration.ClientSecret,
                     Scopes = configuration.Scopes,
-                    RedirectUri = RedirectUri(),
+                    RedirectUri = redirectUri,
                     UsernameClaim = configuration.UsernameClaim,
                 });
                 _clientKey = key;
 
                 return _client;
             }
+        }
+
+        private static string BuildRedirectUri(PluginConfiguration configuration)
+        {
+            return configuration.EmbyPublicBaseUrl.TrimEnd('/') + "/emby/Sso/Callback";
         }
     }
 }
