@@ -259,6 +259,14 @@ namespace Emby.Sso.Auth
             //      Nothing has been sent anywhere at this point, and nothing
             //      here records a failure: by this class's own rule, a refusal
             //      for something nobody tried must not cost budget.
+            //
+            //      UNVERIFIED end to end: the order, and that no refusal here
+            //      touches the throttle, are measured (ProvisioningPreconditions
+            //      Tests). What no test on this project can reach is a live
+            //      sign-in - the plugin is installed on no reachable server and
+            //      no identity provider is configured for one - so that a throw
+            //      out of Authenticate reaches a native client as Emby's generic
+            //      401 remains spike-sourced rather than re-measured here.
             var precondition = ProvisioningPreconditions.Evaluate(
                 Settings(configuration),
                 username,
