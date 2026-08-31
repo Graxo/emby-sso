@@ -101,7 +101,13 @@ namespace Emby.Sso.Tests
             var first = store.Issue("alice");
             var second = store.Issue("alice");
 
-            Assert.False(store.TryConsume("alice", first));
+            // The superseded PIN is simply wrong now, and being wrong spends
+            // the live PIN's allowance like any other wrong guess.
+            for (var attempt = 0; attempt < SignInPinStore.MaxAttemptsPerPin; attempt++)
+            {
+                Assert.False(store.TryConsume("alice", first));
+            }
+
             Assert.False(store.TryConsume("alice", second));
         }
 
@@ -161,8 +167,24 @@ namespace Emby.Sso.Tests
             var store = CreateStore();
             var pin = store.Issue("alice");
 
-            Assert.False(store.TryConsume("alice", AWrongPin(pin)));
-            Assert.False(store.TryConsume("alice", pin));
+            // A slip is survivable - the whole reason the allowance is not one.
+            for (var attempt = 0; attempt < SignInPinStore.MaxAttemptsPerPin - 1; attempt++)
+            {
+                Assert.False(store.TryConsume("alice", AWrongPin(pin)));
+            }
+
+            Assert.True(store.TryConsume("alice", pin));
+
+            // Exhausting the allowance is not. A fresh PIN, guessed at until
+            // the allowance is gone, is dead even to its rightful owner.
+            var second = store.Issue("alice");
+
+            for (var attempt = 0; attempt < SignInPinStore.MaxAttemptsPerPin; attempt++)
+            {
+                Assert.False(store.TryConsume("alice", AWrongPin(second)));
+            }
+
+            Assert.False(store.TryConsume("alice", second));
         }
 
         [Fact]
@@ -229,8 +251,12 @@ namespace Emby.Sso.Tests
             var alice = store.Issue("alice");
             var bob = store.Issue("bob");
 
-            // Bob's PIN is guessed at and destroyed.
-            Assert.False(store.TryConsume("bob", AWrongPin(bob)));
+            // Bob's PIN is guessed at until its allowance is gone, and dies.
+            for (var attempt = 0; attempt < SignInPinStore.MaxAttemptsPerPin; attempt++)
+            {
+                Assert.False(store.TryConsume("bob", AWrongPin(bob)));
+            }
+
             Assert.False(store.TryConsume("bob", bob));
 
             // Alice never notices.

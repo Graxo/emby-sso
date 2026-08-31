@@ -109,12 +109,20 @@ namespace Emby.Sso.Protocol
         /// could switch the brake off. The same stance
         /// <see cref="ProvisioningThrottle"/> takes about its own numbers.
         ///
-        /// If it is ever raised, the PIN page tells the user in so many words
-        /// that a single wrong entry destroys their PIN (<c>Api/PinPage.cs</c>)
-        /// and the README says the same. Change those with it, or the plugin
-        /// starts lying to the person holding the credential.
+        /// Three, not one. One was the original brief; three costs 1.6 bits out
+        /// of 39.3, which is nothing, and does not worsen the only real attack
+        /// on an issued PIN - somebody spending a stranger's PIN to annoy them
+        /// destroys it as reliably with one guess as with three. What it buys
+        /// is the person typing eight characters into a television with a
+        /// directional pad, for whom a single slip would otherwise mean
+        /// repeating a whole browser sign-in, multi-factor prompt included.
+        ///
+        /// If it is ever changed, the PIN page tells the user in so many words
+        /// how many wrong entries destroy their PIN (<c>Api/PinPage.cs</c>) and
+        /// the README says the same. Change those with it, or the plugin starts
+        /// lying to the person holding the credential.
         /// </summary>
-        public const int MaxAttemptsPerPin = 1;
+        public const int MaxAttemptsPerPin = 3;
 
         /// <summary>
         /// How long an issued PIN is good for.

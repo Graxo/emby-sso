@@ -579,9 +579,9 @@ the one field those apps already have.
   optional.
 - **Five minutes**, from when it is shown.
 - **Single use.** It is consumed by the sign-in it completes.
-- **Destroyed by one wrong entry.** A PIN that is guessed at wrongly is gone; a
-  user who mistypes theirs opens the PIN URL again for a new one. That is
-  deliberate — see below.
+- **Destroyed after three wrong entries.** A PIN guessed at wrongly is gone; a
+  user who mistypes theirs three times opens the PIN URL again for a new one.
+  That is deliberate — see below.
 - **Bound to one Emby account.** A live PIN presented with somebody else's
   username is refused, and refusing it does not spend it.
 - **Held in memory only.** Restarting Emby forgets every live PIN, which is
@@ -604,14 +604,16 @@ Redeeming one is checked too: the licence, the required-group setting and the
 provider stamp are all re-checked at sign-in, and turning the PIN setting off
 stops PINs already issued from being redeemed as well as stopping new ones.
 
-### Why one wrong entry destroys it, and what that costs
+### Why a few wrong entries destroy it, and what that costs
 
 A PIN is far weaker per guess than the 256-bit secret the browser flow uses
 internally, and it is typed into a field anyone on the network can reach. The
-defence that has to hold is that it **cannot be ground down**: because a wrong
-guess consumes the PIN, a guesser's entire chance against an issued PIN is 1 in
-656 billion, no matter how fast they send guesses or how many usernames they
-spread across.
+defence that has to hold is that it **cannot be ground down**: because three
+wrong guesses consume the PIN, a guesser's entire chance against an issued PIN
+is 3 in 656 billion, no matter how fast they send guesses or how many usernames
+they spread across. Three rather than one costs 1.6 bits of the 39.3 and buys
+back the person typing eight characters with a television remote, for whom a
+single slip would otherwise mean repeating a whole browser sign-in.
 
 The property the plugin guarantees, and tests:
 

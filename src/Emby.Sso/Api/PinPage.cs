@@ -59,7 +59,7 @@ ol{text-align:left;color:#bbb;line-height:1.6;max-width:24rem;margin:0 auto;padd
 <li>Enter the PIN above where it asks for a password.</li>
 </ol>
 <p class='warn'>It expires in " + minutes.ToString(CultureInfo.InvariantCulture) + @" minutes, works once, and
-is destroyed by a single wrong entry &mdash; if you mistype it, come back here for a new one.</p>
+is destroyed after three wrong entries &mdash; if you mistype it that often, come back here for a new one.</p>
 <p>Do not read it out to anyone who is not standing at that television.</p>
 </main></body></html>
 ";
