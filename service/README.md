@@ -1,5 +1,9 @@
 # The licence and purchase service
 
+**Standing it up for the first time: [`docs/first-run.md`](docs/first-run.md).**
+Where the signing key comes from, how to get it onto the host with the right
+ownership, what to configure, and what each refusal to start means.
+
 The vendor runs this. It sells licences for the Emby SSO plugin, and it is the
 only thing on earth that can mint one.
 

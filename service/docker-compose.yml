@@ -1,3 +1,8 @@
+# FIRST TIME? Read service/docs/first-run.md. It covers where the signing key
+# comes from, creating /srv/emby-sso with the ownership uid 5678 needs, copying
+# the key without leaving a world-readable copy behind, and what each refusal to
+# start means. The paths below will not exist until you have done that.
+#
 # The vendor runs this. It is a snippet to paste into whatever compose file the
 # host already has, not a file to run as-is: the two paths and the six values
 # under `environment` have to be the operator's own.
