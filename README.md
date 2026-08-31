@@ -9,81 +9,49 @@ PKCE) and, optionally, the OIDC direct-grant flow for native apps.
 already exist, and an administrator must explicitly point that account's
 authentication provider at this plugin. There is one optional, off-by-default
 path that creates an account — for a user who holds a required Authentik
-group, cloned from a template user you nominate. See **Group-gated automatic
-account creation** below before you turn it on.
+group, cloned from a template user you nominate.
 
 **This is licensed software, not open source.** See `LICENSE`. A licence key
-issued for your specific Emby server has to be pasted into the plugin
-configuration; without a valid one the plugin refuses new sign-ons. Read
-**Licensing** below for exactly what that does and does not stop.
+issued for your specific Emby server has to be in the plugin configuration —
+pasted in, or bought and redeemed from the configuration page itself. Without
+a valid one the plugin refuses new sign-ons.
 
-Read the whole of this document — especially the next two sections — before
-you install anything.
+## The documentation
 
----
+Everything that used to be in this file lives in
+[`docs/site/`](docs/site/index.md) and is published as a searchable site by
+GitLab Pages. Every page is also readable here as ordinary Markdown.
 
-## Licensing
-
-The plugin checks a signed licence key issued for one Emby server. Paste it
-into Dashboard → Plugins → Authentik SSO → **Licence key**.
-
-A licence names your server's id — the `ServerId` Emby writes to its log at
-startup — so it is valid on that server and no other. The check is entirely
-offline: nothing is sent anywhere, there is no licence server, and an Emby
-server with no internet access validates its licence exactly as well as one
-with it.
-
-### What an invalid or missing licence actually does
-
-It refuses **new** single sign-ons and automatic account creation. That is all.
-Specifically:
-
-- people who are already signed in **stay** signed in. Emby never consults
-  this plugin about an access token it has already issued, so existing
-  sessions on phones, TVs and browsers keep working until they are signed out;
-- **your own Emby accounts are unaffected.** A local Emby account is
-  authenticated by Emby's own provider, not by this plugin, so you can always
-  still reach your dashboard. You cannot be locked out of your media server by
-  a licensing problem;
-- nothing is disabled, deleted or reconfigured. Fix the licence and the next
-  sign-in works.
-
-The refusal is deliberately explicit — the user is told there is a licensing
-problem rather than being given the plugin's usual vague "this account is not
-set up on this server". Every other refusal here is vague on purpose, because
-being specific would leak whether an account exists; this one is nobody's
-secret and only ever gets fixed by whoever reads it.
-
-The server log records the exact reason (`Missing`, `Expired`, `WrongServer`,
-`BadSignature`, `NotYetValid`, `Malformed`) at Error, and for the last three
-weeks before a valid licence expires it logs a warning — at most one every six
-hours — telling you how many days are left. That warning is the point of
-keeping existing sessions alive: it is what gives you time to renew.
-
-### What this is worth, honestly
-
-The licence is an RS256 JWT signed with a private key that never leaves the
-vendor, verified against a public key compiled into the assembly. Nobody can
-mint a licence without that private key, and a licence for one server does not
-work on another.
-
-But **the plugin ships as a .NET assembly, and a .NET assembly can be
-decompiled and the check removed.** This project spent a day decompiling Emby's
-own binaries to build the plugin in the first place. There is no obfuscation
-here and none is planned, because obfuscation would raise the effort a little
-and change nothing about the outcome.
-
-So this raises the cost of casual copying between servers. It is not DRM and it
-is not described as DRM anywhere in this repository. The enforceable part is
-`LICENSE`, not the code.
-
-If you are the vendor rather than an operator: `tools/Emby.Sso.LicenceTool/`
-generates the signing keypair and mints licences, and its README covers where
-the private key must live.
+| | |
+|---|---|
+| [Start here](docs/site/index.md) | What it is and how it works |
+| [Read this before you install](docs/site/before-you-install.md) | The two things Emby does that are hard to undo |
+| [Installing and upgrading](docs/site/installing.md) | Download, checksum, three steps |
+| [Setting up Authentik](docs/site/authentik.md) | Provider, application, groups, scopes |
+| [Assigning each user's login provider](docs/site/login-providers.md) | Required, and easy to miss |
+| [Browser sign-in](docs/site/browser-sign-in.md) | The bookmarkable URL, and why there is no login-page button |
+| [Native apps with a password](docs/site/native-apps.md) | Direct grant, and what it costs you |
+| [Native apps with a one-time PIN](docs/site/pin-sign-in.md) | Keeps multi-factor authentication on a television |
+| [Group gating and account creation](docs/site/groups-and-account-creation.md) | Who may sign in, and who gets an account |
+| [One Emby account, one Authentik identity](docs/site/identity-binding.md) | Subject binding, trust on first use |
+| [Brute-force protection](docs/site/brute-force-protection.md) | Both brakes, and why you need both |
+| [Every setting, explained](docs/site/settings.md) | One section per field on the configuration page |
+| [Licensing](docs/site/licensing.md) | What an invalid licence does and does not stop |
+| [Buying and activating a licence](docs/site/activation.md) | Redemption codes, and the one call this plugin makes |
+| [Troubleshooting](docs/site/troubleshooting.md) | Every message a user can be shown, and what to check |
+| [What has and has not been verified](docs/site/verification-status.md) | The honesty ledger — read it |
+| [Building from source](docs/site/building.md) | Build, test, and cut a release |
 
 ---
 
-## Upgrading an existing install: set the required group FIRST
+# Read this before you install anything
+
+Three things below can lock people out of a working server, and one of them
+can lock out every user at once. They are kept here in full, rather than
+behind a link, because a repository is readable when a documentation site may
+not be.
+
+## 1. Leaving *Required group* empty refuses everyone
 
 Every single sign-on this build performs is gated on an Authentik group, and
 **until you name that group the plugin refuses everyone.** Leaving *Required
@@ -117,9 +85,7 @@ This is deliberate and was decided with the lockout understood: a server whose
 operator has not said which group may sign in has not said who may sign in,
 and the fail-closed answer to that is nobody.
 
----
-
-## Read this before you install
+## 2. Emby stamps the provider onto a user, permanently
 
 Emby's authentication pipeline behaves in ways that are easy to get wrong
 and hard to undo. This was confirmed against a live Emby 4.9.5.0 server, not
@@ -180,135 +146,58 @@ None of this is a bug in the plugin — it is how Emby's own
 `IAuthenticationProvider` pipeline works for every third-party provider,
 including this one.
 
----
+## 3. *Allow plain HTTP (testing only)* switches native sign-in off
 
-## How it works
+Ticking *Allow plain HTTP* and *Allow native apps to sign in with a password*
+at the same time is refused: native password sign-in is disabled for as long as
+plain HTTP is allowed, and the log says so. This is deliberate, and the
+asymmetry between the two paths is the point:
 
-- **Browser sign-in.** The user opens a bookmarkable URL
-  (`https://<emby>/emby/Sso/Start`). The plugin redirects to Authentik,
-  Authentik authenticates the user under its own flows (including MFA and
-  passkeys), and redirects back to `https://<emby>/emby/Sso/Callback`. The
-  plugin validates the response, checks that the username matches an
-  existing Emby user, and completes the sign-in — the browser lands
-  directly on the Emby home screen with no further clicks.
-- **Native apps (phone, TV).** Off by default. When enabled, a native
-  client's normal username/password screen is checked against Authentik
-  using an OIDC direct grant instead of Emby's local password.
-- **Native apps, with a one-time PIN instead.** Also off by default, and a
-  separate setting. The user completes a full browser sign-in (MFA and all) on
-  a phone or laptop, is shown a short PIN, and types their username and that
-  PIN into the TV app's ordinary sign-in screen. See **Native app sign-in with
-  a one-time PIN**.
-- **No account is created unless you switch that on.** If the username from
-  Authentik does not match an existing Emby user, the sign-in is rejected with
-  a generic error and nothing is written to the log except the fact that it
-  happened — unless automatic account creation is enabled and the identity
-  holds the required group, in which case an account is created from your
-  template user. See **Group-gated automatic account creation**.
-- **Every sign-in is checked against the required group**, whether the account
-  is new or years old. Losing the group in Authentik loses Emby access at the
-  next sign-in.
+- the **browser** flow's insecure mode risks token substitution, but the user's
+  password goes from their own browser to Authentik and this server never sees
+  it — so the escape hatch is still honoured there;
+- a **direct grant** hands this process every native client's real password and
+  re-transmits it. There is no setting combination in which this server will
+  put a password on the wire in cleartext.
 
-There is no button on Emby's login page, and there cannot be one — see
-the next section.
-
-**A browser that signs in through SSO gets its own device row.** The
-completion page authenticates as an ordinary API client identified as
-`Emby Web` with its own generated device ID (stored in that browser's
-`localStorage`, separate from the web client's own device ID for the same
-browser), so Dashboard → Devices ends up showing **two** "Emby Web" rows for
-one browser: the one the web client itself registers on ordinary interactive
-login, and this plugin's. They look like duplicates but are not — each
-backs a live session. **Do not delete either one as a cleanup step**: deleting
-the row this plugin's completion page created revokes the access token it
-minted, which signs that browser out of its current SSO session immediately.
-
-**The pages the plugin serves are locked down as hard as they can be.** Every
-response it produces — the completion page, the error page, and the redirect to
-Authentik, on failure paths as well as successful ones — carries
-`X-Frame-Options: DENY`, `Content-Security-Policy` with `frame-ancestors
-'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
-`Cache-Control: no-store`. The completion page is the one that matters: it holds
-a live one-time handoff secret and posts it to Emby's own authentication
-endpoint, so it must never be framable or cached. Its policy starts at
-`default-src 'none'` and adds back only what the page uses — its own inline
-script and style, named by a fresh per-response nonce, and `connect-src 'self'`
-— so `unsafe-inline` appears nowhere and an injected script would not run even
-if one ever got in. If you put a reverse proxy in front of Emby, do not strip or
-weaken these headers.
+If you want native sign-in in a lab, give the lab HTTPS. (The plugin also
+refuses a token endpoint that is not HTTPS, whichever path is in use, even when
+the issuer itself was HTTPS.)
 
 ---
 
-## Starting a sign-in: there is no button on the login page
+## Licensing, in brief
 
-Emby's web login page renders the "login disclaimer" setting as plain text
-(`element.textContent`, not HTML) and loads custom CSS as an external
-stylesheet (`<link rel="stylesheet">`), so neither field can execute a
-script or render a clickable button. This was confirmed by reading the
-shipped Emby 4.9.5.0 client and testing that the server passes both fields
-through completely unsanitized to the client — the client itself is what
-strips any markup.
+The plugin checks a signed licence key issued for one Emby server, named by
+the `ServerId` Emby writes to its log at startup. **The check is entirely
+offline**: nothing is contacted when a licence is verified, and a server with
+no internet access validates its licence exactly as well as one with it. The
+one thing that does use the network is activation — a single call made when an
+administrator presses **Activate** on the configuration page, on no sign-in
+path whatsoever, and never again.
 
-So: **users start a sign-in from a bookmarkable URL**, not a button:
+**An invalid or missing licence refuses new single sign-ons and automatic
+account creation, and nothing else.** People already signed in stay signed in;
+your own Emby accounts are authenticated by Emby's own provider, so **you
+cannot be locked out of your media server by a licensing problem**; nothing is
+disabled, deleted or reconfigured.
 
-```
-https://<your-emby-server>/emby/Sso/Start
-```
+A licence cannot be revoked — the check is offline, so there is nowhere a
+revocation could come from. An expiry date is the only lever.
 
-The plugin's configuration page (Dashboard → Plugins → Authentik SSO)
-displays this exact URL for your server under "Sign-in URL for users to
-bookmark". A convenient way to surface it is to paste that URL as **plain
-text** into Emby's own login disclaimer field (Dashboard → Settings →
-General → "Login disclaimer") — it will render as visible instructions on
-the login screen, just not as a clickable link.
+The licence is an RS256 JWT signed with a private key that never leaves the
+vendor. But the plugin ships as a .NET assembly, and **a .NET assembly can be
+decompiled and the check removed**; there is no obfuscation here and none is
+planned. This raises the cost of casual copying between servers. It is not DRM
+and it is not described as DRM anywhere in this repository. The enforceable
+part is `LICENSE`, not the code.
 
-The configuration page has a checkbox labelled "Reserve a sign-in button on
-the login page" (`EnableButtonInjection`). It is reserved for a future
-release and currently does nothing — leave it as you find it.
-
----
-
-## Setting up Authentik
-
-1. Create an **OAuth2/OpenID provider** in Authentik.
-2. Set its **redirect URI** to exactly the value shown on the plugin's
-   configuration page under "Redirect URI to configure in Authentik"
-   (`https://<your-emby-server>/emby/Sso/Callback`). It must match exactly
-   — scheme, host, and path.
-3. Note the **client ID**, and the **client secret** if you configure a
-   confidential client (leave the plugin's client secret field empty for a
-   public client).
-4. The plugin authenticates to the token endpoint using **HTTP Basic**
-   (client ID and secret, each percent-encoded per RFC 6749 §2.3.1, then
-   base64-encoded in the `Authorization` header) whenever a client secret
-   is configured. Make sure the Authentik provider's client authentication
-   method is compatible with that.
-5. If you plan to enable **native app sign-in** (see below), there is nothing
-   to configure on the provider — but be aware of what Authentik will accept
-   as the password. Authentik does not implement the password grant as a
-   flow you can bind: it routes `grant_type=password` through the same
-   machinery as `client_credentials`, identifying the user by username and
-   authenticating them with an **app password token**. A user's ordinary
-   Authentik password will not work. Each user creates their own token under
-   *Settings → Tokens and App passwords*; no administrator action is needed.
-   See "Native app sign-in" below.
-6. Bind an application to the provider, using scopes that include at least
-   `openid`. The plugin defaults to `openid profile email`.
-7. **Emit the group list in the ID token.** This plugin allows a sign-in only
-   if the token carries the configured groups claim (`groups` by default) and
-   that claim contains the required group, so Authentik must be configured to
-   include it — in Authentik this is normally a scope mapping bound to the
-   provider. If you enable native sign-in, make sure the claim is emitted on
-   the **direct-grant** flow too: a token that reaches this plugin without the
-   claim is refused, and the user is told only "this account is not set up on
-   this server".
-8. **Configure Authentik's own failed-login / reputation policy.** This is
-   required, not optional — see "Brute-force protection: you need both brakes"
-   below.
+Full detail: [Licensing](docs/site/licensing.md) and
+[Buying and activating a licence](docs/site/activation.md).
 
 ---
 
-## Installing the plugin
+## Installing
 
 The shipped artifact is a **single file**, `Emby.Sso.dll`. Every release is a
 git tag, and the release page carries that one DLL and a SHA256 checksum for
@@ -328,530 +217,29 @@ curl -fLO $base/Emby.Sso.dll.sha256
 sha256sum -c Emby.Sso.dll.sha256
 ```
 
-**Check the checksum before you copy anything onto a server.** It is also the
-only way to tell two builds of the same version apart if you have been
-building locally.
+**Check the checksum before you copy anything onto a server.**
 
-Building from source produces the same file, at
-`src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll` — see **Building
-from source** below.
-
-Do not install any other DLL from the build output. This file is
-deliberately produced by merging (ILRepack) the plugin together with its
-dependencies — `Microsoft.IdentityModel.*`, `System.IdentityModel.Tokens.Jwt`
-and `Newtonsoft.Json` — and internalizing their types inside `Emby.Sso.dll`
-itself. This is not a packaging convenience; it is required. Emby Server
-already ships its own copy of `Microsoft.IdentityModel` (version 7.6.2 as
-of Emby 4.9.5.0), a different version than the one this plugin builds
-against (6.35.0). Dropping unmerged dependency DLLs next to the plugin
-would put two incompatible assembly identities in the same load context
-and fail at runtime. The merged build was verified on a live Emby 4.9.5.0
-server: the merged types resolve out of `Emby.Sso.dll` itself, never
-colliding with the server's own copies.
-
-To install:
+Then:
 
 1. Copy `Emby.Sso.dll` into Emby's `plugins` directory (for example
    `/config/plugins` in the linuxserver.io Docker image), replacing any
    earlier copy.
 2. Restart Emby Server.
 3. Confirm it loaded: Dashboard → Plugins should list **Authentik SSO**, at
-   the version you downloaded. The version shown is the release tag — a
-   release built from `v1.4.0` reports `1.4.0`, and a build you made yourself
-   reports `0.0.0`. If the number is not the one you just installed, the old
-   DLL is still in place and Emby is still running it.
-
-Upgrading is the same three steps, but read **Upgrading an existing install:
-set the required group FIRST** at the top of this document before you restart.
-
----
-
-## Configuring the plugin
-
-Open Dashboard → Plugins → **Authentik SSO** and fill in:
-
-| Field | Notes |
-|---|---|
-| Issuer URL | e.g. `https://auth.example.com/application/o/emby/`. Every other OIDC endpoint is read from its discovery document. |
-| Client ID | from Authentik. |
-| Client secret | leave empty for a public client. |
-| Scopes | defaults to `openid profile email`. |
-| Emby public base URL | the address users reach this server on, e.g. `https://emby.example.com`. Used to build the redirect URI and the post-login redirect. Required — Emby cannot infer this reliably behind a reverse proxy. |
-| Username claim | defaults to `preferred_username`, matched case-insensitively against the Emby username. |
-| Allow native apps to sign in with a password | off by default — see "Native app sign-in" below. |
-| Allow native apps to sign in with a one-time PIN | off by default, and **not** governed by the setting above — see "Native app sign-in with a one-time PIN" below. |
-| Reserve a sign-in button on the login page | reserved for future use; currently does nothing. |
-| Allow plain HTTP | testing only. The browser flow refuses to start over plain HTTP unless this is set — and setting it **disables native password sign-in entirely**, see below. |
-| Allow an identity provider on a private or loopback address | off by default. The plugin resolves the identity provider's address before connecting and refuses loopback, private (RFC1918) and CGNAT ranges, so a hostile or mistyped issuer URL cannot make this server fetch from its own network. Tick this if your identity provider genuinely lives on a private address — a self-hosted Authentik at `https://10.0.0.5` or `https://authentik.lan` is a normal setup, not an attack. It is deliberately **separate** from "Allow plain HTTP": an identity provider on a private address with a valid certificate should not have to permit cleartext to be reachable. **Upgrade note:** an existing install whose identity provider resolves to a private address stops working until this is ticked; the log names the address and the rule that refused it. |
-| Required group | **the Authentik group a user must hold to sign in.** No default, and leaving it empty refuses every SSO sign-in — read "Upgrading an existing install" above. |
-| Groups claim | which claim the group list is read from; defaults to `groups`. Authentik must actually emit it, on the direct-grant flow too if native sign-in is on. |
-| Template user | the existing Emby user a newly created account is cloned from. Only used when automatic account creation is on. |
-| Automatically create accounts for group holders | off by default. The setting that lets this plugin create Emby users at all. |
-| Licence key | the licence issued for **this** server. Without a valid one, new sign-ons and account creation are refused — see **Licensing** above. |
-
-After saving, the page displays the exact **redirect URI** to put in
-Authentik, the **sign-in URL** to give your users, and the **PIN URL** for
-users signing in on a television — all computed from the public base URL you
-just entered.
-
----
-
-## Assign each user's authentication provider — required, and easy to miss
-
-**Nothing works until this is done, per user.** Creating a matching
-Authentik account and installing the plugin is not enough by itself:
-
-- Dashboard → Users → select the user → **Login provider** → **Authentik
-  SSO**. This selector only appears for non-administrator accounts, and
-  only once more than one provider is registered (i.e., once this plugin
-  is installed).
-- For **administrator** accounts, the selector is hidden in the dashboard
-  and must be set through the API — see "Read this before you install"
-  above for the exact call and the reason the dashboard can't be trusted
-  for admins.
-- If you skip this step the account cannot sign in through SSO at all: the
-  plugin refuses any account not already assigned to it, and the user sees
-  the ordinary "This account is not set up on this server."
-- Accounts the plugin **creates itself** (see "Group-gated sign-in and
-  automatic account creation") are stamped with this plugin as their
-  authentication provider at the moment they are created, so this step does
-  not apply to them. It applies to every account that existed before.
-
----
-
-## Each account is bound to one Authentik identity
-
-A username is a display handle: identity providers let people change
-`preferred_username`, and reassign a freed-up name to somebody else. The
-claim OpenID Connect guarantees is stable and unique for a person is `sub`,
-so that is what this plugin actually binds an Emby account to.
-
-- **On an account's first successful SSO sign-in**, the plugin records
-  "this Authentik `sub` owns this Emby account" in
-  `<Emby data path>/emby-sso/subject-bindings.json`. It is kept there and
-  not in the plugin's configuration, because saving the settings page
-  rewrites that file wholesale and would destroy the bindings.
-- **Afterwards** a different `sub` presenting the same account name is
-  refused, and so is a known `sub` presenting a different account name. The
-  user sees the usual generic refusal; the server log says which it was and
-  that an operator has to decide.
-- **The trust-on-first-use window is real.** Until an account has signed in
-  once under this build, there is nothing to compare against — whoever signs
-  in first establishes the binding. The group gate and the refusal to adopt
-  unassigned accounts (above) narrow that window; they do not remove it.
-- **If the store cannot be read or written, sign-in fails** rather than
-  falling back to matching on the username alone. An unparseable file
-  refuses everything until the server is restarted and is never overwritten,
-  so it can still be inspected.
-- **Renaming an Emby account cuts both ways — edit the store in the same
-  maintenance window as the rename.** The store is keyed by account *name*, so
-  a rename does not move the row, and two things happen at once:
-  - the person who owned the account **is refused**: their `sub` is still
-    recorded against the old name, so presenting the new one is "this identity
-    belongs to a different account";
-  - the account under its **new** name has no row at all, so as far as the
-    store is concerned it has never signed in — it is back in the
-    trust-on-first-use window, and the next `sub` to present that name adopts
-    it, along with its watch history, its policy and its library access.
-
-  What still stands in the way is the group gate and the refusal to adopt an
-  account that is not already assigned to this plugin — so claiming a renamed
-  account takes an Authentik principal that **holds the required group** and
-  can present the new name as its username claim. That is an in-group insider
-  and a narrow window, not a stranger off the internet. It is still a window:
-  stop Emby, edit that account's `account` field in
-  `subject-bindings.json` (or delete just that entry), and restart, as part of
-  the same rename — not afterwards. The same applies if you deliberately want
-  to hand an account to a different Authentik user. Deleting the whole file
-  reopens the trust-on-first-use window for every account at once.
-- **The server log names an adoption.** When an identity claims an Emby account
-  that already existed and had no binding — the renamed-account case above, and
-  every account's first SSO sign-in after this build is installed — the log
-  says so at **Error**, naming the account. It is not a failure; it is the one
-  moment a silent trust-on-first-use claim is worth reading. An account this
-  plugin creates itself does not produce that line.
-- **If you rename the Emby account but not the Authentik user** (and automatic
-  account creation is on), the next sign-in matches nothing under the old name
-  and provisions a **brand-new empty account** under it, leaving the renamed
-  one behind. Rename on both sides, in the same window.
-
-Relatedly, **the username claim must be immutable and unique in Authentik.**
-`preferred_username` is the default and the right answer. If you configure
-`email`, the plugin refuses any token that does not assert
-`email_verified` — but the underlying problem stays: many providers let a
-user change their own address.
-
----
-
-## Native app sign-in (direct grant)
-
-**Off by default.** When enabled, native clients (phone apps, TV apps —
-anything that only ever sends a raw username and password to Emby, never
-a browser redirect) are authenticated by sending that password directly to
-Authentik's token endpoint as an OIDC direct grant (Resource Owner
-Password Credentials).
-
-### What Authentik accepts as the password
-
-**Not the user's Authentik password.** This is the single most important
-thing to know before enabling it, and it is not obvious from either
-project's documentation.
-
-Authentik does not implement the Resource Owner Password Credentials grant
-as its own flow. It routes `grant_type=password` through the same code path
-as `client_credentials`: the user is *identified* by username and
-*authenticated* by an **app password token**. Sending a real account
-password returns `invalid_grant`. There is no provider setting that changes
-this, and no flow to bind — an earlier version of this document said there
-was, and that was wrong.
-
-So each user needs a token of their own:
-
-1. Sign in to Authentik, open **Settings → Tokens and App passwords**.
-2. **Create** a token with the intent *App password*, and give it an expiry.
-3. Copy the value — Authentik shows it once.
-
-In the Emby app, the username is the Authentik username and the password is
-that token. Users can do this themselves; no administrator has to issue
-tokens or be involved.
-
-Other identity providers differ. Keycloak, for one, implements this grant
-against real credentials, and the plugin sends a standards-compliant
-request either way — this is an Authentik behaviour, not a plugin
-limitation.
-
-### Trade-offs to weigh before turning this on
-
-- **It cannot perform multi-factor authentication.** Any MFA policy
-  Authentik enforces on its interactive login flow does not apply to a
-  direct grant — the credentials are checked once, synchronously, with no
-  redirect and no second factor. App passwords are single-factor by design,
-  so this is doubly true here.
-- **It is a second, weaker credential per user.** An app password is a
-  bearer secret that grants library access if it leaks, and it does not
-  expire unless the user sets an expiry.
-- The OAuth 2.1 draft deprecates this grant type generally, for the same
-  reason: it requires the client to handle a raw credential.
-
-Enable it only if you need TV/phone app access badly enough to accept the
-loss of MFA on that path. Browser sign-in never uses this grant and is
-unaffected either way.
-
-**It is switched off entirely while "Allow plain HTTP (testing only)" is on** —
-see "Group-gated sign-in and automatic account creation" below.
-
----
-
-## Native app sign-in with a one-time PIN
-
-**Off by default, and a separate setting from the one above** — "Allow native
-apps to sign in with a one-time PIN". Neither setting turns the other on, and
-you can run either, both or neither.
-
-This is the answer to the question the direct grant does not answer well: how
-does somebody sign in on a **television** without either typing an app-password
-token with a D-pad or giving up multi-factor authentication?
-
-### How a user gets one
-
-1. On a phone or a laptop, they open the PIN URL:
-
-   ```
-   https://<your-emby-server>/emby/Sso/Pin
-   ```
-
-   The configuration page shows this exact URL for your server, next to the
-   ordinary sign-in URL, under "PIN URL for users to open on a phone or laptop".
-2. They sign in through Authentik **normally** — the full interactive flow, with
-   whatever MFA, passkeys and policies you have on it.
-3. The page that comes back shows an eight-character PIN, like `K7RM-3XQP`.
-4. On the television, they open Emby's ordinary sign-in screen, type their
-   **Emby username**, and type that **PIN** where it asks for a password.
-
-That is it. It works with **unmodified Emby apps**, because a PIN is typed into
-the one field those apps already have.
-
-### What the PIN is, exactly
-
-- **Eight characters** from a 30-character alphabet — digits 2–9 and A–Z without
-  I, L, O or U, so there is no `0`/`O` or `1`/`I`/`l` to misread. That is about
-  39 bits, or 656 billion possibilities. Case does not matter, and the hyphen is
-  optional.
-- **Five minutes**, from when it is shown.
-- **Single use.** It is consumed by the sign-in it completes.
-- **Destroyed after three wrong entries.** A PIN guessed at wrongly is gone; a
-  user who mistypes theirs three times opens the PIN URL again for a new one.
-  That is deliberate — see below.
-- **Bound to one Emby account.** A live PIN presented with somebody else's
-  username is refused, and refusing it does not spend it.
-- **Held in memory only.** Restarting Emby forgets every live PIN, which is
-  correct: they are worth minutes.
-- **Never logged, never in a URL.** The server log records that a PIN was issued
-  and for whom, never the PIN itself.
-
-### It inherits every guard an ordinary sign-in has
-
-The PIN endpoint is not a second way to authenticate anybody. It starts the
-**same browser flow** as `/emby/Sso/Start` — the same redirect, the same
-callback, the same checks — and differs only in what happens after all of them
-have passed. So a PIN is issued only to somebody who would have been signed in:
-the licence must be valid, the required group must be configured *and held*, the
-Emby account must already be stamped to this plugin (or be one this plugin is
-allowed to create), and the Authentik `sub` must match the account's recorded
-binding. If any of those would have refused the person, no PIN exists.
-
-Redeeming one is checked too: the licence, the required-group setting and the
-provider stamp are all re-checked at sign-in, and turning the PIN setting off
-stops PINs already issued from being redeemed as well as stopping new ones.
-
-### Why a few wrong entries destroy it, and what that costs
-
-A PIN is far weaker per guess than the 256-bit secret the browser flow uses
-internally, and it is typed into a field anyone on the network can reach. The
-defence that has to hold is that it **cannot be ground down**: because three
-wrong guesses consume the PIN, a guesser's entire chance against an issued PIN
-is 3 in 656 billion, no matter how fast they send guesses or how many usernames
-they spread across. Three rather than one costs 1.6 bits of the 39.3 and buys
-back the person typing eight characters with a television remote, for whom a
-single slip would otherwise mean repeating a whole browser sign-in.
-
-The property the plugin guarantees, and tests:
-
-> The only thing a PIN attempt can consume is the PIN issued to the very
-> username that attempt names. Nothing done to one account's PIN can refuse
-> anything to any other account, and nothing done to it can refuse any other
-> credential — browser sign-in and, if you enabled it, password sign-in are
-> untouched.
-
-There is deliberately **no server-wide PIN rate limit**, and PIN attempts are
-deliberately **not** charged to the provisioning throttle described below. Both
-would be worse than useless here: any aggregate ceiling is reachable by an
-unauthenticated stranger, and a reached ceiling is a refusal for whoever asks
-next — the exact denial of service that was removed from the provisioning
-throttle. A limit that lives on one secret cannot be turned into a weapon
-against a third party.
-
-What an attacker *can* do, stated plainly: somebody who knows a username can
-send PIN-shaped guesses at it and destroy that person's PIN each time one is
-issued, denying **that one person** the PIN route for as long as they keep it
-up. It affects nobody else and no other sign-in path, and allowing three
-attempts instead of one would not fix it — three guesses a second destroys a PIN
-as reliably as one. The alternative, not consuming on failure, would let the
-same attacker grind the PIN instead of denying it, and a credential that can be
-ground is a credential that is eventually guessed.
-
-Two things that are **not** a problem, and are tested:
-
-- A user's own password, typed on the TV by mistake, does not destroy their live
-  PIN. Only a value that is PIN-*shaped* counts as an attempt at a PIN.
-- Presenting somebody's PIN under a different username does not destroy it.
-
-### PIN versus app password
-
-Both let a TV app sign in. They are not the same bargain.
-
-| | One-time PIN | Authentik app password (direct grant) |
-|---|---|---|
-| Where it comes from | Issued by this server at the end of a full browser sign-in | Created by the user in Authentik, outside this plugin |
-| MFA | **Yes** — the browser sign-in that issued it did whatever MFA you enforce | **No** — a direct grant cannot do MFA at all |
-| Lifetime | 5 minutes | Until the user's chosen expiry, if they set one |
-| Reuse | Once | Every sign-in, indefinitely |
-| Strength per guess | ~39 bits, and one guess allowed per issuance | A long random token |
-| If it leaks | Worthless within minutes, and only if unused | Library access until it is revoked |
-| Typing on a remote | 8 characters | A long token |
-
-The app-password route **stays supported** and is unchanged; nothing here
-deprecates it. The honest comparison is that a PIN is weaker *per guess* than a
-token and stronger *everywhere else* — it is short-lived, single-use,
-account-bound, rate-limited by construction, and it is the only one of the two
-that carries multi-factor authentication onto the television.
-
-Note that the plain-HTTP refusal that applies to the direct grant does **not**
-apply to PINs, for the same reason it does not apply to the browser flow: there
-is no real password involved. A PIN is a value this server issued, single-use,
-and an eavesdropper who sees one sees it inside the request that is spending it.
-
----
-
-## Group-gated sign-in and automatic account creation
-
-Two things ship together here, and only one of them is optional.
-
-- **The group gate is not optional.** Every sign-in through this plugin —
-  browser or native, brand-new account or one that predates the plugin — is
-  allowed only if the identity Authentik returns carries the configured
-  *Groups claim* and that claim contains the *Required group*. With no required
-  group configured, nobody signs in at all (see "Upgrading an existing
-  install" above).
-- **Creating accounts is optional and off by default.** With *Automatically
-  create accounts for group holders* enabled and a *Template user* named, a
-  group holder who has no Emby account gets one, cloned from that template.
-
-### The four settings
-
-| Setting | What it does | Unset / empty |
-|---|---|---|
-| **Required group** | The Authentik group an identity must carry in the groups claim. Matched ordinal, case-insensitively, after trimming — the same rule usernames use. | **Refuses every SSO sign-in**, existing accounts included. Not a way to switch the gate off. |
-| **Groups claim** | The claim the group list is read out of. Defaults to `groups`. Authentik must be configured to emit it — including on the direct-grant flow, if native sign-in is enabled. | Falls back to `groups`. A token that carries no such claim at all is refused, and only the log says why. |
-| **Template user** | An existing Emby user whose **policy** — libraries, permissions, everything Emby calls access — is copied onto each account this plugin creates. | Automatic creation refuses; nothing is created. An existing user still signs in normally. |
-| **Automatically create accounts for group holders** | Off by default. Turning it on is the act that lets the plugin call Emby's `CreateUser` at all. | No account is ever created; an unknown username is refused exactly as it was before this feature existed. |
-
-### What a created account actually gets
-
-**The template's policy, not Emby's defaults.** This matters more than it
-sounds: a brand-new Emby user created by Emby's own defaults has access to
-every library. An account created by this plugin has exactly the access its
-template has, because the policy is built from the template *before* the
-account exists and handed to Emby as a constructor argument — there is no
-window in which the account exists with different rights.
-
-So **choose the template deliberately.** Whatever that user can see, every
-account provisioned from it can see. The usual answer is to create one
-ordinary account with the libraries you want new people to get and nominate
-that as the template.
-
-Some things are deliberately **not** inherited, whatever the template says:
-
-- **Administrator.** An administrator template does *not* produce
-  administrators. `IsAdministrator` is forced to `false` on both paths, at
-  construction. There is no moment at which the new account is an admin.
-- **Disabled.** `IsDisabled` is forced to `false`. The template is an
-  ordinary, sign-in-able Emby account that exists only to donate a policy, so
-  the right thing to do with it is to **disable it** once its library access
-  is set — and that must not produce disabled new accounts.
-- **The template's own login history.** `InvalidLoginAttemptCount` and
-  `LockedOutDate` are reset. They are not policy intent; inheriting them
-  would start an account part-way to a lockout, or locked out outright.
-- **The profile PIN.** The template's `ProfilePin` is a per-person secret;
-  handing every provisioned account a copy of it would be handing them each
-  other's. It is cleared.
-- **The obsolete local-password switch.** `EnableLocalPassword` (Emby's old
-  "easy password" feature) is cleared, because the credential it pairs with is
-  not copied — an account would otherwise carry an enabled local-password
-  switch with nothing behind it.
-
-The new account is stamped with this plugin as its authentication provider, so
-from that point Emby consults only Authentik for it (see "Emby stamps the
-provider that wins onto the user, permanently" above).
-
-One cosmetic asymmetry, called out so it is not filed as a bug: the browser
-path also copies the template's **display preferences** (`UserConfiguration` —
-subtitle mode, resume offsets, view order); the native path's account is
-created by Emby itself and gets Emby's defaults for those. Nothing that grants
-access differs between the two — the two fields in that structure that are not
-preferences, `ProfilePin` and `EnableLocalPassword`, end up identical either
-way. Two people provisioned on the same day may simply have different subtitle
-defaults depending on which client they first signed in from.
-
-### Losing the group
-
-The gate is re-evaluated on every sign-in, so removing someone from the group
-in Authentik removes their Emby access — **at their next sign-in**. It does not
-reach back and revoke an Emby access token that was already minted. If you need
-someone out *now*, disable their Emby account or delete their device/session in
-Dashboard → Devices as well as removing the group.
-
-### Brute-force protection: you need both brakes
-
-Opening the "unknown username" branch means an unauthenticated stranger can
-make this server forward a guessed password to Authentik. Emby's own lockout
-(`InvalidLoginAttemptCount`) lives on a user policy and therefore cannot help
-here — the whole point of this branch is that no such user exists yet. Two
-brakes cover it, and **both are required**:
-
-1. **The plugin's own throttle**, automatic and not configurable. It applies to
-   the native provisioning branch only — the browser flow never hands this
-   server a password to relay, so there is nothing there to brute-force.
-   - **A sign-in is refused only because of failures recorded against that same
-     username**, inside a **15-minute** window measured from that username's
-     first counted failure. Nothing anybody else does can refuse it. A stranger
-     spraying invented usernames cannot stop a first-time user who has their
-     password right — that is a guarantee with a test behind it, not a hope;
-   - the allowance is **10 failures per username**, dropping to **3 per
-     username** while more than 100 failures have been counted across all
-     usernames in the window (a "surge"). The surge tightens what any one name
-     can push at Authentik; it never closes the branch;
-   - **failures only**, and a success clears that username's own bucket, so a
-     new user who mistypes their password a few times is not locked out by
-     their own typos;
-   - a refusal by the throttle is **character-identical** to the ordinary
-     "this account is not set up on this server" — it must not tell an attacker
-     that a name was worth counting. Only the server log says a limit was hit;
-   - an attempt that failed because **Authentik could not be reached** is not
-     counted, so a provider outage during a mass first sign-in neither locks
-     individual newcomers out of their own retries nor raises a surge;
-   - configuration mistakes are not counted either — every refusal above is
-     decided before anything is sent anywhere;
-   - what this deliberately does **not** do is cap the total number of attempts
-     the branch may forward in a window. Earlier builds did (100, then the
-     branch closed for everyone), and that cap turned out to be a weapon: about
-     a hundred requests carrying random usernames — **no valid credential
-     needed** — shut first-time sign-in for every real user for 15 minutes,
-     exactly during the mass onboarding the branch exists to serve. Any
-     aggregate cap is reachable by an unauthenticated stranger, and a reached
-     cap is a refusal for whoever asks next, so the cap had to go and brake 2
-     below had to become non-negotiable. Per-source rate limiting belongs in
-     front of Emby (reverse proxy) — the plugin cannot see a client address at
-     all;
-   - one consequence to know: an attacker who knows the Authentik username of
-     someone **not yet onboarded** can spend that name's allowance and delay
-     that one person's first sign-in by up to 15 minutes (3 attempts during a
-     surge, 10 otherwise). It affects only that name and clears itself.
-
-2. **Authentik's own failed-login / reputation policy — this is required
-   configuration, not optional hardening.** Configure it on the flows this
-   plugin uses, the direct-grant flow especially. The plugin's throttle only
-   sees attempts that arrive through Emby; Authentik is the only side that sees
-   the browser flow's password *at all*, and the only side that can rate-limit
-   by source address (an Emby `IAuthenticationProvider` is handed a username
-   and a password and nothing else — no request, no headers, no client IP, so
-   per-source limiting is not something this plugin can do).
-
-### "Allow plain HTTP (testing only)" switches native sign-in off
-
-Ticking *Allow plain HTTP* and *Allow native apps to sign in with a password*
-at the same time is refused: native password sign-in is disabled for as long as
-plain HTTP is allowed, and the log says so. This is deliberate, and the
-asymmetry between the two paths is the point:
-
-- the **browser** flow's insecure mode risks token substitution, but the user's
-  password goes from their own browser to Authentik and this server never sees
-  it — so the escape hatch is still honoured there;
-- a **direct grant** hands this process every native client's real password and
-  re-transmits it. There is no setting combination in which this server will
-  put a password on the wire in cleartext.
-
-If you want native sign-in in a lab, give the lab HTTPS. (The plugin also
-refuses a token endpoint that is not HTTPS, whichever path is in use, even when
-the issuer itself was HTTPS.)
-
-
-## Troubleshooting
-
-The plugin logs under the category **`AuthentikSso`**, in Emby's own
-server log (Dashboard → Logs, or the log file in Emby's data directory —
-`embyserver.txt` on the linuxserver.io image). Diagnostic detail —
-exception messages, unreachable-endpoint causes, which validation step
-failed — is written there and **only** there, by design. The browser only
-ever sees one of a fixed set of short, generic sentences:
-
-| Message shown to the user | What it means | What to check |
-|---|---|---|
-| "Single sign-on is not configured on this server." | The plugin isn't configured (issuer URL, client ID or base URL missing); or the public base URL isn't HTTPS and plain HTTP hasn't been explicitly allowed; **or no required group is configured**, which refuses everyone; or auto-create is on with no template user; or the identity provider resolves to a private or loopback address and that has not been allowed. | Dashboard → Plugins → Authentik SSO: all required fields set, **including "Required group"**. The log distinguishes these — `no required group is configured` is the lockout described at the top of this document. If testing over HTTP, enable "Allow plain HTTP" (and note it disables native sign-in). If the log names a refused address, see "Allow an identity provider on a private or loopback address" in the settings table. |
-| "The sign-in provider could not be reached." | Authentik's discovery document or token endpoint could not be fetched. | Issuer URL is correct and reachable from the Emby server itself (not just your browser); check DNS/TLS/firewall between Emby and Authentik. |
-| "The sign-in provider rejected this sign-in." | Authentik returned an OAuth error on the callback, or an empty/malformed credential was submitted. | Check the Authentik provider/application logs for the same request; confirm the redirect URI matches exactly. |
-| "The sign-in response could not be verified." | The ID token failed validation — bad signature, wrong issuer, wrong audience, expired, or a nonce mismatch. | Server clocks in sync (Emby and Authentik); client ID matches the token's audience; issuer URL matches the token's `iss` exactly. |
-| "This sign-in attempt expired. Please try again." | The `state` value on the callback was unknown, already used, or too old (single-use, short TTL). | Usually a stale bookmark/back-button reuse — just start over from the sign-in URL. If it happens consistently, check for a reverse proxy caching or replaying the callback request. |
-| "This account is not set up on this server." | Deliberately indistinguishable to the user, and now one of several things: the username claim matched no existing Emby user and automatic creation is off; the token carried no groups claim; the identity did not hold the required group; the provisioning throttle is closed for that username; **the account is not assigned to this plugin as its login provider**; or **the identity does not match the `sub` the account is bound to, or the binding store could not be read or written**. | **Only the log tells them apart** — it says which, naming the configured claim rather than any group value. Then: confirm the Emby account exists (or that auto-create and a template user are configured); confirm Authentik emits the groups claim on the flow in use, direct grant included; confirm the user is in the required group; if the log says the throttle is closed, wait out the 15-minute window. |
-| "Password sign-in is disabled for this account." | A native app tried to sign in via direct grant, but either "Allow native apps to sign in with a password" is off, **or "Allow plain HTTP (testing only)" is on**, which disables native password sign-in entirely. The user-facing sentence is the same for both; the log says which. | Enable native sign-in in the plugin configuration if you want it, understanding the MFA trade-off above. If the log names plain HTTP, turn that off and serve the plugin over HTTPS — this server will not relay a password in cleartext. |
-| "This sign-in could not be completed in this browser. Please try signing in again." | `/emby/Sso/Start` sets a short-lived binding cookie that must come back unchanged on `/emby/Sso/Callback`. A reverse proxy sitting in front of Emby stripped or rewrote cookies on that path, or rewrote the path so the cookie's `Path` no longer covers `/emby/Sso/Callback`. | Check the log line next to this error: it distinguishes no cookie presented at all from a cookie that was presented but did not match. Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on both `/emby/Sso/Start` and `/emby/Sso/Callback`, and that it does not rewrite either path in a way that changes the cookie's directory. |
-
-**Note:** If the plugin's settings page renders oddly right after an update (for example, as an overlay on top of the plugin catalog instead of replacing the view), reload the Emby dashboard in your browser — Emby caches configuration pages, and the old version may still be in the browser's cache.
-
-If a user reports being unable to sign in with their old Emby password
-after using SSO once, that is expected — see "Emby stamps the provider...
-permanently" above. An administrator must reset that user's
-`AuthenticationProviderId` via `POST /emby/Users/{userId}/Policy`.
+   the version you downloaded. If the number is not the one you just
+   installed, the old DLL is still in place and Emby is still running it.
+
+**Install exactly one DLL, and it must be the merged one.** The build produces
+`Emby.Sso.dll` by merging (ILRepack) the plugin with its dependencies and
+internalizing their types, because Emby ships its own, different copy of
+`Microsoft.IdentityModel`. Dropping unmerged dependency DLLs next to the
+plugin puts two incompatible assembly identities in one load context and fails
+at runtime.
+
+Upgrading is the same three steps — but set *Required group* first, above.
+
+Detail, including what a fresh install must do immediately afterwards:
+[Installing and upgrading](docs/site/installing.md).
 
 ---
 
@@ -870,200 +258,21 @@ src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
 ```
 
 A build with no version given reports `0.0.0-dev`, deliberately: a DLL you
-built yourself should never look like a release in Emby's plugin list. To
-build one that names itself, pass the version in:
-
-```
-dotnet build -c Release -p:Version=1.4.0
-```
-
-That is all CI does — with the version taken from the tag.
-
-Run the protocol test suite (412 tests, no Emby server or network required —
-they run against a fake identity provider built from a locally generated
-RSA key). Note what it does and does not cover: the suite compiles the
-plugin's `Protocol/` layer only, so every decision — the group gate, the
-ordered provisioning preconditions, the throttle, token validation — is under
-test, while the Emby-facing shell that calls them (`Auth/`, `Api/`) is not,
-because those types reference `MediaBrowser.*` and need a running server:
+built yourself should never look like a release in Emby's plugin list. Pass
+`-p:Version=1.4.0` to build one that names itself, which is all CI does, with
+the version taken from the tag.
 
 ```
 dotnet test tests/Emby.Sso.Tests
 ```
 
----
+runs the protocol test suite — 560 tests, no Emby server or network required.
+It compiles the plugin's `Protocol/` layer only, so every decision is under
+test while the Emby-facing shell that calls them (`Auth/`, `Api/`) is not,
+because those types reference `MediaBrowser.*` and need a running server.
+That boundary is why so much of
+[What has and has not been verified](docs/site/verification-status.md) is
+about how Emby reacts rather than about what the plugin decides.
 
-## Cutting a release
-
-Releases are made by pushing a tag. There is nothing to build by hand and
-nothing to upload.
-
-```
-git tag -a v1.4.0 -m "What changed in this release."
-git push origin v1.4.0
-```
-
-Before the **first** release, and only once: generate the licence signing
-keypair and paste its public half into
-`src/Emby.Sso/Protocol/LicencePublicKey.cs`. See
-`tools/Emby.Sso.LicenceTool/README.md`. A build whose `LicencePublicKey.Jwk`
-is still empty refuses every single sign-on and says so in the server log —
-deliberately, because a build with no key cannot verify a licence and so
-cannot honestly accept one.
-
-The tag pipeline in `.gitlab-ci.yml` then, in order:
-
-1. runs the test suite. Every later job hangs off it through `needs:`, so a
-   tag cannot produce a release with a red suite behind it;
-2. builds `-c Release` with `-p:Version=1.4.0`, derived from the tag by
-   `ci/version.sh`. A tag that is not `vMAJOR.MINOR.PATCH` — optionally with a
-   `-rc.1`-style suffix — fails the build instead of quietly shipping
-   something;
-3. checks that `THIRD-PARTY-NOTICES` still names every assembly ILRepack
-   merges (`ci/verify-notices.sh`), so a new dependency cannot quietly turn a
-   release into a licence violation;
-4. checks the artifact with `ci/verify-artifact.sh` before it leaves the job.
-   The file must be over a megabyte, because the merged DLL is ~1.8 MB and the
-   unmerged one one directory away is ~108 KB, and it must carry
-   `1.4.0+<commit>` as its assembly informational version, which shows both
-   that the tag's version reached the assembly and that this file came from
-   this build;
-5. uploads the DLL, its `.sha256`, `LICENSE` and `THIRD-PARTY-NOTICES` to the
-   project's generic package registry under `emby-sso/1.4.0/`, which is what
-   gives them a permanent download URL. The last two are not optional: the
-   merged DLL physically contains a dozen MIT- and Apache-licensed libraries
-   and their notices have to travel with it;
-6. creates the GitLab Release for the tag, linking all four files as assets and
-   describing it with notes generated from the tag's own message and the
-   checksum.
-
-Write the annotated tag's message for the operator who will read it on the
-release page: it becomes the release notes' "What changed" section.
-
-An untagged push runs steps 1–4 only, and versions the build
-`0.0.0-dev.<short sha>`.
-
----
-
-## What hasn't been verified end-to-end
-
-The plugin's callback page (`/emby/Sso/Callback`) finishes a browser
-sign-in by writing an access token directly into the Emby web client's
-`localStorage` credential store (key `servercredentials3`), in the exact
-shape that store's own code produces, so the browser lands on the Emby
-home screen without a second login step. That shape was determined by
-reading Emby 4.9.5.0's shipped client JavaScript and verified end-to-end
-against a live server with `curl` — the authentication call, the token,
-and the token's acceptance by Emby's API were all directly observed. **The
-one thing that was not observed is the browser/`localStorage` behavior
-itself** — no browser was available in the environment where this was
-tested.
-
-### One-time PIN sign-in: never run inside Emby, and the config page is unchecked
-
-PIN sign-in is **built and unit-tested and has never run on a server.** The
-decisions are covered by the automated suite — how a PIN is generated, that it
-is single-use, account-bound, expiring and destroyed by a wrong guess, that a
-non-PIN value never spends one, that no account's PIN can be affected by
-anything done to another's, and that a PIN is accepted by the credential
-validator without the identity provider ever being contacted.
-
-What is **not** measured, and cannot be from here:
-
-- That Emby routes the new `/emby/Sso/Pin` route to this plugin's service at
-  all. It is declared exactly as the two existing routes are, with the same
-  `[Route]` and `[Unauthenticated]` attributes on a request DTO handled by the
-  same service class, so it either works the way they do or none of them do —
-  but no request has been made to it.
-- That a native Emby app actually accepts an eight-character PIN in its password
-  field and posts it unchanged. The redemption path is the same
-  `AuthenticateByName` path the handoff secret already uses, which was observed
-  working with `curl`, but no TV app has typed a PIN into it.
-- **That the configuration page still renders and saves.** The new checkbox and
-  the PIN URL are copied structurally from the fields beside them, with no new
-  markup shapes, but Emby 4.9's plugin page loader is fragile and this project
-  has broken it before. **An operator must open Dashboard → Plugins → Authentik
-  SSO after installing this build, confirm the page renders, tick and untick the
-  new setting, and confirm it saves.** If the page comes up blank, the cause is
-  the page, not the feature.
-
-### Group gating and automatic account creation: not exercised on a live server
-
-Everything in "Group-gated sign-in and automatic account creation" above is
-**built and unit-tested, but has never run inside Emby.** At the time of
-writing this build is installed on no server and no Authentik provider is
-configured for it. What that means concretely:
-
-- The decisions are covered by the automated suite: which identities the gate
-  admits, that an unset required group refuses before any credential is
-  forwarded, the order of the provisioning preconditions, the throttle's
-  buckets and windows, and ID-token validation.
-- How Emby *reacts* to them is reasoned from decompiling Emby's own assemblies
-  (4.9.5.0 as running, 4.9.1.90 reference assemblies) rather than observed.
-  That includes how an account created through the native path is finished off
-  by Emby, what a native client sees when the plugin refuses, and whether a
-  refused creation can leave a half-made account behind. The reasoning is
-  documented and, where it is inference rather than measurement, labelled as
-  such.
-- The full checklist of what remains unverified, and the steps to verify it
-  once an Authentik provider and a plugin install are available, is in
-  `docs/superpowers/verification/2026-08-30-group-gated-provisioning-verification.md`.
-
-Treat the first real sign-in on a new install as a test: do it with a
-throwaway account that holds the group, with the server log open, before you
-tell your users anything has changed.
-
-**On first sign-in, check that you land on the Emby home screen, not the
-login screen.** If you land on the login screen instead, the most likely
-causes, in order, are: the plugin's public base URL not matching the
-address your browser actually uses (reverse-proxy sub-paths are the usual
-culprit), or a future Emby client update changing the credential store's
-key or shape. Either way, sign-in through the plugin still completes on
-the server side — the account is not locked out — it's only the automatic
-hand-off into the already-signed-in home screen that would need a second
-look.
-
-### The licence check has not run inside Emby
-
-The decision itself is under test — 21 tests covering a licence signed by the
-wrong key, one for another server, an expired one, one with no expiry, one
-dated in the future, one edited after signing, `alg: none`, an HMAC-signed
-token keyed on the embedded public key, and an algorithm the build does not
-accept. Each guard was confirmed to have a test that fails when that guard is
-removed. A licence produced by the issuing tool was validated end-to-end
-against the plugin's own checker.
-
-What has **not** been observed:
-
-- **the configuration page still rendering and saving with the new Licence key
-  field.** Emby 4.9's plugin page is fragile — it strips script tags and needs
-  an exact `emby-scroller` + `data-controller` structure — so the new field's
-  markup is a byte-for-byte copy of an existing text field's and nothing
-  structural was touched. It still has to be looked at on a real server before
-  release;
-- **`IApplicationHost` being injectable into the plugin's constructor.** It is
-  registered as a single instance in `ApplicationHost.RegisterResources`, which
-  runs before `FindParts` builds plugins through the same container (both read
-  off a decompiled 4.9.5.0 server), and plugins are constructed by
-  `Container.GetInstance`, which auto-wires. If that were ever wrong the plugin
-  would fail to construct and Emby would log "Error creating Emby.Sso.Plugin" —
-  a loud failure, not a silent weakening;
-- **what `SystemId` looks like on the operator's own server.** It is read from
-  `IApplicationHost.SystemId`, which is the `ServerId` Emby logs at startup, but
-  the value on any particular server has not been read here. Take it from the
-  log, not from a guess.
-
-### The release pipeline has not published a release yet
-
-No tag has been pushed since the release jobs were written, so the download
-URLs above describe what the pipeline is built to produce rather than
-something already sitting on the server. What *has* been checked, locally and
-outside CI: the version derivation, the merged-artifact check, and the release
-notes were run as scripts against a real Release build, and the version in the
-tag was confirmed to land in the merged assembly's identity by reading the
-DLL's metadata back. What only a real pipeline run can confirm is GitLab's
-side of it — that the runner accepts the file, that the package upload and the
-Release are created, and that the asset links resolve for someone who is not
-signed in. Treat the first tag as a rehearsal: push `v0.1.0`, then download
-the DLL from the release page as an anonymous user and check its checksum
-before telling anyone the link exists.
+Releases are made by pushing a tag and nothing else:
+[Building from source](docs/site/building.md#cutting-a-release).
