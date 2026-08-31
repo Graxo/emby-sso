@@ -131,7 +131,7 @@ namespace Emby.Sso.Api
             // this one. They are two separate doors, and a callback can arrive
             // with a live pending login that was created while the licence was
             // still valid.
-            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, "/Sso/Start").ConfigureAwait(false);
+            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, SsoRoutes.StartPath).ConfigureAwait(false);
 
             if (licenceRefusal != null)
             {
@@ -269,7 +269,7 @@ namespace Emby.Sso.Api
             // Above the code exchange in particular: an unlicensed server must
             // not spend a user's authorization code, which is single-use, on a
             // flow it is about to refuse.
-            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, "/Sso/Callback").ConfigureAwait(false);
+            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, SsoRoutes.CallbackPath).ConfigureAwait(false);
 
             if (licenceRefusal != null)
             {
