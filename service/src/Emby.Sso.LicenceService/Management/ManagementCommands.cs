@@ -718,9 +718,17 @@ namespace Emby.Sso.LicenceService.Management
         {
             var who = string.IsNullOrWhiteSpace(code.Licensee) ? "(no licensee)" : code.Licensee;
 
-            return string.IsNullOrWhiteSpace(code.BuyerEmailOrNote)
-                || string.Equals(code.BuyerEmailOrNote, code.Licensee, StringComparison.OrdinalIgnoreCase)
-                ? who
+            if (string.IsNullOrWhiteSpace(code.BuyerEmailOrNote)
+                || string.Equals(code.BuyerEmailOrNote, code.Licensee, StringComparison.OrdinalIgnoreCase))
+            {
+                return who;
+            }
+
+            // Angle brackets for a buyer's address, parentheses for a note. A
+            // comp's `--note` lives in the same column as a buyer's email (see
+            // CodeSummary.BuyerEmailOrNote) and must not be dressed up as one.
+            return code.IsManual
+                ? who + " (" + code.BuyerEmailOrNote + ")"
                 : who + " <" + code.BuyerEmailOrNote + ">";
         }
 
