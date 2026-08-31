@@ -34,5 +34,17 @@ namespace Emby.Sso
         /// second way to authenticate anybody here, which is the point.
         /// </summary>
         public const string PinPath = "/sso/pin";
+
+        /// <summary>
+        /// The configuration page asks this what to show in the licence area:
+        /// this server's id, and where to buy. Admin-only, like the one below.
+        /// </summary>
+        public const string ActivationInfoPath = "/sso/activation";
+
+        /// <summary>
+        /// Redeems a code. Admin-only: it is the one route here that changes
+        /// what this server is licensed to do.
+        /// </summary>
+        public const string ActivatePath = "/sso/activate";
     }
 }

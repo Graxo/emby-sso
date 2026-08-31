@@ -24,7 +24,7 @@ namespace Emby.Sso.Api
     /// Nothing secret is returned even so: the server id is written to Emby's
     /// own log at every startup, and the purchase URL is built from it.
     /// </remarks>
-    [Route("/Sso/Activation", "GET")]
+    [Route(SsoRoutes.ActivationInfoPath, "GET")]
     [Authenticated(Roles = "Admin")]
     public class SsoActivationInfo : IReturn<ActivationInfoResult>
     {
@@ -45,7 +45,7 @@ namespace Emby.Sso.Api
     /// would be written into access logs and proxy logs, and never written to
     /// the server log.
     /// </remarks>
-    [Route("/Sso/Activate", "POST")]
+    [Route(SsoRoutes.ActivatePath, "POST")]
     [Authenticated(Roles = "Admin")]
     public class SsoActivate : IReturn<ActivationResponse>
     {

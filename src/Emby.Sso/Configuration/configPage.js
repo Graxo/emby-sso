@@ -14,7 +14,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
     // server id and the buy link are conveniences, and losing them must not
     // stop the rest of the page working.
     function showActivation(page) {
-        ApiClient.getJSON(ApiClient.getUrl('Sso/Activation')).then(function (info) {
+        ApiClient.getJSON(ApiClient.getUrl('sso/activation')).then(function (info) {
             page.querySelector('#serverId').textContent = info.ServerId || '';
 
             var buyLink = page.querySelector('#buyLink');
@@ -41,7 +41,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         // and a query string is written to access logs and proxy logs.
         ApiClient.ajax({
             type: 'POST',
-            url: ApiClient.getUrl('Sso/Activate'),
+            url: ApiClient.getUrl('sso/activate'),
             data: JSON.stringify({ Code: code }),
             contentType: 'application/json',
             dataType: 'json'
