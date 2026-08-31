@@ -108,6 +108,7 @@ minimum:
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | from the PayPal developer dashboard |
 | `PAYPAL_WEBHOOK_ID` | from the webhook you create in that dashboard. PayPal signs it into every message, so a wrong value fails every webhook closed |
 | `PAYPAL_CURRENCY` / `PAYPAL_PRICE` | what you are charging |
+| `PAYPAL_MINIMUM_AMOUNT` | the floor a captured payment must clear. **Required** — without it a payment of any size, including a penny, would buy a licence. Normally the same as `PAYPAL_PRICE` |
 
 Secrets belong in a `.env` file beside the compose file (mode 600), or in
 whatever secret store the host already uses — not in the compose file itself,
@@ -120,6 +121,16 @@ hand. See `email-delivery-checklist.md` before trusting a real send.
 ---
 
 ## 5. Start it
+
+**Pick a host port first.** The container listens on 8080 inside, but 8080 is a
+popular number — on the machine this was first run on it was already taken by
+sabnzbd, and the failure is `Bind for 0.0.0.0:8080 failed: port is already
+allocated`. Check before you start, and change the left-hand side of the port
+mapping if it is busy:
+
+```
+ss -tln | grep ':8080 ' && echo "8080 is taken, pick another"
+```
 
 ```
 docker compose up -d --build licence
@@ -162,7 +173,27 @@ wrong thing. That is the intended trade.
 
 ---
 
-## 7. Prove it works
+## 7. Codes for testers, comps, and rescues
+
+You do not need a payment to create a redemption code:
+
+```
+docker compose exec licence \
+  dotnet /app/Emby.Sso.LicenceService.dll issue-code \
+  --licensee "Tester - discord handle" --days 30
+```
+
+It prints the code once, stores only its hash, and records it in the same ledger
+a paid code goes to. Use it for testers, for a comp, or to rescue a sale whose
+code could not be delivered. `--activations` overrides how many servers it may
+be re-bound to.
+
+The other command is `healthcheck`, which is what the container's own HEALTHCHECK
+runs.
+
+---
+
+## 8. Prove it works
 
 1. `curl -fsS http://127.0.0.1:8080/healthz`
 2. Open `https://<your host>/buy` in a browser — the purchase page renders
