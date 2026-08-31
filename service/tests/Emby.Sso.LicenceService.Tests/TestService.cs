@@ -90,7 +90,14 @@ namespace Emby.Sso.LicenceService.Tests
 
         public ActivationService Activations { get; }
 
-        public PayPalWebhookHandler Webhooks(IPayPalCertificateSource certificates)
+        /// <summary>
+        /// The webhook handler. <paramref name="mail"/> is null by default, which
+        /// is the unconfigured service: no SMTP_HOST, no mailer, outbox only.
+        /// </summary>
+        public PayPalWebhookHandler Webhooks(
+            IPayPalCertificateSource certificates,
+            Delivery.CodeDeliveryQueue mail = null,
+            Microsoft.Extensions.Logging.ILogger<PayPalWebhookHandler> log = null)
         {
             return new PayPalWebhookHandler(
                 new PayPalWebhookVerifier(certificates, Options.PayPal),
@@ -98,7 +105,8 @@ namespace Emby.Sso.LicenceService.Tests
                 Outbox,
                 Options,
                 Clock,
-                NullLogger<PayPalWebhookHandler>.Instance);
+                log ?? NullLogger<PayPalWebhookHandler>.Instance,
+                mail);
         }
 
         /// <summary>Creates a paid code directly, for tests that are about activation rather than payment.</summary>

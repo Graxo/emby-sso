@@ -18,16 +18,20 @@ namespace Emby.Sso.LicenceService.Delivery
     /// lives on the same mounted volume as the signing key's data directory, and
     /// the vendor is expected to send each code and then delete its line.
     ///
-    /// It exists because a code has to reach the buyer somehow and this service
-    /// has no mail credentials. Every alternative has the same property - an
-    /// SMTP queue, a "here is your code" page, a support inbox - so the choice is
-    /// where the plaintext sits and for how long, not whether it exists. A file
-    /// the vendor prunes is the version where that is obvious.
+    /// It exists because a code has to reach the buyer somehow, and every
+    /// alternative has the same property - an SMTP queue, a "here is your code"
+    /// page, a support inbox - so the choice is where the plaintext sits and for
+    /// how long, not whether it exists. A file the vendor prunes is the version
+    /// where that is obvious.
     ///
-    /// Sending mail is the natural next implementation of this class. It is
-    /// deliberately not two implementations behind a switch today: a delivery
-    /// mode that can be left set to the wrong thing is how codes end up going
-    /// nowhere, or going somewhere worse.
+    /// Mail, when SMTP_HOST is set, is layered ON TOP of this rather than
+    /// instead of it. The append below happens first and unconditionally, and
+    /// the email is attempted afterwards; so the file is still the durable
+    /// record of every code this service has ever created, and an operator who
+    /// has not configured mail sees a file identical to the one they see today.
+    /// A successful send appends a second line - see RecordDelivered - which
+    /// names the code's hash tag and NOT the code, so that pruning is a decision
+    /// the operator can make from the file alone.
     /// </summary>
     public sealed class CodeOutbox
     {
@@ -57,7 +61,7 @@ namespace Emby.Sso.LicenceService.Delivery
                 throw new ArgumentNullException(nameof(entry));
             }
 
-            var line = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Dictionary<string, object>
+            AppendLine(new Dictionary<string, object>
             {
                 ["created_utc"] = LicenceFormat.Iso(entry.CreatedUtc),
                 ["delivered"] = false,
@@ -69,7 +73,40 @@ namespace Emby.Sso.LicenceService.Delivery
                 ["licence_days"] = entry.LicenceDays,
                 ["paypal_event_id"] = entry.PayPalEventId,
                 ["paypal_capture_id"] = entry.PayPalCaptureId,
-            }) + "\n");
+            });
+        }
+
+        /// <summary>
+        /// Notes that a code was emailed successfully, as a second line rather
+        /// than by rewriting the first.
+        ///
+        /// Append-only on purpose. Rewriting a line in place means reading a file
+        /// of live credentials into memory, writing it back, and having a window
+        /// where a crash truncates it - to save the operator a grep. It carries
+        /// the code's HASH TAG and never the code, so the receipt is safe to keep
+        /// after the code line has been pruned.
+        /// </summary>
+        public void RecordDelivered(OutboxEntry entry, string recipient, DateTimeOffset when)
+        {
+            if (entry == null)
+            {
+                throw new ArgumentNullException(nameof(entry));
+            }
+
+            AppendLine(new Dictionary<string, object>
+            {
+                ["record"] = "delivered",
+                ["delivered_utc"] = LicenceFormat.Iso(when),
+                ["delivered"] = true,
+                ["code_tag"] = RedemptionCode.LogTag(RedemptionCode.Hash(entry.Code)),
+                ["recipient"] = recipient,
+                ["paypal_capture_id"] = entry.PayPalCaptureId,
+            });
+        }
+
+        private void AppendLine(Dictionary<string, object> fields)
+        {
+            var line = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(fields) + "\n");
 
             var directory = System.IO.Path.GetDirectoryName(Path);
 

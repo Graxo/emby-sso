@@ -27,6 +27,15 @@
   <ItemGroup>
     <!-- The whole store. See README.md, "Why SQLite". -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+
+    <!-- SMTP. Chosen over System.Net.Mail.SmtpClient, which Microsoft's own
+         documentation marks as not recommended for new development, and which
+         cannot do implicit TLS at all: its EnableSsl is STARTTLS only, so a
+         465 relay is unreachable through it. MailKit does all three transport
+         modes, and its StartTls option FAILS CLOSED when a server does not
+         offer STARTTLS rather than quietly continuing in the clear. See
+         README.md, "Emailing the code". -->
+    <PackageReference Include="MailKit" Version="4.17.0" />
   </ItemGroup>
 
   <ItemGroup>

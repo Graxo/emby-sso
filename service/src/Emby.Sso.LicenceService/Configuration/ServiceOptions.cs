@@ -69,6 +69,13 @@ namespace Emby.Sso.LicenceService.Configuration
 
         public PayPalOptions PayPal { get; } = new PayPalOptions();
 
+        /// <summary>
+        /// How a redemption code reaches the person who paid for it. Entirely
+        /// optional: with no SMTP_HOST the service behaves exactly as it did
+        /// before mail existed, and the outbox is the delivery mechanism.
+        /// </summary>
+        public MailOptions Mail { get; } = new MailOptions();
+
         public string DatabasePath => Path.Combine(DataDirectory, "licences.db");
 
         public string LedgerPath => Path.Combine(DataDirectory, Licensing.LicenceFormat.LedgerFileName);
@@ -107,6 +114,37 @@ namespace Emby.Sso.LicenceService.Configuration
             options.PayPal.ProductName = Text(read, "PAYPAL_PRODUCT_NAME") ?? "Emby SSO plugin licence";
             options.PayPal.ReturnUrl = Text(read, "PAYPAL_RETURN_URL");
             options.PayPal.CancelUrl = Text(read, "PAYPAL_CANCEL_URL");
+
+            // SMTP_HOST alone decides whether mail is attempted at all. Every
+            // other SMTP_* variable is inert without it, and setting one of them
+            // without it is a configuration problem rather than a silent no-op -
+            // an operator who has filled in a password believes mail is on.
+            options.Mail.Host = Text(read, "SMTP_HOST");
+            options.Mail.Security = Text(read, "SMTP_SECURITY") ?? MailOptions.StartTls;
+            options.Mail.Port = Number(read, "SMTP_PORT", MailOptions.DefaultPortFor(options.Mail.Security));
+            options.Mail.Username = Text(read, "SMTP_USERNAME");
+
+            // Deliberately not trimmed and not Text(): a password may legitimately
+            // begin or end with a space, and silently eating one turns a working
+            // relay into an authentication failure nobody can see the cause of.
+            options.Mail.Password = read("SMTP_PASSWORD");
+
+            options.Mail.FromAddress = Text(read, "SMTP_FROM_ADDRESS");
+            options.Mail.FromName = Text(read, "SMTP_FROM_NAME") ?? MailOptions.DefaultFromName;
+            options.Mail.ReplyTo = Text(read, "SMTP_REPLY_TO");
+            options.Mail.Subject = Text(read, "SMTP_SUBJECT") ?? MailOptions.DefaultSubject;
+            options.Mail.ProductName = options.PayPal.ProductName;
+            options.Mail.SupportContact = Text(read, "SMTP_SUPPORT_CONTACT");
+            options.Mail.TemplatePath = Text(read, "SMTP_TEMPLATE_PATH");
+            options.Mail.TimeoutSeconds = Number(read, "SMTP_TIMEOUT_SECONDS", 30);
+            options.Mail.MaxAttempts = Number(read, "SMTP_MAX_ATTEMPTS", 4);
+            options.Mail.RetrySeconds = Number(read, "SMTP_RETRY_SECONDS", 30);
+
+            // Whoever the buyer should reply to if the code does not work. The
+            // reply-to if there is one, otherwise the from address: a message
+            // that tells a paying customer to contact nobody is worse than one
+            // that tells them to reply to it.
+            options.Mail.SupportContact ??= options.Mail.ReplyTo ?? options.Mail.FromAddress;
 
             // Derived rather than required twice. An operator who has told the
             // service its own address should not also have to spell out two URLs
@@ -174,6 +212,7 @@ namespace Emby.Sso.LicenceService.Configuration
 
             problems.AddRange(RateLimit.Problems());
             problems.AddRange(PayPal.Problems());
+            problems.AddRange(Mail.Problems());
 
             return problems;
         }
@@ -352,6 +391,257 @@ namespace Emby.Sso.LicenceService.Configuration
             }
 
             return problems;
+        }
+    }
+
+    /// <summary>
+    /// SMTP, and the shape of the message a buyer gets.
+    ///
+    /// THE WHOLE THING IS OPTIONAL AND OFF BY DEFAULT. Without SMTP_HOST the
+    /// service does exactly what it did before this existed: the code goes to
+    /// codes-outbox.jsonl and a human sends it. That was the operator's working
+    /// arrangement and turning mail on must be a decision they make, not a
+    /// default they discover.
+    ///
+    /// There is deliberately no way to turn certificate validation off, no way
+    /// to accept a self-signed relay certificate, and no "try STARTTLS and carry
+    /// on in the clear if it is not offered" mode - see MailSecurity. A switch
+    /// that downgrades a connection carrying a bearer credential is the same
+    /// class of thing as a switch that skips webhook verification, and this
+    /// service does not have one of those either.
+    /// </summary>
+    public sealed class MailOptions
+    {
+        /// <summary>Implicit TLS. The whole session is inside TLS from the first byte. Port 465.</summary>
+        public const string ImplicitTls = "tls";
+
+        /// <summary>
+        /// Plain connection upgraded by STARTTLS, and REQUIRED to upgrade: a
+        /// server that does not offer STARTTLS fails the send rather than
+        /// carrying on in the clear. Port 587. The default.
+        /// </summary>
+        public const string StartTls = "starttls";
+
+        /// <summary>
+        /// No encryption at all. Legitimate for a relay on localhost or a
+        /// trusted LAN, and a disclosure of every code sent through it anywhere
+        /// else. Port 25.
+        /// </summary>
+        public const string NoEncryption = "none";
+
+        public const string DefaultFromName = "Emby SSO licences";
+
+        public const string DefaultSubject = "Your Emby SSO plugin licence code";
+
+        public string Host { get; set; }
+
+        public int Port { get; set; } = 587;
+
+        public string Security { get; set; } = StartTls;
+
+        public string Username { get; set; }
+
+        /// <summary>
+        /// NEVER LOG THIS. It is treated the way PAYPAL_CLIENT_SECRET is: read
+        /// from the environment, handed to one library call, and named nowhere
+        /// else. <see cref="Describe"/> is what goes in a log line.
+        /// </summary>
+        public string Password { get; set; }
+
+        public string FromAddress { get; set; }
+
+        public string FromName { get; set; } = DefaultFromName;
+
+        public string ReplyTo { get; set; }
+
+        public string Subject { get; set; } = DefaultSubject;
+
+        /// <summary>
+        /// What the message calls the thing they bought. Not its own variable:
+        /// it is PAYPAL_PRODUCT_NAME, so the name on the PayPal receipt and the
+        /// name in the email cannot drift apart.
+        /// </summary>
+        public string ProductName { get; set; }
+
+        /// <summary>Where the message tells the buyer to go when the code does not work.</summary>
+        public string SupportContact { get; set; }
+
+        /// <summary>
+        /// An optional plain-text template file, so the wording can be changed
+        /// without rebuilding the image. Read once at startup; a missing file is
+        /// a refusal to start rather than a surprise at the first sale.
+        /// </summary>
+        public string TemplatePath { get; set; }
+
+        public int TimeoutSeconds { get; set; } = 30;
+
+        /// <summary>
+        /// How many times one code's message is attempted before the outbox is
+        /// left to be the delivery mechanism. Bounded, because an unbounded
+        /// retry against a permanently wrong host is a queue that never drains.
+        /// </summary>
+        public int MaxAttempts { get; set; } = 4;
+
+        /// <summary>The first backoff, quadrupled each attempt: 30s, 2m, 8m.</summary>
+        public int RetrySeconds { get; set; } = 30;
+
+        /// <summary>The one switch. Mail is attempted if and only if this is true.</summary>
+        public bool Configured => !string.IsNullOrWhiteSpace(Host);
+
+        public bool UsesAuthentication => !string.IsNullOrWhiteSpace(Username);
+
+        public bool IsEncrypted => !string.Equals(Security, NoEncryption, StringComparison.OrdinalIgnoreCase);
+
+        public static int DefaultPortFor(string security)
+        {
+            if (string.Equals(security, ImplicitTls, StringComparison.OrdinalIgnoreCase))
+            {
+                return 465;
+            }
+
+            if (string.Equals(security, NoEncryption, StringComparison.OrdinalIgnoreCase))
+            {
+                return 25;
+            }
+
+            return 587;
+        }
+
+        /// <summary>
+        /// What a log line is allowed to say about this configuration. The
+        /// password is not in it and there is no overload that puts it in.
+        /// </summary>
+        public string Describe()
+        {
+            if (!Configured)
+            {
+                return "off (no SMTP_HOST); codes go to the outbox only";
+            }
+
+            return Host + ":" + Port.ToString(CultureInfo.InvariantCulture)
+                + " " + (Security ?? "(unset)").ToLowerInvariant()
+                + (UsesAuthentication ? ", authenticating as " + Username : ", no authentication")
+                + ", from " + (FromAddress ?? "(unset)");
+        }
+
+        public IReadOnlyList<string> Problems()
+        {
+            var problems = new List<string>();
+
+            if (!Configured)
+            {
+                // Mail is off. Anything else set is almost certainly an operator
+                // who believes it is on, so say so rather than silently not
+                // sending: that failure mode looks exactly like working.
+                if (!string.IsNullOrWhiteSpace(FromAddress)
+                    || !string.IsNullOrWhiteSpace(Username)
+                    || !string.IsNullOrEmpty(Password)
+                    || !string.IsNullOrWhiteSpace(TemplatePath))
+                {
+                    problems.Add(
+                        "SMTP_HOST is not set but other SMTP_* variables are. Nothing would be emailed and codes "
+                        + "would go to the outbox only. Set SMTP_HOST, or unset the rest so it is clear that "
+                        + "delivery is by hand.");
+                }
+
+                return problems;
+            }
+
+            if (!string.Equals(Security, ImplicitTls, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Security, StartTls, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Security, NoEncryption, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add(
+                    "SMTP_SECURITY must be exactly 'tls' (implicit TLS, usually port 465), 'starttls' (usually "
+                    + "587) or 'none' (usually 25). It is '" + Security + "'.");
+            }
+
+            if (Port < 1 || Port > 65535)
+            {
+                problems.Add("SMTP_PORT must be a port number between 1 and 65535.");
+            }
+
+            if (string.IsNullOrWhiteSpace(FromAddress))
+            {
+                problems.Add("SMTP_FROM_ADDRESS is not set. A relay will refuse a message with no sender, and a "
+                    + "buyer needs somewhere to reply.");
+            }
+            else if (!LooksLikeAnAddress(FromAddress))
+            {
+                problems.Add("SMTP_FROM_ADDRESS does not look like an email address: '" + FromAddress + "'.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(ReplyTo) && !LooksLikeAnAddress(ReplyTo))
+            {
+                problems.Add("SMTP_REPLY_TO does not look like an email address: '" + ReplyTo + "'.");
+            }
+
+            if (UsesAuthentication && string.IsNullOrEmpty(Password))
+            {
+                problems.Add("SMTP_USERNAME is set but SMTP_PASSWORD is empty.");
+            }
+
+            if (!UsesAuthentication && !string.IsNullOrEmpty(Password))
+            {
+                problems.Add("SMTP_PASSWORD is set but SMTP_USERNAME is empty.");
+            }
+
+            if (UsesAuthentication && !IsEncrypted)
+            {
+                // Refused rather than warned. SMTP AUTH over a cleartext socket
+                // puts the relay password on the wire in base64 on every send,
+                // and an operator who wanted an unauthenticated local relay only
+                // has to unset the username.
+                problems.Add(
+                    "SMTP_SECURITY is 'none' and SMTP_USERNAME is set. That sends the relay password over the "
+                    + "network in the clear on every message. Use 'tls' or 'starttls', or unset SMTP_USERNAME "
+                    + "and SMTP_PASSWORD if the relay genuinely needs no login.");
+            }
+
+            if (TimeoutSeconds < 1 || TimeoutSeconds > 300)
+            {
+                problems.Add("SMTP_TIMEOUT_SECONDS must be between 1 and 300.");
+            }
+
+            if (MaxAttempts < 1 || MaxAttempts > 10)
+            {
+                problems.Add("SMTP_MAX_ATTEMPTS must be between 1 and 10. The outbox is the fallback after them.");
+            }
+
+            if (RetrySeconds < 1 || RetrySeconds > 3600)
+            {
+                problems.Add("SMTP_RETRY_SECONDS must be between 1 and 3600.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(TemplatePath) && !File.Exists(TemplatePath))
+            {
+                problems.Add(
+                    "SMTP_TEMPLATE_PATH points at '" + TemplatePath + "', which does not exist. Mount it into the "
+                    + "container, or unset it to use the built-in wording.");
+            }
+
+            return problems;
+        }
+
+        /// <summary>
+        /// Not RFC 5322. This exists to catch a pasted display name or a missing
+        /// domain at startup rather than at the first sale; the relay is the
+        /// authority on what it will accept.
+        /// </summary>
+        private static bool LooksLikeAnAddress(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            var at = value.IndexOf('@');
+
+            return at > 0
+                && at == value.LastIndexOf('@')
+                && at < value.Length - 1
+                && value.IndexOf(' ') < 0
+                && value.IndexOf('.', at) > at + 1;
         }
     }
 

@@ -96,7 +96,18 @@ namespace Emby.Sso.LicenceService
                 return ConfigurationError;
             }
 
-            var app = BuildApp(options, key, null);
+            WebApplication app;
+
+            try
+            {
+                app = BuildApp(options, key, null);
+            }
+            catch (MailTemplateException ex)
+            {
+                Console.Error.WriteLine("REFUSING TO START. " + ex.Message);
+
+                return ConfigurationError;
+            }
 
             app.Run();
 
@@ -140,7 +151,34 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(key);
             builder.Services.AddSingleton(new LicenceIssuer(key.Key));
             builder.Services.AddSingleton(new LicenceLedger(options.LedgerPath));
-            builder.Services.AddSingleton(new CodeOutbox(options.OutboxPath));
+            var outbox = new CodeOutbox(options.OutboxPath);
+
+            builder.Services.AddSingleton(outbox);
+            builder.Services.AddSingleton(options.Mail);
+
+            // Mail is registered ONLY when SMTP_HOST is set. With it unset there
+            // is no mailer, no background service and no queue in the container
+            // at all, and PayPalWebhookHandler's optional dependency stays null -
+            // so the unconfigured service is not "mail turned off", it is the
+            // same service it was before mail existed.
+            if (options.Mail.Configured)
+            {
+                // Loaded here rather than at first sale: a template with no
+                // {code} in it must stop the service starting, not produce one
+                // cheerful codeless email per customer. Main turns the exception
+                // into exit 78 alongside every other configuration refusal.
+                var template = CodeMessage.LoadTemplate(options.Mail.TemplatePath);
+
+                builder.Services.AddSingleton<ISmtpTransport>(new MailKitSmtpTransport(options.Mail));
+                builder.Services.AddSingleton(provider => new CodeMailer(
+                    options.Mail,
+                    provider.GetRequiredService<ISmtpTransport>(),
+                    outbox,
+                    template,
+                    provider.GetRequiredService<ILogger<CodeMailer>>()));
+                builder.Services.AddSingleton<CodeDeliveryQueue>();
+                builder.Services.AddHostedService(provider => provider.GetRequiredService<CodeDeliveryQueue>());
+            }
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<ActivationRateLimiter>();
             builder.Services.AddSingleton<CheckoutRateLimiter>();
@@ -174,6 +212,20 @@ namespace Emby.Sso.LicenceService
                 options.PayPal.IsLive ? "LIVE" : "sandbox",
                 options.ActivationsAllowed,
                 options.LicenceDays);
+
+            // The password is not in Describe() and there is no overload that
+            // puts it there.
+            log.LogInformation("code delivery by email: {Mail}", options.Mail.Describe());
+
+            if (options.Mail.Configured && !options.Mail.IsEncrypted)
+            {
+                log.LogWarning(
+                    "SMTP_SECURITY is 'none'. Every redemption code sent through {Host}:{Port} crosses the network "
+                    + "in the clear, and a redemption code is a bearer credential. This is only reasonable for a "
+                    + "relay on this machine or a network you own end to end.",
+                    options.Mail.Host,
+                    options.Mail.Port);
+            }
 
             MapRoutes(app, options);
 

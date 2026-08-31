@@ -20,7 +20,12 @@ namespace Emby.Sso.LicenceService.PayPal
     ///
     ///   verify -> parse -> is this a type we act on -> is the money enough ->
     ///   record the event and create the code in ONE transaction -> write the
-    ///   code where a human can send it.
+    ///   code where a human can send it -> hand it to the mailer, if there is
+    ///   one, and return regardless.
+    ///
+    /// THE LAST STEP CANNOT FAIL THIS REQUEST. Mail is queued, not sent, here:
+    /// see CodeDeliveryQueue for why a relay must never be on the critical path
+    /// of a webhook PayPal will retry if it does not get its 2xx.
     ///
     /// Nothing is created before verification, so an unsigned request cannot
     /// even cost a database row. The event id is the primary key of
@@ -40,6 +45,7 @@ namespace Emby.Sso.LicenceService.PayPal
         private readonly PayPalWebhookVerifier _verifier;
         private readonly LicenceStore _store;
         private readonly CodeOutbox _outbox;
+        private readonly CodeDeliveryQueue _mail;
         private readonly ServiceOptions _options;
         private readonly TimeProvider _time;
         private readonly ILogger<PayPalWebhookHandler> _log;
@@ -50,11 +56,17 @@ namespace Emby.Sso.LicenceService.PayPal
             CodeOutbox outbox,
             ServiceOptions options,
             TimeProvider time,
-            ILogger<PayPalWebhookHandler> log)
+            ILogger<PayPalWebhookHandler> log,
+            CodeDeliveryQueue mail = null)
         {
             _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _outbox = outbox ?? throw new ArgumentNullException(nameof(outbox));
+
+            // Null when SMTP_HOST is not set, which is the supported and default
+            // arrangement: the outbox above is then the whole of delivery, and
+            // this class behaves exactly as it did before mail existed.
+            _mail = mail;
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _time = time ?? throw new ArgumentNullException(nameof(time));
             _log = log ?? throw new ArgumentNullException(nameof(log));
@@ -174,19 +186,25 @@ namespace Emby.Sso.LicenceService.PayPal
                 return WebhookOutcome.Replay(record.Outcome.ToString());
             }
 
+            var entry = new OutboxEntry
+            {
+                CreatedUtc = now,
+                Code = code,
+                Licensee = licensee,
+                BuyerEmail = paypalEvent.BuyerEmail,
+                ActivationsAllowed = _options.ActivationsAllowed,
+                LicenceDays = _options.LicenceDays,
+                PayPalEventId = paypalEvent.EventId,
+                PayPalCaptureId = paypalEvent.CaptureId,
+            };
+
             try
             {
-                _outbox.Append(new OutboxEntry
-                {
-                    CreatedUtc = now,
-                    Code = code,
-                    Licensee = licensee,
-                    BuyerEmail = paypalEvent.BuyerEmail,
-                    ActivationsAllowed = _options.ActivationsAllowed,
-                    LicenceDays = _options.LicenceDays,
-                    PayPalEventId = paypalEvent.EventId,
-                    PayPalCaptureId = paypalEvent.CaptureId,
-                });
+                // ALWAYS, and always BEFORE any attempt to email it. This is the
+                // durable step; the email is a convenience layered on top of a
+                // code that is already written down. Doing it the other way round
+                // would mean a crash mid-send loses the only readable copy.
+                _outbox.Append(entry);
             }
             catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
             {
@@ -206,6 +224,18 @@ namespace Emby.Sso.LicenceService.PayPal
                     _outbox.Path);
 
                 return WebhookOutcome.Undeliverable(record.CodeId);
+            }
+
+            if (_mail != null && !_mail.Enqueue(entry))
+            {
+                // The background sender is backed up. Not a failure of the sale:
+                // the code is in the outbox, which is where it would have been
+                // with no mail configured at all.
+                _log.LogError(
+                    "the email queue is full, so code {Tag} was not handed to it. It is in {Outbox} - send it by "
+                    + "hand. A full queue means the relay is not accepting mail; check the log above it.",
+                    RedemptionCode.LogTag(hash),
+                    _outbox.Path);
             }
 
             _log.LogInformation(
