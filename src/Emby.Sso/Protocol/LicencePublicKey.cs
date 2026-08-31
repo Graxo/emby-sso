@@ -31,6 +31,6 @@ namespace Emby.Sso.Protocol
     /// </summary>
     internal static class LicencePublicKey
     {
-        public const string Jwk = "";
+        public const string Jwk = "{\"kty\":\"RSA\",\"n\":\"0sLbMum0TIALJnzGVTqcP1Bq02vp4xHvFJpBR7a5tRMnvBiLqwYrfptdpFLX9uVMoYtg_HYt0Es8Y1-UE5hTDciJ-AlyTuN9lPV5snaipWTXhSA2nLRk_fT5XXAe9yFN17fDzU1Iexl4dSrYPgRey8L_XmVgS7opGBlyfI42z8v8YaurYa1c05kbbriGAKvBjVywJYrMAG2gFj0Z5aOZm8q9ibVTiNltfw8GKDoDNtHq-jIAVAavoWo3tQRu_IuTDJI18Zy9mTiqfTwFxOqVlxQYUxnGXpvUZfgI_HsjjlWvX89W7Tr69-uBjUBMqjCUdnyJtJQvdrM_c3HeQax0FIr2r4MJVrVa-N4V3rEfIIMrDFlPy_c2X8wfSRSKlODSCtlJz2hYcQ5-pR_SNYBvGjBpmMJXnK6jQq1mfj9BNmG5JJgO1c5H-QVB5d4NIJLjsuWUiQr_Q_0rsPI29BpoXbRdMeI0L34qreSsfvvhvgXh8pAY77feKGFoX8-t6n07\",\"e\":\"AQAB\"}";
     }
 }
