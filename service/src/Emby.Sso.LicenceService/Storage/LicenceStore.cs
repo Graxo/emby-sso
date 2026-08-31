@@ -81,7 +81,39 @@ namespace Emby.Sso.LicenceService.Storage
                 Directory.CreateDirectory(directory);
             }
 
-            using var connection = Open();
+            SqliteConnection connection;
+
+            try
+            {
+                connection = Open();
+            }
+            catch (SqliteException ex)
+            {
+                // SQLite says "unable to open database file" for every reason a
+                // file cannot be opened, and the stack trace it comes with is
+                // eight frames of ADO.NET that name none of them. In a container
+                // the reason is almost always the same one: the mounted data
+                // directory belongs to somebody else, and this process is not
+                // root. SQLite needs to CREATE files here - the database, and
+                // its -wal and -shm siblings - so being able to read the
+                // directory is not enough.
+                //
+                // Say which directory, and which user has to own it, because
+                // that is the whole of the fix and the operator cannot see this
+                // process's uid from the host.
+                throw new InvalidOperationException(
+                    "The licence store at " + Path + " could not be opened: " + ex.Message + Environment.NewLine +
+                    "The directory " + (directory ?? ".") + " must be writable by the user this service runs as, " +
+                    "which in the shipped image is uid 5678. In Docker that means the HOST directory you mounted " +
+                    "there, which is a different thing from the path inside the container: " +
+                    "`sudo chown -R 5678:5678 <the host directory>`." +
+                    Environment.NewLine +
+                    "See service/docs/first-run.md.",
+                    ex);
+            }
+
+            using (connection)
+            {
 
             // WAL is a property of the file, set once and persistent. A reader
             // (the health check, a support query) then never blocks the writer.
@@ -143,6 +175,7 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     outcome          TEXT NOT NULL,
     code_id          INTEGER
 );");
+            }
         }
 
         /// <summary>Cheap proof that the volume is mounted and writable, for /healthz.</summary>

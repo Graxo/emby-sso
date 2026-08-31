@@ -66,6 +66,20 @@ sudo chmod 700 /srv/emby-sso/secrets
 the outbox of codes waiting to be emailed. **Back it up.** Losing it loses your
 record of every customer.
 
+!!! warning "Whichever directory you mount, uid 5678 must own it"
+    These paths are only a suggestion — mount the data volume wherever suits the
+    host, including a relative `./data` beside the compose file. But **the host
+    directory you mount must be owned by uid 5678**, whatever it is called.
+
+    It is not enough for the container to be able to read it. SQLite creates the
+    database *and* its `-wal` and `-shm` siblings, so the directory itself has to
+    be writable, and the service runs as a non-root user that cannot chown it.
+
+    Getting this wrong is the most likely first failure, and until recently the
+    only symptom was `SQLite Error 14: 'unable to open database file'` over eight
+    frames of ADO.NET that named neither the directory nor the user. The service
+    now says which directory and which uid instead.
+
 ---
 
 ## 3. Copy the key to the server
