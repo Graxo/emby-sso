@@ -214,6 +214,30 @@
       </div>
 
       <div class="inputContainer">
+        <label>This server's id</label>
+        <p id="serverId" style="user-select: all; font-family: monospace;"></p>
+        <div class="fieldDescription">A licence is issued for this id. It is not a secret.</div>
+      </div>
+
+      <div class="inputContainer">
+        <label>Buy a licence</label>
+        <p><a id="buyLink" href="#" target="_blank" rel="noopener noreferrer">Open the licence shop for this server</a></p>
+      </div>
+
+      <div class="inputContainer">
+        <label for="redemptionCode">Redemption code</label>
+        <input is="emby-input" type="text" id="redemptionCode" />
+        <div class="fieldDescription">Paste the code you were given, then press Activate.</div>
+      </div>
+
+      <div class="inputContainer">
+        <button is="emby-button" type="button" id="activateButton" class="raised block">
+          <span>Activate</span>
+        </button>
+        <div class="fieldDescription" id="activationResult"></div>
+      </div>
+
+      <div class="inputContainer">
         <label>Redirect URI to configure in Authentik</label>
         <p id="redirectUri" style="user-select: all; font-family: monospace;"></p>
       </div>

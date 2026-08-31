@@ -71,6 +71,30 @@ namespace Emby.Sso.Configuration
         /// </summary>
         public string LicenceKey { get; set; } = string.Empty;
 
+        /// <summary>
+        /// An override for the vendor's activation service, for testing a
+        /// service before it is live. Empty - the normal state - means
+        /// <see cref="Protocol.ActivationEndpoint.DefaultServiceBase"/>, the
+        /// address compiled into this build.
+        ///
+        /// DELIBERATELY NOT ON THE CONFIGURATION PAGE. It is a vendor's testing
+        /// knob, not an operator setting, and the configuration page is the
+        /// most fragile thing in this plugin; a field nobody needs is a field
+        /// that can only break it. Set it by editing
+        /// <c>plugins/configurations/Emby.Sso.xml</c> and restarting Emby. The
+        /// page round-trips this value untouched, because it reads the whole
+        /// configuration object, edits the fields it knows and writes the whole
+        /// object back.
+        ///
+        /// An override IS SAFE, and that is not an accident: whatever address
+        /// this names, the licence that comes back is verified against the
+        /// public key compiled into this build and against this server's own id
+        /// before it is stored (see <see cref="Protocol.ActivationClient"/>), so
+        /// pointing it at a hostile server yields a refusal and nothing else.
+        /// It must still be HTTPS - the redemption code is a bearer secret.
+        /// </summary>
+        public string ActivationServiceUrl { get; set; } = string.Empty;
+
         public bool IsConfigured =>
             !string.IsNullOrWhiteSpace(IssuerUrl) &&
             !string.IsNullOrWhiteSpace(ClientId) &&

@@ -10,6 +10,61 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#pinUrl').textContent = base + '/emby/Sso/Pin';
     }
 
+    // Admin-only endpoints on this plugin's own service. Fails quietly: the
+    // server id and the buy link are conveniences, and losing them must not
+    // stop the rest of the page working.
+    function showActivation(page) {
+        ApiClient.getJSON(ApiClient.getUrl('Sso/Activation')).then(function (info) {
+            page.querySelector('#serverId').textContent = info.ServerId || '';
+
+            var buyLink = page.querySelector('#buyLink');
+            buyLink.href = info.BuyUrl || '#';
+            buyLink.style.display = info.BuyUrl ? '' : 'none';
+        }, function () {
+        });
+    }
+
+    function activate(page) {
+        var codeField = page.querySelector('#redemptionCode');
+        var result = page.querySelector('#activationResult');
+        var code = codeField.value.trim();
+
+        if (!code) {
+            result.textContent = 'Enter the redemption code you were given.';
+            return;
+        }
+
+        result.textContent = 'Contacting the licensing service...';
+        loading.show();
+
+        // The code goes in the body, never in the URL: it is a bearer secret,
+        // and a query string is written to access logs and proxy logs.
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('Sso/Activate'),
+            data: JSON.stringify({ Code: code }),
+            contentType: 'application/json',
+            dataType: 'json'
+        }).then(function (response) {
+            loading.hide();
+
+            // textContent, not innerHTML: this is a sentence, not markup.
+            result.textContent = response.Message || '';
+
+            if (response.Activated) {
+                // The server has already stored it. Filling the field in too
+                // stops a later Save from writing the stale field value back
+                // over the licence that was just activated.
+                page.querySelector('#licenceKey').value = response.LicenceKey || '';
+                codeField.value = '';
+            }
+        }).catch(function (err) {
+            loading.hide();
+            result.textContent = 'The activation request could not be completed.';
+            Dashboard.processErrorResponse(err);
+        });
+    }
+
     function loadPage(page, config) {
         page.querySelector('#issuerUrl').value = config.IssuerUrl || '';
         page.querySelector('#clientId').value = config.ClientId || '';
@@ -27,7 +82,9 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#templateUserName').value = config.TemplateUserName || '';
         page.querySelector('#enableAutoCreate').checked = config.EnableAutoCreate === true;
         page.querySelector('#licenceKey').value = config.LicenceKey || '';
+        page.querySelector('#activationResult').textContent = '';
         showUrls(page, config.EmbyPublicBaseUrl);
+        showActivation(page);
 
         loading.hide();
     }
@@ -81,6 +138,10 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         BaseView.apply(this, arguments);
 
         view.querySelector('form').addEventListener('submit', onSubmit);
+
+        view.querySelector('#activateButton').addEventListener('click', function () {
+            activate(view);
+        });
     }
 
     Object.assign(View.prototype, BaseView.prototype);

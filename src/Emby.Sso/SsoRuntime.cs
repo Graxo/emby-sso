@@ -1,5 +1,7 @@
 using System;
 using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using Emby.Sso.Configuration;
 using Emby.Sso.Protocol;
 
@@ -42,6 +44,43 @@ namespace Emby.Sso
                 Timeout = TimeSpan.FromSeconds(20),
             };
         }
+
+        /// <summary>
+        /// A SECOND client, used by exactly one thing: an administrator pressing
+        /// Activate on the configuration page.
+        ///
+        /// Its own instance rather than a share of <see cref="Http"/> because
+        /// the two want different timeouts and, more importantly, because the
+        /// separation is the point - nothing on a sign-in path may ever reach
+        /// this client. The activation call happens once, from the settings
+        /// page; if the vendor's service is down, or gone forever, sign-ins are
+        /// entirely unaffected, because the licence check is offline from the
+        /// moment the licence is stored.
+        ///
+        /// It goes through the SAME <see cref="OutboundGuardHandler"/> with the
+        /// SAME allowance, so an activation service address cannot be used to
+        /// reach something on this server's own network any more than an issuer
+        /// URL can. One consequence, deliberately accepted: pointing the
+        /// activation override at a service on localhost or a LAN address for
+        /// testing needs the private-address setting ticked, exactly as a
+        /// private identity provider does.
+        ///
+        /// A short timeout, because somebody is watching the page.
+        /// </summary>
+        private static readonly HttpClient ActivationHttp = CreateActivationHttpClient();
+
+        private static HttpClient CreateActivationHttpClient()
+        {
+            var transport = new HttpClientHandler { AllowAutoRedirect = false };
+
+            return new HttpClient(new OutboundGuardHandler(
+                transport,
+                () => Configuration?.AllowPrivateNetworkProvider == true))
+            {
+                Timeout = TimeSpan.FromSeconds(15),
+            };
+        }
+
         private static readonly object ClientLock = new object();
 
         private static OidcClient _client;
@@ -84,6 +123,65 @@ namespace Emby.Sso
         /// is the fail-closed direction. See <see cref="Plugin.ServerId"/>.
         /// </summary>
         public static string ServerId => Plugin.Instance?.ServerId;
+
+        /// <summary>
+        /// This build's informational version, which the activation request
+        /// carries so the vendor can tell which plugin asked. Read off the
+        /// assembly rather than from configuration; "unknown" when the attribute
+        /// is absent, which only a build nobody produced with the project file
+        /// would be.
+        /// </summary>
+        public static string PluginVersion
+        {
+            get
+            {
+                var attribute = typeof(SsoRuntime).Assembly
+                    .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+
+                return attribute.Length > 0
+                    ? ((System.Reflection.AssemblyInformationalVersionAttribute)attribute[0]).InformationalVersion
+                    : "unknown";
+            }
+        }
+
+        /// <summary>
+        /// Redeems a code at the vendor's activation service. The ONLY caller is
+        /// <c>Api/ActivationService</c>, reached by an administrator pressing
+        /// Activate; see <see cref="ActivationHttp"/> and
+        /// <see cref="Protocol.ActivationClient"/> for why nothing on a sign-in
+        /// path may ever call it, and why the licence that comes back is
+        /// verified here before anybody stores it.
+        /// </summary>
+        public static Task<ActivationResult> ActivateAsync(string code, CancellationToken cancellationToken)
+        {
+            // One read of Configuration, so a settings save racing this call
+            // cannot have the address come from one configuration and the rest
+            // from another.
+            var configuration = Configuration;
+
+            return ActivationClient.ActivateAsync(
+                ActivationHttp,
+                ActivationEndpoint.Resolve(configuration?.ActivationServiceUrl),
+                code,
+                ServerId,
+                PluginVersion,
+                LicencePublicKey.Jwk,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// The purchase link the configuration page shows, carrying this
+        /// server's id so the shop does not have to ask for it. Null when there
+        /// is no server id or no usable service address, and the page then
+        /// shows no link rather than a broken one.
+        /// </summary>
+        public static string BuyUrl()
+        {
+            return ActivationEndpoint.BuildBuyUrl(
+                ActivationEndpoint.Resolve(Configuration?.ActivationServiceUrl),
+                ServerId);
+        }
 
         private static readonly object SubjectBindingLock = new object();
         private static SubjectBindingStore _subjectBindings;
