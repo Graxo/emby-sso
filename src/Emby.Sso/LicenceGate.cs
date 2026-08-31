@@ -73,12 +73,19 @@ namespace Emby.Sso
                 // whose cause is not a secret, and an operator who cannot tell
                 // it from an ordinary sign-in failure will spend their time
                 // debugging the identity provider instead.
+                // The server id is in the message on purpose. A licence names one
+                // server, so it is the first thing whoever issues licences will
+                // ask for, and somebody who has just installed the plugin and
+                // been refused should not have to go and find it. It is not a
+                // secret: Emby writes it to this same log at every startup.
                 logger.Error(
                     "SSO refused at {0}: the plugin licence is not valid ({1}). {2}. "
+                    + "This server's id is {3} - a licence has to be issued for it. "
                     + "Existing sessions are unaffected and Emby's own accounts still sign in normally.",
                     door,
                     status.Outcome,
-                    LogSafeText.Flatten(status.Detail));
+                    LogSafeText.Flatten(status.Detail),
+                    LogSafeText.Flatten(SsoRuntime.ServerId));
 
                 return SsoErrors.LicenceInvalid;
             }
