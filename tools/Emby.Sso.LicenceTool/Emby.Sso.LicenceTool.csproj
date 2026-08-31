@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The vendor's licence-issuing tool. It is NOT part of the plugin and must
+       never become part of it: it holds no reference to src/Emby.Sso, nothing
+       in the plugin references it, and ILRepack merges only the plugin's own
+       output, so no code here can reach a shipped DLL. It is in the solution
+       purely so that CI compiles it under the same zero-warnings rule as
+       everything else - a signing tool that has quietly stopped building is a
+       signing tool nobody can issue a licence with. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Emby.Sso.LicenceTool</AssemblyName>
+    <RootNamespace>Emby.Sso.LicenceTool</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same library that validates the licence in the plugin, so the token
+         this mints and the token that is checked cannot drift apart. -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
+  </ItemGroup>
+
+</Project>

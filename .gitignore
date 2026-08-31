@@ -8,3 +8,13 @@ artifacts/
 # CI build staging and NuGet package cache
 dist/
 .nuget/
+
+# Licence signing keys. The issuing tool refuses to write one inside a git
+# working tree at all (tools/Emby.Sso.LicenceTool/README.md); this is the
+# second line of defence, because a private key that reaches a commit has to
+# be treated as leaked and every licence issued with it reissued.
+licence-signing-key.private.json
+*.private.json
+*.pem
+*.p12
+*.pfx
