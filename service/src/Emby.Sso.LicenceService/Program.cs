@@ -56,11 +56,12 @@ namespace Emby.Sso.LicenceService
         {
             if (args.Length > 0)
             {
-                // The management commands. All of them need a shell on this box,
-                // which is the only authentication story this service can
-                // honestly offer for reading a customer list or stopping a code
-                // working - see ManagementCommands. None of them is an HTTP
-                // route and none should become one.
+                // The management commands. All of them need a shell on this
+                // box, which is the strongest authentication this service has -
+                // see ManagementCommands. The admin page reaches the same logic
+                // over HTTP behind a password, and exists only when one is
+                // configured; these keep working whether it is or not, and are
+                // what is left when it is turned off.
                 switch (args[0])
                 {
                     case "issue-code":

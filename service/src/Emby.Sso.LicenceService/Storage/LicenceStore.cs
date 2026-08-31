@@ -537,11 +537,12 @@ CREATE TABLE IF NOT EXISTS webhook_events (
         /// other way. Recorded with source 'manual' so the vendor can tell those
         /// apart from sales when reconciling against PayPal.
         ///
-        /// Reached only from the `issue-code` command line, which means somebody
-        /// with a shell on this box. There is no HTTP route to it, because an
-        /// endpoint that creates codes needs an authentication story and the only
-        /// honest one for a service this size is "you have the shell or you do
-        /// not".
+        /// Reached from `issue-code` on the command line, and from the admin
+        /// page's Issue form when one is configured - both through
+        /// Management.CodeIssuing, which is the only caller that should exist.
+        /// The command needs a shell on this box; the page needs the admin
+        /// password, which is the whole barrier in front of it and is why
+        /// Admin.AdminEndpoints is written the way it is.
         /// </summary>
         public long CreateManualCode(
             string codeHash,

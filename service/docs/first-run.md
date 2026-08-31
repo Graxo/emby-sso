@@ -139,6 +139,10 @@ Email is **off** until `SMTP_HOST` is set, and off is a working configuration:
 paid codes land in `/srv/emby-sso/data/codes-outbox.jsonl` and you send them by
 hand. See `email-delivery-checklist.md` before trusting a real send.
 
+The admin page is **off** until `ADMIN_PASSWORD_HASH` is set, and off means
+there is no `/admin` at all — no login form, no route. Leave it off until you
+have read step 10.
+
 ---
 
 ## 5. Start it
@@ -256,9 +260,9 @@ be re-bound to.
 ## 8. Running it day to day
 
 These are the commands you will actually type. All of them are on the same
-binary, all take `docker compose exec`, and none of them is an HTTP endpoint —
-there is no admin page on this service on purpose, because it holds your signing
-key. Set this once and the rest of the page is short:
+binary and all take `docker compose exec`. Everything here is also available as
+a page in a browser — see step 10 — which is **off** until you turn it on. Set
+this alias once and the rest of the page is short:
 
 ```
 alias licence='docker compose exec licence dotnet /app/Emby.Sso.LicenceService.dll'
@@ -362,3 +366,82 @@ runs.
     path are unverified against the real services — there were no credentials
     where this was written, and nothing simulated a success. The two checklists
     exist to close that, and they tell you the log lines to expect.
+
+---
+
+## 10. The admin page in a browser (optional)
+
+Everything in step 8 is also a page at `https://<your host>/admin`. It is **off
+by default and there is no page at all until you set a password** — `/admin`
+answers 404 exactly the way `/nonsense` does.
+
+!!! danger "Turning this on puts a door on the internet, in front of your signing key"
+    Whoever gets through that page can issue a licence for any Emby server, for
+    any length of time, as many as they like — and **nothing recalls one**,
+    because the plugin checks its licence offline and never contacts this
+    service. There is no second factor and no allowlist. The password is the
+    whole barrier.
+
+    Two safer arrangements exist if you would rather have them: bind the
+    container to `127.0.0.1` and reach it through `ssh -L
+    8080:127.0.0.1:8080 you@host`, or put an IP allowlist in front of `/admin`
+    at your reverse proxy. Both cost you something in convenience and neither
+    needs a change to this service.
+
+### Turn it on
+
+```
+licence hash-password
+```
+
+Type the password, press enter. It is read from **stdin**, so it does not reach
+your shell history or the process list. You get one line:
+
+```
+ADMIN_PASSWORD_HASH=pbkdf2-sha256$210000$Xy...==$q7...=
+```
+
+Put it in `.env`, `docker compose up -d licence`, and open
+`https://<your host>/admin`.
+
+Use a long random password from your password manager, and keep it only there.
+Sixteen characters is the minimum the service will accept; it is a floor, not
+advice. There is no way to recover the password from the line above, and no way
+to recover it from the service.
+
+### Turn it off
+
+Delete the `ADMIN_PASSWORD_HASH` line and restart. The routes stop existing.
+Nothing else changes: the commands in step 8, the buy page and activation carry
+on exactly as before.
+
+### What to expect from it
+
+* The same five jobs as step 8: list codes, show one, void one, issue one, and
+  work through the outbox.
+* **No code the store holds by hash is ever shown**, on any page. A code you
+  *issue* is shown once, on the page straight after the form, and never again —
+  copy it there and then. The same is true of reading one back out of the
+  outbox.
+* **Voiding tells you what it cannot do before you click**, not after: how many
+  servers already hold a licence from that code and the date they stop working.
+* Getting the password wrong buys a wait that doubles — two seconds, four,
+  eight — and **never locks you out**, because you are the only person who could
+  unlock it.
+* Every sign-in, failed sign-in, issue and void is recorded in
+  `/srv/emby-sso/data/admin-audit.jsonl` as well as in the log. It never holds
+  a code or the password.
+
+### If it will not let you in
+
+* **The page loads but the password is refused, and you are sure it is right.**
+  Check you have not set both `ADMIN_PASSWORD_HASH` and `ADMIN_PASSWORD` — the
+  service refuses to start on that, so check `docker compose logs licence`.
+* **The password is accepted and you land back on the login page.** The cookie
+  is `Secure`, so the page only works over **https**. Reaching it over plain
+  http means the browser never sends the session back.
+* **`/admin` is a 404.** `ADMIN_PASSWORD_HASH` is not set in the environment the
+  container actually has. `docker compose exec licence env | grep ADMIN_` will
+  tell you.
+* **The service will not start at all.** It says which variable and why; see
+  step 6.

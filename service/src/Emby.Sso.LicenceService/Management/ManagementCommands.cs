@@ -17,14 +17,19 @@ namespace Emby.Sso.LicenceService.Management
     /// produces: who has a code, what is this one, stop that one working, and
     /// which sale has not reached its buyer.
     ///
-    /// WHY THESE ARE COMMANDS AND NOT ROUTES. This service is on the internet
-    /// and holds the signing key. An admin HTTP surface on it needs
-    /// authentication, sessions, CSRF, an audit trail and a way to be sure a
-    /// bug in any of that does not expose the key - a far larger thing to get
-    /// right than a command that requires a shell on the box. Shell access here
-    /// is already total access, so a command adds no authority that an attacker
-    /// with a shell did not already have, and it is the same reasoning that
-    /// keeps `issue-code` off HTTP.
+    /// THESE ARE COMMANDS FIRST, AND A PAGE SECOND. A command needs a shell on
+    /// the box, and shell access here is already total access, so it adds no
+    /// authority an attacker with a shell did not already have. That is why
+    /// these came first and why they still work with the page turned off.
+    ///
+    /// There is now also an admin page over the same logic - see
+    /// Admin.AdminEndpoints - because the operator asked for one and will not
+    /// use a terminal. It is OFF unless a password is configured, and it does
+    /// not reimplement anything here: the lookup, the void wording, the
+    /// filtering and the issuing all live in CodeLookup, VoidExplanation,
+    /// CodeInventory and CodeIssuing, which both front ends call. Anything with
+    /// judgement in it that gets added here belongs in one of those, or the two
+    /// will start telling the operator different things.
     ///
     /// TWO RULES HOLD ACROSS ALL OF THEM.
     ///

@@ -68,6 +68,11 @@ What follows from that:
   licence can ever be issued for the builds already in the field.
 - **Keep the offline copy the master.** This service should get a copy of the
   key, not the only one.
+- **The admin page, if you turn it on, is a second front door to all of that.**
+  Not to the key itself — it cannot read it — but to issuing licences with it,
+  which is most of what having the key is worth. It is off by default and it
+  does not exist until a password is set. Read *The admin page* before setting
+  one, and if you can live with an SSH tunnel or an IP allowlist instead, do.
 
 ---
 
@@ -83,11 +88,20 @@ What follows from that:
 | `POST /v1/checkout` | anything wanting JSON | The same as `/buy/start`, answering `{orderId, approveUrl}`. |
 | `POST /paypal/webhook` | PayPal → here | **Signature verified.** The only thing that creates a code. |
 | `GET /healthz` | your monitoring | Store writable, which key is loaded, sandbox or live. |
+| `/admin/*` | you, in a browser | **Only if `ADMIN_PASSWORD_HASH` is set.** See *The admin page* below. |
 
-There are no admin endpoints, deliberately. Everything a vendor does to what
-they have sold is a command on this same binary — `issue-code`, `list-codes`,
-`show-code`, `void-code`, `list-outbox` — run with `docker compose exec`. See
-*Managing what you have sold*.
+Everything a vendor does to what they have sold is available two ways: as a
+command on this same binary — `issue-code`, `list-codes`, `show-code`,
+`void-code`, `list-outbox`, run with `docker compose exec` — and, if you turn it
+on, as a page at `/admin`. They are one implementation with two front ends;
+neither can do anything the other cannot, and neither can show you a code the
+store holds only as a hash.
+
+**With `ADMIN_PASSWORD_HASH` unset there is no `/admin` at all** — no login
+form, no 401, no route. That is the default, and if you never set it this
+service has no authenticated surface and nothing to guess at. Read *The admin
+page* before you turn it on: it is a public door to the box that holds the
+signing key.
 
 ### `/v1/activate` — the contract
 
@@ -426,6 +440,24 @@ rather than starting half-configured.
 | `PAYPAL_RETURN_URL` | derived | |
 | `PAYPAL_CANCEL_URL` | derived | |
 
+**The admin page — all optional, and off.** `ADMIN_PASSWORD_HASH` is the switch:
+with it unset the routes are never mapped. See *The admin page* for what turning
+it on means.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `ADMIN_PASSWORD_HASH` | — | **Set this to turn `/admin` on.** A PBKDF2 verifier from `hash-password`. |
+| `ADMIN_PASSWORD` | — | The plaintext alternative. Refused if short or obvious. Second best — see below. |
+| `ADMIN_SESSION_IDLE_MINUTES` | `30` | Signed out after this long doing nothing. |
+| `ADMIN_SESSION_ABSOLUTE_MINUTES` | `480` | Signed out after this long regardless. Must be the larger. |
+| `ADMIN_LOGIN_DELAY_SECONDS` | `2` | The **first** wait a wrong password buys. It doubles from there. |
+| `ADMIN_LOGIN_MAX_DELAY_SECONDS` | `60` | Where the doubling stops. Not a lockout; there is deliberately no lockout. |
+
+Setting both `ADMIN_PASSWORD_HASH` and `ADMIN_PASSWORD`, or setting a
+`ADMIN_PASSWORD` that is under 16 characters or obvious, or an
+`ADMIN_PASSWORD_HASH` this service cannot read, is a **refusal to start** rather
+than a page that quietly does not work.
+
 **Email delivery — all optional.** `SMTP_HOST` is the switch: unset it and the
 service behaves exactly as it did before mail existed. See *Emailing the code*
 below.
@@ -620,10 +652,10 @@ docker compose exec licence \
   dotnet Emby.Sso.LicenceService.dll issue-code --licensee "Beta Tester Bob"
 ```
 
-The code goes to stdout; only its hash is stored. There is **no HTTP route to
-this**, because an endpoint that mints saleable credentials needs an
-authentication story and the only honest one at this size is "you have a shell
-on the box or you do not".
+The code goes to stdout; only its hash is stored. There is also an Issue form on
+the admin page, if you have turned one on — the same implementation, the same
+ceilings, and the code shown once. See *The admin page*. With no admin password
+set, a shell on this box is the only way to mint one.
 
 Its four siblings — `list-codes`, `show-code`, `void-code` and `list-outbox` —
 are the rest of running this. They are next.
@@ -644,12 +676,11 @@ docker compose exec licence dotnet Emby.Sso.LicenceService.dll <command>
 | `void-code` | I refunded someone — stop the code working |
 | `list-outbox` | a code was never delivered — what is sitting waiting? |
 
-**None of them is an HTTP endpoint, and none should become one.** This service
-is on the internet and holds the signing key. An authenticated admin surface on
-it needs sessions, CSRF, an audit trail and the confidence that no bug in any of
-that reaches the key — a far larger thing to get right than a command that
-requires a shell on this box, where a shell is already total access. It is the
-same reasoning that keeps `issue-code` off HTTP.
+**All four are also on the admin page**, if you have turned one on — same
+implementation, two front ends, and neither can do anything the other cannot.
+The commands are what is left when the page is off, and the page is off unless
+`ADMIN_PASSWORD_HASH` is set. See *The admin page* for what turning it on costs
+you.
 
 **Two rules hold across all four.**
 
@@ -832,6 +863,213 @@ lines that have already been delivered.
 workflow is: send the code, then delete its line from the file. A pruned line is
 how these commands know a code is finished with, and it is also how a live
 credential stops sitting on the disk.
+
+## The admin page
+
+Everything above is also a page, at `https://<your host>/admin`, if you turn one
+on. **It is off, and there is no page at all until you set a password.**
+
+### What you are turning on
+
+This service holds the private signing key. Whoever gets through that page can
+mint a licence for any Emby server, for any duration, as many as they like —
+and **nothing recalls one**, because the plugin verifies offline against a key
+compiled into it and never calls home. There is no second factor, no allowlist
+and no VPN in front of it. **The password is the entire barrier.**
+
+Two safer arrangements exist and this page is neither of them:
+
+* **Loopback plus an SSH tunnel.** Bind the container to `127.0.0.1`, and reach
+  it with `ssh -L 8080:127.0.0.1:8080 you@host`. The page is then only reachable
+  by somebody who already has your SSH key, and the password is a second lock
+  rather than the only one.
+* **An IP allowlist at the proxy.** One `allow`/`deny` block in nginx or Caddy
+  in front of `/admin`. Costs you a fixed address to work from.
+
+Both were offered and neither was chosen; the page is public behind a password
+deliberately. If you change your mind, the allowlist is three lines of proxy
+config and nothing in this service has to change.
+
+**To turn it off again**, unset `ADMIN_PASSWORD_HASH` (and `ADMIN_PASSWORD`) and
+restart. The routes stop being mapped and `/admin` becomes a 404 like any other
+unrouted path. Nothing else is affected: the commands, the buy page and
+activation all carry on exactly as before.
+
+### Turning it on
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll hash-password
+```
+
+It reads the password on **stdin** — not from an argument, which would be in
+your shell history and in the process list of everybody on the box — and prints
+one line:
+
+```
+ADMIN_PASSWORD_HASH=pbkdf2-sha256$210000$Xy...==$q7...=
+```
+
+Put that in `.env` and restart. Keep the password itself in your password
+manager and nowhere else; nothing can recover it from the line above.
+
+**Use a long random one.** The verifier is PBKDF2-HMAC-SHA256 at 210,000
+iterations, which makes each guess expensive, and the login delay below bounds
+how many can be tried — but neither of those saves a password somebody can
+guess. Sixteen characters is the minimum this service accepts and it is a floor,
+not a recommendation.
+
+`ADMIN_PASSWORD` takes a plaintext password instead, and exists because refusing
+it would send you to a text file with the password in it anyway. It is second
+best: anything that can read this container's environment — `docker inspect`, a
+crash dump, a compose file in a backup — gets the credential rather than a
+verifier. It is refused if it is short or obvious.
+
+### What the page does
+
+| | |
+| --- | --- |
+| `/admin/codes` | `list-codes`: every code, its state, who it is for. Filter by licensee, buyer or tag. |
+| `/admin/code/<tag>` | `show-code`: one code and every server it has been activated onto. |
+| `/admin/code/<tag>/void` | `void-code`: the confirmation, with what voiding cannot do stated **before** the button. |
+| `/admin/issue` | `issue-code`: a code no payment bought. The code is shown **once**. |
+| `/admin/outbox` | `list-outbox`: sales whose code has not reached its buyer, and a per-line button that reads one code back. |
+| `/admin/audit` | Who signed in, who failed to, what was issued and what was voided. |
+
+It is server-rendered HTML with **no JavaScript at all** — no framework, no CDN,
+nothing loaded from anywhere. The content security policy is `default-src
+'none'`, which the page can afford to say because it needs nothing.
+
+**Two rules hold everywhere on it**, and they are the same two the commands
+follow:
+
+1. **No redemption code the store knows only by hash is ever rendered.** Not in
+   a table, not on a detail page, not in an audit line. The store holds a
+   SHA-256 and the page has nothing to render.
+2. **The void confirmation says, in the interface, that it cannot recall a
+   licence already issued from that code** — naming how many servers already
+   hold one and when they stop working. The words come from the same place the
+   command's do, so the two cannot drift apart.
+
+### The two places a code IS shown, and why that is not a third rule
+
+A code exists in the clear for exactly one moment, and that moment is the only
+chance anybody has to copy it. So:
+
+* **Issuing one** shows it once, on the page after the form. Refreshing, going
+  back, or opening it in another tab shows *"that code has already been
+  shown"* — the code travels from the POST to the page in server memory, never
+  in a URL or a redirect, and the first render consumes it. If you lose it,
+  nothing recovers it: issue another and void the one you lost.
+* **The outbox** holds codes in the clear, because it has to — that is what it
+  is for. The button beside a line reads **one** of them back onto the same
+  show-once page. The audit trail records that you did it, and records the
+  hash tag rather than the code.
+
+Neither is an exception to rule 1: rule 1 is about codes the store knows only by
+hash, and it cannot show those because it does not have them.
+
+### Looking up a code a customer sent you
+
+The codes page has a lookup box. It is a form **POST**, not a link, on purpose:
+a code in an address bar ends up in your browser history, in any proxy log
+between you and here, and in the `Referer` header of the next page you load. The
+code is normalised, hashed, and answered with a redirect to the *tag*. It is
+never shown back to you.
+
+### What guards each request
+
+* **The session.** A 256-bit id from the system CSPRNG, naming state held on
+  this server — there is nothing in the cookie to forge or to tamper with. The
+  cookie is `HttpOnly`, `Secure`, `SameSite=Strict`, host-scoped with no
+  `Domain`, and named with the `__Host-` prefix, which makes the browser enforce
+  those last three itself and refuse the cookie outright if they ever stop being
+  true. Signing out destroys the state on the server, so a copy of the cookie is
+  worth nothing from that moment. Sessions are in memory only: restarting the
+  service signs you out, which is correct — the alternative is writing them to
+  the same disk as the signing key.
+* **A CSRF token**, bound to your session, on every action that changes
+  anything, compared in constant time. `SameSite=Strict` is set as well and is
+  **not** what is relied on: it is a browser behaviour with a history of
+  exceptions and it is not something this service can verify happened.
+* **A one-shot form token** on issuing and on revealing, so that a double-tapped
+  button, a refreshed POST or a back-and-submit-again creates **one** credential
+  and answers *"that form had already been submitted"* to the second.
+* **A login budget of its own**, described next.
+
+### The login delay, and why there is no lockout
+
+A wrong password buys a wait before the next attempt, and the wait doubles: 2
+seconds, 4, 8, 16, up to `ADMIN_LOGIN_MAX_DELAY_SECONDS`. An attempt made during
+the wait is refused *before the password is looked at*, so guessing cannot make
+this service spend PBKDF2 time either. A correct password clears it.
+
+**Nothing is ever locked.** However many times somebody guesses wrong, the wait
+expires and the right password works again. This is deliberate and it is the
+opposite of the usual rule: there is one operator, and an attacker who could
+lock the account out could stop the only person able to fix this service from
+reaching it, from anywhere, for free. A delay costs a guesser everything and
+costs you a few seconds once.
+
+There is a second, **global** delay so that guessing from ten thousand addresses
+is not ten thousand times faster than guessing from one. It is capped at five
+seconds, because it is the one an innocent operator can be caught by: at that
+ceiling a distributed guesser gets about twelve attempts a minute, and you wait
+five seconds.
+
+**This budget has nothing to do with `/v1/activate`'s.** A flood of activation
+attempts cannot delay your login, and an attack on your login cannot stop
+customers activating the licences they have paid for. Two objects, two sets of
+state, and a test that asserts it.
+
+### The audit trail
+
+`/data/admin-audit.jsonl`, one JSON object per line, **and** the service log.
+Every sign-in, failed sign-in, throttled attempt, sign-out, refused token, void,
+issue and outbox reveal, with the address it came from.
+
+It is a file as well as a log because container logs rotate, get truncated by a
+restart policy, and are the first thing lost when a box is rebuilt — and *"when
+was this voided, and from where"* is a question that arrives months later, in an
+argument. It is on the mounted volume, so the backup that saves your customer
+list saves the account of what was done to it.
+
+It never holds a redemption code, the password, or a session id — a
+twelve-character fingerprint of the session goes in instead, so two lines from
+one sign-in can be tied together and nothing in the file would authorise a
+request if it leaked. Anything shaped like a code that reaches it is redacted
+before the line is written, which is a guard against code nobody has written
+yet rather than against the callers there are today.
+
+```
+docker compose exec licence sh -c 'tail -5 /data/admin-audit.jsonl'
+```
+
+```json
+{"utc":"2026-08-31T18:04:11Z","event":"login","client":"203.0.113.7","session":"4f2a9c1b7e03","tag":null,"detail":"signed in"}
+{"utc":"2026-08-31T18:05:02Z","event":"issue","client":"203.0.113.7","session":"4f2a9c1b7e03","tag":"9f2a1c3e5b7d","detail":"issued to 'Jane Tester', 3 activations, 365 days"}
+{"utc":"2026-08-31T18:09:44Z","event":"void","client":"203.0.113.7","session":"4f2a9c1b7e03","tag":"1b0c77aa2e41","detail":"voided: refunded, ticket 4471"}
+{"utc":"2026-08-31T19:22:10Z","event":"login_failed","client":"198.51.100.9","session":null,"tag":null,"detail":"wrong password"}
+{"utc":"2026-08-31T19:22:12Z","event":"login_throttled","client":"198.51.100.9","session":null,"tag":null,"detail":"waiting 2s (client)"}
+```
+
+### Headers
+
+Every response from this service now carries `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a content security
+policy, `Permissions-Policy` and `Strict-Transport-Security`. Admin responses
+carry `Cache-Control: no-store` on top, including the redirects: a browser cache
+of your customer list on a laptop is a leak with no upside, and the back button
+after a sign-out must not paint the page again out of it.
+
+### What this page is still not
+
+* **It is not multi-user.** One password, no accounts, no roles. Everything it
+  can do, anyone who signs in can do.
+* **There is no second factor.** If this service ever holds anything worth more
+  than it does now, that is what to add next.
+* **It cannot recover a code.** Nothing can. The store holds hashes.
+
+---
 
 ## Emailing the code
 
@@ -1020,7 +1258,7 @@ export DOTNET_ROOT=$HOME/.dotnet
 dotnet test service/Emby.Sso.Service.sln
 ```
 
-343 tests. What they cover, and why each is there, is in the class comments; the
+453 tests. What they cover, and why each is there, is in the class comments; the
 ones that carry weight are `PayPalWebhookVerifierTests` (a tampered payload is
 refused), `PayPalCertificateValidatorTests` (an untrusted certificate is
 refused), `ActivationStateMachineTests` (the cap and free re-activation),
