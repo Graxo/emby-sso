@@ -25,6 +25,18 @@ variables:
   DOTNET_NOLOGO: "1"
   PACKAGE_NAME: "emby-sso"
   MERGED_DLL: "src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll"
+  # The licence service's container image, pushed to this project's own
+  # registry as a sub-repository so the plugin's packages and the service's
+  # image never share a name. The host part is never written down here: it
+  # comes from CI_REGISTRY_IMAGE, so moving the GitLab instance moves this too.
+  SERVICE_IMAGE_NAME: "licence-service"
+  # Kaniko builds an OCI image from a Dockerfile with no Docker daemon and,
+  # crucially, NO PRIVILEGED RUNNER - see the service-image job for why that
+  # decision was made and what to do if it turns out to be wrong. The -debug
+  # variant is the one with a shell in it, which GitLab requires of any job
+  # image. Pinned by digest as well as version, like the pages job: this thing
+  # builds the image that holds the licence signing key at runtime.
+  KANIKO_IMAGE: "gcr.io/kaniko-project/executor:v1.24.0-debug@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd"
 
 default:
   image: $SDK_IMAGE
@@ -35,6 +47,23 @@ default:
       files:
         - src/Emby.Sso/Emby.Sso.csproj
         - tests/Emby.Sso.Tests/Emby.Sso.Tests.csproj
+    paths:
+      - .nuget/packages
+
+# The service is a separate solution with a separate dependency set (MailKit,
+# BouncyCastle, ASP.NET), so it gets its own cache key. Same directory, because
+# NUGET_PACKAGES is global; different key, because a plugin-only change should
+# not invalidate the service's restore or the other way round.
+.service-nuget-cache:
+  cache:
+    key:
+      # GitLab allows at most two files here, so Emby.Sso.Licensing.csproj is
+      # left out: it is a project reference with a tiny package set, and a key
+      # that misses a change only costs one restore of the missing packages.
+      # The cache is a speed optimisation and never a correctness one.
+      files:
+        - service/src/Emby.Sso.LicenceService/Emby.Sso.LicenceService.csproj
+        - service/tests/Emby.Sso.LicenceService.Tests/Emby.Sso.LicenceService.Tests.csproj
     paths:
       - .nuget/packages
 
@@ -151,6 +180,124 @@ release:
         - name: "THIRD-PARTY-NOTICES"
           url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/THIRD-PARTY-NOTICES"
           link_type: other
+
+# ---------------------------------------------------------------------------
+# The licence service. A separate solution (service/Emby.Sso.Service.sln) that
+# is deliberately NOT in Emby.Sso.sln, so the plugin build cannot ship any of
+# it - which also meant, until these two jobs existed, that nothing in CI ever
+# compiled it and a broken service was publishable. It is not any more:
+# service-image runs only behind service-test.
+#
+# These two jobs are independent of the plugin's test/build/publish/release
+# chain in both directions. The image contains no plugin code and the plugin
+# artifact contains no service code, so neither should be able to hold up or
+# break the other.
+# ---------------------------------------------------------------------------
+
+service-test:
+  extends: .service-nuget-cache
+  stage: test
+  # Starts immediately; it shares nothing with the plugin's test job.
+  needs: []
+  script:
+    - dotnet test service/Emby.Sso.Service.sln --logger "console;verbosity=normal"
+
+# Builds service/Dockerfile and pushes it to this project's container registry,
+# so the deployment host can `docker compose pull` instead of being handed a
+# copy of the source and running `docker compose up --build`.
+#
+# RUNNER REQUIREMENT: an ordinary unprivileged runner. Kaniko builds the image
+# in userspace, with no Docker daemon and no docker:dind service, so this needs
+# no privileged runner and no socket mount. That was chosen because the runners
+# here have not been inspected: docker-in-docker would need `privileged = true`
+# in the runner's config.toml, and without it the failure is confusing rather
+# than clear - the job dies on `docker: Cannot connect to the Docker daemon at
+# tcp://docker:2375` or "error during connect", which reads like a networking
+# fault and is not one.
+#
+# UNVERIFIED, all of it: no pipeline has run. Nobody has watched this runner
+# build an image, nobody has watched the registry accept the push, and the
+# Dockerfile itself has never been through any builder. service/README.md,
+# "The image CI builds", has the commands to confirm each of those.
+#
+# If kaniko turns out not to work on these runners, the fallback is dind, and
+# it is a real trade: it needs a privileged runner, which is a machine on which
+# any job can escape to the host. Do not enable it casually. The swap is:
+#
+#   image: docker:27.3.1-cli@sha256:<digest>
+#   services: [ docker:27.3.1-dind@sha256:<digest> ]
+#   variables: { DOCKER_TLS_CERTDIR: "/certs", DOCKER_HOST: "tcp://docker:2376",
+#                DOCKER_TLS_VERIFY: "1", DOCKER_CERT_PATH: "/certs/client" }
+#   script: docker login/build/push, same tags as below.
+#
+# Kaniko's upstream repository is archived, so the tool itself will not gain
+# fixes. It is pinned by digest, it runs only in CI, and it reads only this
+# repository - but it is a dependency to keep an eye on, and the dind recipe
+# above is the exit.
+service-image:
+  stage: publish
+  image:
+    name: $KANIKO_IMAGE
+    # Kaniko's own entrypoint is the executor. GitLab needs to start a shell
+    # in the job image instead, so it has to be cleared.
+    entrypoint: [""]
+  # The whole point: a service whose tests do not pass is not publishable.
+  needs:
+    - job: service-test
+  rules:
+    # A release tag, and pushes to the default branch. Nothing else - a feature
+    # branch that pushed an image would be pushing something nobody reviewed.
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    # Which tags get pushed is ci/image-tags.sh's decision alone, and it exits
+    # non-zero rather than guessing. v1.4.0 -> 1.4.0 and latest; a prerelease
+    # tag -> itself and NOT latest; main -> main-<short sha> and main.
+    - |
+      IMAGE="$CI_REGISTRY_IMAGE/$SERVICE_IMAGE_NAME"
+      TAGS="$(ci/image-tags.sh)"
+      PRIMARY_TAG="$(printf '%s\n' "$TAGS" | head -n 1)"
+    # Quoted as one block: an unquoted `echo "word: word"` entry is a YAML
+    # mapping, not a string, and GitLab rejects the whole file. Twice now; see
+    # publish and pages, and run `sh ci/lint-ci.sh` before pushing this file.
+    - |
+      echo "service-image: image base $IMAGE"
+      for tag in $TAGS; do
+        echo "service-image: will push $IMAGE:$tag"
+      done
+    # CI_JOB_TOKEN can push to this project's own registry and expires with the
+    # job. No long-lived credential is stored anywhere for the push side; the
+    # PULL side is a different credential and is documented in
+    # service/docs/first-run.md.
+    - |
+      mkdir -p /kaniko/.docker
+      printf '{"auths":{"%s":{"auth":"%s"}}}' \
+        "$CI_REGISTRY" \
+        "$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_JOB_TOKEN" | base64 | tr -d '\n')" \
+        > /kaniko/.docker/config.json
+    # The context is service/, not the repository root: the Dockerfile's COPY
+    # paths are relative to it, and service/.dockerignore - which is what keeps
+    # a signing key, a ledger or an outbox out of an image layer - only applies
+    # at the root of the context. Kaniko honours .dockerignore; that file is a
+    # security control here, not tidiness, so if the builder is ever changed,
+    # check the replacement honours it too.
+    - |
+      DESTINATIONS=""
+      for tag in $TAGS; do
+        DESTINATIONS="$DESTINATIONS --destination $IMAGE:$tag"
+      done
+      # Intentionally unquoted: one --destination pair per tag.
+      /kaniko/executor \
+        --context "$CI_PROJECT_DIR/service" \
+        --dockerfile "$CI_PROJECT_DIR/service/Dockerfile" \
+        --label "org.opencontainers.image.title=Emby SSO licence service" \
+        --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
+        --label "org.opencontainers.image.version=$PRIMARY_TAG" \
+        $DESTINATIONS
+    - |
+      echo "service-image: pushed. The host pulls it with:"
+      echo "  docker pull $IMAGE:$PRIMARY_TAG"
 
 # The documentation site (docs/site/, MkDocs with the Material theme),
 # published by GitLab Pages from public/ as GitLab's contract requires.
