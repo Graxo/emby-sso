@@ -84,6 +84,11 @@ What follows from that:
 | `POST /paypal/webhook` | PayPal → here | **Signature verified.** The only thing that creates a code. |
 | `GET /healthz` | your monitoring | Store writable, which key is loaded, sandbox or live. |
 
+There are no admin endpoints, deliberately. Everything a vendor does to what
+they have sold is a command on this same binary — `issue-code`, `list-codes`,
+`show-code`, `void-code`, `list-outbox` — run with `docker compose exec`. See
+*Managing what you have sold*.
+
 ### `/v1/activate` — the contract
 
 The request and response shapes are in the task's `contract.md` and are not
@@ -308,6 +313,11 @@ It will not activate a new server. **Servers that already activated keep
 working** until their licence expires, because the plugin verifies offline and
 there is no revocation. Say that plainly to anyone who asks.
 
+A refund that PayPal never told you about — a chargeback settled by email, a
+mistake, a code that leaked — is the same operation by hand: `void-code`, which
+takes the same code path and prints that same warning at you. See *Managing what
+you have sold*.
+
 ### Amounts
 
 A verified capture below `PAYPAL_MINIMUM_AMOUNT`, or in a different currency,
@@ -375,8 +385,10 @@ dictionary and no rainbow table. What the hash is for is that a copy of the
 database — a backup, a stolen volume, a support dump — contains no usable code,
 and it does not.
 
-Logs record the first 12 hex characters of the hash, never the code. To find a
-customer's code in a log from the code they emailed you:
+Logs record the first 12 hex characters of the hash, never the code. `show-code
+--code '<what they sent you>'` prints that tag back along with everything else
+known about the code, which is the usual way in. The recipe by hand, for a shell
+that has no container to exec into:
 
 ```
 printf '%s' "$(echo "$CODE" | tr -d ' -_' | tr 'a-z' 'A-Z' | tr 'ILO' '110')" \
@@ -496,6 +508,11 @@ is missing, if it is the public half, or if it is inside a git working tree.
 
 ### Answering "did this person's activation reach me?"
 
+`show-code --code '<what they sent you>'` answers this directly, listing every
+server that code has been activated onto and when — see *Managing what you have
+sold*. The log is the other half of it, for an attempt that never got as far as
+a row.
+
 Every attempt logs one line. Ask them for their code, turn it into a tag with
 the recipe above, and:
 
@@ -517,7 +534,7 @@ Nothing logs a code, a licence, or the private key. The fingerprint on an
 `activate OK` line is the same one `licencetool show` prints for a licence
 somebody emails back.
 
-Or ask the database:
+Or ask the database, which is what `show-code` does for you:
 
 ```
 sqlite3 /srv/emby-sso/data/licences.db \
@@ -539,6 +556,214 @@ The code goes to stdout; only its hash is stored. There is **no HTTP route to
 this**, because an endpoint that mints saleable credentials needs an
 authentication story and the only honest one at this size is "you have a shell
 on the box or you do not".
+
+Its four siblings — `list-codes`, `show-code`, `void-code` and `list-outbox` —
+are the rest of running this. They are next.
+
+## Managing what you have sold
+
+`issue-code` makes a code. These four read and change the ones that exist. Every
+one of them runs in the container and needs nothing but a shell:
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll <command>
+```
+
+| Command | The question it answers |
+|---|---|
+| `list-codes` | who has a code, and has it been used? |
+| `show-code` | a customer says their code does not work — what actually is it? |
+| `void-code` | I refunded someone — stop the code working |
+| `list-outbox` | a code was never delivered — what is sitting waiting? |
+
+**None of them is an HTTP endpoint, and none should become one.** This service
+is on the internet and holds the signing key. An authenticated admin surface on
+it needs sessions, CSRF, an audit trail and the confidence that no bug in any of
+that reaches the key — a far larger thing to get right than a command that
+requires a shell on this box, where a shell is already total access. It is the
+same reasoning that keeps `issue-code` off HTTP.
+
+**Two rules hold across all four.**
+
+1. **No command can print a code the store holds only as a hash.** `issue-code`
+   prints one at creation because that is the only moment it exists in the
+   clear. `list-codes` shows the twelve-character tag instead and says so in its
+   own footer; `show-code` takes a code as *input* and confirms it, and does not
+   echo it back, because support output gets pasted into chat windows. The one
+   exception is `list-outbox --reveal`, which reads back plaintext that is
+   already sitting in `codes-outbox.jsonl`.
+2. **A read-only command never creates the store.** SQLite's default is to
+   create the database file, which would make `list-codes` against a mistyped
+   `LICENCE_DATA_DIR` print an empty table — indistinguishable from "no
+   customers" — and leave a stray `licences.db` behind. Instead it says which
+   path it looked at and exits **66**.
+
+Exit codes: **0** done, **1** no such code or bad usage, **66** there is no store
+at `LICENCE_DATA_DIR`, **78** the configuration is wrong.
+
+### `list-codes` — who has what
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll list-codes
+```
+
+```
+STATE        CREATED     TAG           SOURCE  USED  DAYS  EXPIRES     FOR
+UNDELIVERED  2026-08-20  c3b3474f27d5  paypal  0/3   365   -           buyer@example.com
+UNPAID       2026-08-22  71ba0c4e9021  paypal  0/3   365   -           PayPal capture 3C8DEF
+LAPSED       2025-08-01  9ceb22fe4d19  paypal  2/3   365   2026-08-01  acme@example.com
+LAPSING      2025-09-14  4d1e8a77c003  paypal  1/3   365   2026-09-14  someone@example.com
+EXHAUSTED    2026-01-05  a70f21bb54ce  paypal  3/3   365   2027-01-05  three@example.com
+unused       2026-08-31  1c9d40e6b8aa  manual  0/3   30    -           Tester — discord handle
+active       2026-02-02  55e0c1a9d7f3  paypal  1/3   365   2027-02-02  happy@example.com
+void         2026-03-03  b2f4a0d61e88  paypal  1/3   365   2027-03-03  refunded@example.com
+```
+
+Sorted by that first column, in exactly the order it is printed above, so what
+needs attention is at the top and nothing has to be scrolled to. A code is
+labelled with the **first** of these that is true of it:
+
+| STATE | What it means, and what to do |
+|---|---|
+| `UNDELIVERED` | there is a line for it in the outbox with no delivery receipt beside it, and it has never been activated. **Somebody has paid and has nothing.** `list-outbox` |
+| `UNPAID` | created but not paid for. It cannot activate |
+| `LAPSED` | the licence issued from it has already run out. Sell them another |
+| `LAPSING` | it runs out within `--soon` days, 21 by default — the window in which their own Emby server has already started warning them |
+| `EXHAUSTED` | every activation it allows is used. A fourth server needs a new code |
+| `unused` | paid for, never activated. Normal for a code just sold, or a comp nobody has redeemed |
+| `active` | in use, with activations to spare and time on the licence |
+| `void` | refunded, leaked or a mistake. Last on purpose: it is the one state already dealt with, so it never pushes a live problem down the page |
+
+`--needs-attention` narrows to the first four. `--for <text>` matches a licensee,
+a buyer's address or a tag, case-insensitively — the command to reach for when a
+customer emails and you have only their name. `--soon <days>` moves the `LAPSING`
+window.
+
+**`TAG` is the first twelve characters of the code's SHA-256** — the same string
+`code=` shows in every log line, and what `show-code --tag` and `void-code --tag`
+take. It is derived from the code and is not one: it cannot be activated with.
+
+Two notes on `UNDELIVERED`, because it is the one that could cry wolf. A code
+with **no outbox line at all** is *not* reported as undelivered: that is the
+normal end state of a sale you have sent and pruned, and it is every code
+`issue-code` ever made, since those never go near the outbox. And a code that
+has **already been activated** is not undelivered whatever the outbox says —
+they plainly received it, and an unpruned line is untidiness rather than a
+failed sale.
+
+### `show-code` — what is this code?
+
+The support command. Somebody pastes a code into a chat window and the first
+question is what it actually is.
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll \
+  show-code --code 'mh97k d1jp7 fc223 583r5 rdmm3 1d1hc'
+```
+
+**It takes the code in whatever shape a human sent it**: any case, with or
+without the hyphens, with spaces instead, with whitespace round it, and with
+`I`, `L` and `O` read as the `1`, `1` and `0` they were meant to be. That is the
+same normalisation `/v1/activate` applies, so a code this refuses is a code the
+service would also refuse. `--tag <hash prefix>` takes the twelve characters
+from a log line instead; four or more will do, and a prefix matching two codes
+is refused rather than guessed at.
+
+```
+Tag         : c3b3474f27d5   (what the logs record; give this to `void-code --tag`)
+State       : active
+Source      : paypal
+Licensee    : buyer@example.com
+Buyer       : buyer@example.com
+PayPal      : capture 3C6XYZ, event WH-1
+Bought from : c5bc6e91458540caa295c4efdda1a58a   (the server id on the /buy link; it binds nothing)
+Created     : 2026-08-20T09:12:00Z
+Licence     : 365 days from first activation
+Expires     : 2027-08-20T09:12:00Z   (in 354 days)
+Activations : 2 of 3 used
+Delivery    : emailed to buyer@example.com at 2026-08-20T09:12:04Z
+
+SERVER                            FIRST SEEN            LAST SEEN             ISSUES  PLUGIN  LAST LICENCE
+c5bc6e91458540caa295c4efdda1a58a  2026-08-21T18:02:11Z  2026-08-30T07:40:52Z  4       1.4.0   sha256:0252...
+aaaa1111bbbb2222cccc3333dddd4444  2026-08-25T11:19:03Z  2026-08-25T11:19:03Z  1       1.4.0   sha256:9ab1...
+```
+
+`LAST LICENCE` is the fingerprint `licencetool show` prints for a licence
+somebody emails back, so a token in an inbox can be matched to a row here.
+
+It distinguishes the three ways a code can fail to be found, because they mean
+different things to the person on the other end of the conversation: *that is
+not a well-formed code at all* (and nothing was looked up — `/v1/activate` would
+refuse it too), *that is well-formed and this store has never held it* (issued
+elsewhere, mistyped into something still well-formed, or invented), and *no code
+has a hash starting with that tag*.
+
+### `void-code` — a refund, a mistake, a leak
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll \
+  void-code --tag c3b3474f27d5 --reason 'refunded, PayPal case 12345'
+```
+
+```
+VOIDED code c3b3474f27d5 (buyer@example.com).
+Reason recorded: refunded, PayPal case 12345
+It will not activate again. Any attempt now answers `invalid_code`, the same
+answer an unknown code gets - the caller learns nothing about your account.
+
+THIS DOES NOT RECALL A LICENCE ALREADY ISSUED FROM THIS CODE.
+  2 server(s) have already been given a licence from it, and each keeps working
+  until 2027-08-20T09:12:00Z.
+  `show-code` lists them.
+
+The plugin verifies its licence offline against a public key compiled into it and
+never calls this service, so no revocation exists and none can be added here.
+Voiding stops the NEXT activation. That is the whole of what it does. ...
+```
+
+**That paragraph is the point of the command's output.** Somebody reaching for
+this after a refund needs to know before they close the ticket, not after the
+customer keeps using the plugin for another eleven months. Voiding stops the
+next activation and nothing else; the only thing that takes a running licence
+away is a new signing keypair and a new plugin build, which invalidates every
+other customer at the same time.
+
+`--reason` is optional and worth giving: it is stored, and `show-code` prints it
+back months later beside the date. Voiding twice is **not an error** — the second
+run says it was already void, shows the *first* reason, and changes nothing.
+
+It is the same statement the refund webhook takes. `PAYMENT.CAPTURE.REFUNDED`
+and this command call one method on the store, so what "voided" means cannot
+drift between them, and `list-codes` shows a hand-voided code and a
+PayPal-voided one identically.
+
+### `list-outbox` — the sale that never arrived
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll list-outbox
+```
+
+```
+CREATED               TAG           BUYER              SENT  ACTS  DAYS  CAPTURE  IN THE STORE
+2026-08-20T09:12:00Z  c3b3474f27d5  buyer@example.com  NO    3     365   3C6XYZ   waiting
+2026-08-22T09:12:00Z  ghost0000dead ghost@example.com  NO    3     365   3C8DEF   void - do not send
+```
+
+Everything needed to finish a sale by hand except the code itself. `IN THE STORE`
+is what the database says about that code now — `waiting`, `already activated
+2x` (they got it somehow, so there is nothing to chase), or `void - do not send`.
+
+**The codes are not in that table.** They are in `codes-outbox.jsonl` in the
+clear — it is the one place they exist in readable form — and
+`list-outbox --reveal` prints them into the terminal, which is a decision worth
+making deliberately rather than one a listing makes for you. `--all` includes
+lines that have already been delivered.
+
+`SENT` reads `NO` until a successful email appends a receipt, so **with
+`SMTP_HOST` unset it is `NO` forever**. That is not a bug and it is why the
+workflow is: send the code, then delete its line from the file. A pruned line is
+how these commands know a code is finished with, and it is also how a live
+credential stops sitting on the disk.
 
 ## Emailing the code
 
@@ -693,15 +918,24 @@ naming the capture and the buyer. The buyer has paid and has no code, and the co
 not recoverable — it was a local variable, and it is deliberately **not** logged,
 because a log file is not where live credentials belong even in a disaster.
 
-Fix the volume, then void the orphaned code and issue a replacement:
+Fix the volume, then void the orphaned code and issue a replacement. Find it
+with `list-codes` — an orphaned code has no outbox line, so look for the one
+created at the moment of the capture — and void it by tag:
 
 ```
-sqlite3 /srv/emby-sso/data/licences.db \
-  "UPDATE codes SET status='void' WHERE paypal_capture_id='<capture id>';"
+docker compose exec licence \
+  dotnet Emby.Sso.LicenceService.dll list-codes --needs-attention
+
+docker compose exec licence \
+  dotnet Emby.Sso.LicenceService.dll void-code --tag <tag> \
+  --reason "outbox unwritable, code lost, replaced"
 
 docker compose exec licence \
   dotnet Emby.Sso.LicenceService.dll issue-code --licensee "<buyer email>"
 ```
+
+Do not edit `status` with `sqlite3` by hand: `void-code` records when and why as
+well, which is what `show-code` prints back at you in six months.
 
 ---
 
@@ -716,7 +950,7 @@ export DOTNET_ROOT=$HOME/.dotnet
 dotnet test service/Emby.Sso.Service.sln
 ```
 
-290 tests. What they cover, and why each is there, is in the class comments; the
+343 tests. What they cover, and why each is there, is in the class comments; the
 ones that carry weight are `PayPalWebhookVerifierTests` (a tampered payload is
 refused), `PayPalCertificateValidatorTests` (an untrusted certificate is
 refused), `ActivationStateMachineTests` (the cap and free re-activation),
@@ -725,7 +959,11 @@ refused), `ActivationStateMachineTests` (the cap and free re-activation),
 (a mail failure still answers PayPal and leaves the code in the outbox),
 `CodeMailerTests` (no secret reaches a log) and `MailKitSmtpTransportTests`
 (a loopback listener this process owns, so the suite needs no mail server and
-cannot send mail anywhere).
+cannot send mail anywhere) - and the management set, `CodeInventoryTests` (which
+state a code is in, and what order they are shown in) and
+`ManagementCommandTests` (a read-only command against a missing store creates
+nothing, no listing prints a code, a code is found however a human spelled it,
+and voiding says what it cannot do).
 
 ---
 
@@ -748,6 +986,11 @@ and **nothing here has ever simulated a success and called it working.**
   wrong-named one are *refused*. Untested: that PayPal's real certificate is
   *accepted*, which needs PayPal's real certificate.
 - **The Docker image.** Never built. Docker was not available.
+- **The management commands inside the container.** `list-codes`, `show-code`,
+  `void-code` and `list-outbox` were run against a real store on disk and are
+  covered by tests, but never through `docker compose exec` — the same reason:
+  no Docker. What is unproven is the invocation itself, the path to the DLL and
+  that the container's user can read `/data`, not the commands.
 - **Any concurrency beyond the tests' own.** The transaction boundaries are
   argued for in `LicenceStore`'s comments, not proven under load.
 - **A real email send — no message has left this machine.** There were no SMTP

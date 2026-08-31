@@ -209,12 +209,105 @@ a paid code goes to. Use it for testers, for a comp, or to rescue a sale whose
 code could not be delivered. `--activations` overrides how many servers it may
 be re-bound to.
 
-The other command is `healthcheck`, which is what the container's own HEALTHCHECK
+---
+
+## 8. Running it day to day
+
+These are the commands you will actually type. All of them are on the same
+binary, all take `docker compose exec`, and none of them is an HTTP endpoint —
+there is no admin page on this service on purpose, because it holds your signing
+key. Set this once and the rest of the page is short:
+
+```
+alias licence='docker compose exec licence dotnet /app/Emby.Sso.LicenceService.dll'
+```
+
+**Who has a code, and does anything need me?**
+
+```
+licence list-codes
+licence list-codes --needs-attention
+```
+
+```
+STATE        CREATED     TAG           SOURCE  USED  DAYS  EXPIRES     FOR
+UNDELIVERED  2026-08-20  c3b3474f27d5  paypal  0/3   365   -           buyer@example.com
+LAPSING      2025-09-14  4d1e8a77c003  paypal  1/3   365   2026-09-14  someone@example.com
+unused       2026-08-31  1c9d40e6b8aa  manual  0/3   30    -           Tester - discord handle
+active       2026-02-02  55e0c1a9d7f3  paypal  1/3   365   2027-02-02  happy@example.com
+```
+
+Shouted states want you; quiet ones do not. `UNDELIVERED` is the one that
+matters most — somebody has paid and has nothing. Sorted so that is at the top.
+`--for acme` finds one customer by name, address or tag.
+
+**"My code does not work."** Ask them to paste it and put it straight through,
+in whatever shape it arrives — any case, with or without the hyphens, spaces
+instead of hyphens, `O` typed for zero:
+
+```
+licence show-code --code 'mh97k d1jp7 fc223 583r5 rdmm3 1d1hc'
+```
+
+It tells you whether the code is real, whether it is paid, spent, exhausted,
+lapsed or voided, and lists every Emby server it has been activated onto with
+dates. If it says *not a well-formed code*, they mistyped it; if it says *this
+store has never held it*, they did not buy it here.
+
+**I refunded someone.**
+
+```
+licence void-code --tag c3b3474f27d5 --reason 'refunded, PayPal case 12345'
+```
+
+!!! warning "Voiding does not take back a licence that has already been issued"
+    The plugin checks its licence offline against a key compiled into it and
+    never calls this service, so **a server that has already activated keeps
+    working until the licence expires** — up to a year. Voiding stops the *next*
+    activation and nothing else. The command prints this at you, with the number
+    of servers already running on that code and the date they stop; read it
+    before you close the ticket. The only thing that takes a running licence
+    away is a new signing keypair and a new plugin build, which invalidates
+    every other customer at the same time.
+
+    A PayPal refund does exactly the same thing automatically, with the same
+    limitation. This command is for the refunds PayPal does not tell you about.
+
+**Did a code actually reach the person who paid?**
+
+```
+licence list-outbox
+licence list-outbox --reveal    # prints the codes themselves
+```
+
+Everything you need to send one by hand. The codes are not in the plain listing
+— they are in `/srv/emby-sso/data/codes-outbox.jsonl` in the clear, and
+`--reveal` reads them back — so the plain listing is safe to screenshot.
+
+**Send the code, then delete its line from that file.** With email off nothing
+else marks it as sent, and a pruned line is both how these commands know a sale
+is finished with and how a live credential stops sitting on your disk.
+
+!!! note "No command can show you a code that was not in the outbox"
+    The database stores a SHA-256 and never the code, so `list-codes` cannot
+    print one and `show-code` can only confirm the one you hand it. If a code is
+    lost, nothing recovers it: void it and issue another.
+
+    `TAG` in these listings is the first twelve characters of that hash. It is
+    what the log lines show as `code=`, and what `show-code --tag` and
+    `void-code --tag` take.
+
+If a command answers **"There is no licence store at ..."** it means exactly
+that, and it created nothing — you are pointed at the wrong `LICENCE_DATA_DIR`,
+or the service has never started. It will not invent an empty database for you
+to misread as "no customers".
+
+The last command is `healthcheck`, which is what the container's own HEALTHCHECK
 runs.
 
 ---
 
-## 8. Prove it works
+## 9. Prove it works
 
 1. `curl -fsS http://127.0.0.1:8080/healthz`
 2. Open `https://<your host>/buy` in a browser — the purchase page renders
