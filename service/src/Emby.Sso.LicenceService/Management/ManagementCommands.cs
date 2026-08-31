@@ -567,11 +567,28 @@ namespace Emby.Sso.LicenceService.Management
             return NoStore;
         }
 
+        /// <summary>
+        /// A store that is there and will not be read. Two causes are worth
+        /// naming, because neither is guessable from SQLite's message:
+        ///
+        ///   * a volume from before this version, whose `codes` table has not
+        ///     yet been given the columns that record a void. Starting the
+        ///     service once adds them;
+        ///   * a database left with an unfinished write-ahead log by an unclean
+        ///     stop. Recovering that log is a WRITE, and these commands open the
+        ///     file read-only precisely so they cannot do one. Starting the
+        ///     service - which opens it for writing - recovers it.
+        ///
+        /// Both fixes are the same sentence, which is why it is one message.
+        /// </summary>
         private static int CannotRead(LicenceStore store, TextWriter error, SqliteException ex)
         {
             error.WriteLine("The store at " + store.Path + " could not be read: " + ex.Message);
-            error.WriteLine("If it predates this version of the service, start the service once - it adds the");
-            error.WriteLine("columns a new version needs when it starts.");
+            error.WriteLine();
+            error.WriteLine("These commands open it read-only and will not write to it, so two things they");
+            error.WriteLine("cannot do for you are adding a column a newer service needs and recovering a");
+            error.WriteLine("write-ahead log left behind by an unclean stop. Starting the service once does");
+            error.WriteLine("both. Nothing here was changed.");
 
             return NoStore;
         }

@@ -989,8 +989,12 @@ and **nothing here has ever simulated a success and called it working.**
 - **The management commands inside the container.** `list-codes`, `show-code`,
   `void-code` and `list-outbox` were run against a real store on disk and are
   covered by tests, but never through `docker compose exec` — the same reason:
-  no Docker. What is unproven is the invocation itself, the path to the DLL and
-  that the container's user can read `/data`, not the commands.
+  no Docker. What is unproven is the invocation itself and the path to the DLL.
+  Reading the store *while another process holds the write-ahead log* was
+  checked by hand — a second process took `BEGIN IMMEDIATE` and inserted a row,
+  and `list-codes` read the committed rows past it and did not see the
+  uncommitted one — but that was two processes under one uid on one filesystem,
+  which is what the container should also be and has not been observed to be.
 - **Any concurrency beyond the tests' own.** The transaction boundaries are
   argued for in `LicenceStore`'s comments, not proven under load.
 - **A real email send — no message has left this machine.** There were no SMTP
