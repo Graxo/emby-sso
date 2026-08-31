@@ -11,7 +11,7 @@ namespace Emby.Sso.Protocol
     /// test for explicitly rather than testing for the refusals they happen to
     /// know about.
     /// </summary>
-    public enum ProvisioningPreconditionOutcome
+    internal enum ProvisioningPreconditionOutcome
     {
         /// <summary>Auto-create is off. Indistinguishable to the caller from the account not existing.</summary>
         AutoCreateDisabled = 0,
@@ -35,7 +35,11 @@ namespace Emby.Sso.Protocol
         /// </summary>
         RequiredGroupNotConfigured = 4,
 
-        /// <summary>The brute-force brake is closed for this username or globally.</summary>
+        /// <summary>
+        /// The brute-force brake is closed for THIS username - the only reason
+        /// it ever closes. See <see cref="ProvisioningThrottle"/>: no other
+        /// caller's attempts can produce this outcome.
+        /// </summary>
         Throttled = 5,
 
         /// <summary>Every precondition passed; the credential may now be forwarded.</summary>
@@ -49,7 +53,7 @@ namespace Emby.Sso.Protocol
     /// own configuration type - and so the whole ordered chain is reachable
     /// from the test project.
     /// </summary>
-    public sealed class ProvisioningSettings
+    internal sealed class ProvisioningSettings
     {
         public bool EnableAutoCreate { get; set; }
 
@@ -75,11 +79,12 @@ namespace Emby.Sso.Protocol
     ///   consulted, and before anything is sent anywhere.</b> These refusals are
     ///   an operator's omission, not a credential attempt. If one of them were
     ///   decided after the throttle check, or worse after the credential was
-    ///   forwarded, it would be charged to the throttle's global bucket - and a
-    ///   hundred such refusals, spread over a hundred DIFFERENT usernames on a
-    ///   mass first sign-in, close the branch for fifteen minutes for everybody,
-    ///   including for the fifteen minutes AFTER the operator fixes the setting.
-    ///   That is the self-inflicted outage this ordering exists to prevent.
+    ///   forwarded, it would be charged to the throttle - and a hundred such
+    ///   refusals, spread over a hundred DIFFERENT usernames on a mass first
+    ///   sign-in, would raise the global surge that tightens every newcomer's
+    ///   allowance, and keep it raised for fifteen minutes AFTER the operator
+    ///   fixes the setting. That is the self-inflicted degradation this ordering
+    ///   exists to prevent.
     /// - <b>This function itself records nothing.</b> It reads the throttle and
     ///   never writes to it, so no refusal it returns can consume budget. The
     ///   counted failures all live below it, at the exits that reflect the
@@ -88,7 +93,7 @@ namespace Emby.Sso.Protocol
     /// A future reader must not reorder these to "fail faster" on the cheap
     /// checks, and must not move a configuration check below the throttle read.
     /// </summary>
-    public static class ProvisioningPreconditions
+    internal static class ProvisioningPreconditions
     {
         public static ProvisioningPreconditionOutcome Evaluate(
             ProvisioningSettings settings,

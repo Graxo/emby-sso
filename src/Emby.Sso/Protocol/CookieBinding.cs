@@ -12,7 +12,7 @@ namespace Emby.Sso.Protocol
     /// against login CSRF, and it should not be the only untested logic of
     /// consequence in the codebase.
     /// </summary>
-    public static class CookieBinding
+    internal static class CookieBinding
     {
         /// <summary>
         /// Every value presented for a cookie named <paramref name="name"/>,

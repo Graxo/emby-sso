@@ -8,7 +8,7 @@ namespace Emby.Sso.Protocol
     /// the callback. Entries are single-use and bounded, because the endpoint
     /// that creates them is reachable without authentication.
     /// </summary>
-    public sealed class PendingLoginStore
+    internal sealed class PendingLoginStore
     {
         /// <summary>
         /// /Sso/Start takes no credentials, so this bounds how many logins an

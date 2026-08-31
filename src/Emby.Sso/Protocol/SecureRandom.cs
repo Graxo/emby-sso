@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Emby.Sso.Protocol
 {
-    public static class SecureRandom
+    internal static class SecureRandom
     {
         public static string CreateToken(int byteLength)
         {

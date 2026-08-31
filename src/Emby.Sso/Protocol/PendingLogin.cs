@@ -2,7 +2,7 @@ using System;
 
 namespace Emby.Sso.Protocol
 {
-    public sealed class PendingLogin
+    internal sealed class PendingLogin
     {
         public PendingLogin(string state, string nonce, string codeVerifier, DateTimeOffset expiresAt, string browserBinding)
         {

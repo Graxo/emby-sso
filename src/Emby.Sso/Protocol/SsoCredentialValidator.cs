@@ -119,7 +119,7 @@ namespace Emby.Sso.Protocol
     /// <see cref="SsoCredentialOutcome.DirectGrantAccepted"/> result from
     /// <see cref="ValidateAsync"/> as proof the account already exists.
     /// </summary>
-    public sealed class SsoCredentialValidator
+    internal sealed class SsoCredentialValidator
     {
         private readonly HandoffSecretStore _handoff;
         private readonly Func<OidcClient> _clientFactory;

@@ -11,7 +11,7 @@ namespace Emby.Sso.Protocol
     /// a value it did not itself produce - the Protocol layer's OAuth error
     /// codes and the Api layer's callback query parameters alike.
     /// </summary>
-    public static class LogSafeText
+    internal static class LogSafeText
     {
         public const int MaxLength = 200;
 

@@ -7,7 +7,7 @@ namespace Emby.Sso.Protocol
     /// Holds the single-use secrets that carry a completed browser login into
     /// Emby's ordinary login form. One live secret per user at a time.
     /// </summary>
-    public sealed class HandoffSecretStore
+    internal sealed class HandoffSecretStore
     {
         private readonly Dictionary<string, Entry> _entries =
             new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);

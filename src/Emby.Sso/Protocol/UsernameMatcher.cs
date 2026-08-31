@@ -7,7 +7,7 @@ namespace Emby.Sso.Protocol
     /// case-insensitive after trimming: no culture-sensitive comparison, because
     /// culture-dependent casing rules have produced authentication bypasses.
     /// </summary>
-    public static class UsernameMatcher
+    internal static class UsernameMatcher
     {
         /// <summary>
         /// The one comparison that decides whether two spellings are the same

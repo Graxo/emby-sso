@@ -12,7 +12,7 @@ namespace Emby.Sso.Protocol
     /// a given Emby account. Zero is a refusal, like every other decision enum
     /// here.
     /// </summary>
-    public enum SubjectBindingOutcome
+    internal enum SubjectBindingOutcome
     {
         /// <summary>Fail-closed default: an outcome nobody set, or a malformed request.</summary>
         Refused = 0,
@@ -120,7 +120,7 @@ namespace Emby.Sso.Protocol
     /// consider "Alice" and "alice" different accounts while the rest of the
     /// plugin considers them the same.
     /// </summary>
-    public sealed class SubjectBindingStore
+    internal sealed class SubjectBindingStore
     {
         /// <summary>
         /// The on-disk schema. A file written by a future build with a different

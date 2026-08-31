@@ -2,7 +2,7 @@ using System;
 
 namespace Emby.Sso.Protocol
 {
-    public enum GroupGateOutcome
+    internal enum GroupGateOutcome
     {
         /// <summary>The gate is unusable: no required group is configured, or there is no identity.</summary>
         NotConfigured = 0,
@@ -21,7 +21,7 @@ namespace Emby.Sso.Protocol
     /// Knows nothing about Emby and performs no verification of its own — the
     /// caller must already have validated the identity.
     /// </summary>
-    public static class GroupGate
+    internal static class GroupGate
     {
         public static GroupGateOutcome Evaluate(OidcIdentity identity, string requiredGroup)
         {

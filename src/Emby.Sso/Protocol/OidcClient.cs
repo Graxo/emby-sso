@@ -16,7 +16,7 @@ namespace Emby.Sso.Protocol
     /// Metadata and signing keys are cached and refreshed by ConfigurationManager,
     /// which also backs off when the provider is unreachable.
     /// </summary>
-    public sealed partial class OidcClient
+    internal sealed partial class OidcClient
     {
         private readonly HttpClient _http;
         private readonly OidcOptions _options;

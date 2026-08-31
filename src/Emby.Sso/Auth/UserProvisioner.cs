@@ -20,7 +20,7 @@ namespace Emby.Sso.Auth
     /// docs/superpowers/spikes/2026-08-30-provisioning-mechanics.md §5 and §9 for
     /// why the native path uses IHasNewUserPolicy instead.
     /// </summary>
-    public sealed class UserProvisioner
+    internal sealed class UserProvisioner
     {
         private readonly IUserManager _userManager;
         private readonly ILogger _logger;

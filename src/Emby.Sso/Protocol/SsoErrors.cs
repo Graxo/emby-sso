@@ -6,7 +6,7 @@ namespace Emby.Sso.Protocol
     /// Short reasons that are safe to show a user. Anything more specific goes
     /// to the server log, never to the browser.
     /// </summary>
-    public static class SsoErrors
+    internal static class SsoErrors
     {
         public const string NotConfigured = "Single sign-on is not configured on this server.";
         public const string ProviderUnreachable = "The sign-in provider could not be reached.";
@@ -37,7 +37,7 @@ namespace Emby.Sso.Protocol
     /// Carries a user-safe reason alongside the diagnostic detail. The message
     /// of the inner exception is for the log; UserSafeReason is for the browser.
     /// </summary>
-    public sealed class SsoException : Exception
+    internal sealed class SsoException : Exception
     {
         public SsoException(string userSafeReason, string logDetail, Exception inner = null)
             : this(userSafeReason, logDetail, inner, false)

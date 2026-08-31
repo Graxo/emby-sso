@@ -6,7 +6,7 @@ namespace Emby.Sso.Protocol
     /// Comparison whose duration does not depend on where two values first differ.
     /// netstandard2.0 has no CryptographicOperations.FixedTimeEquals.
     /// </summary>
-    public static class FixedTime
+    internal static class FixedTime
     {
         public static bool Equals(string a, string b)
         {

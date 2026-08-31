@@ -9,7 +9,7 @@ namespace Emby.Sso.Protocol
     /// <c>Protocol/</c> where the test project can reach it, even though every
     /// caller today is in <c>Api/</c>.
     /// </summary>
-    public static class HeaderSafety
+    internal static class HeaderSafety
     {
         /// <summary>
         /// True when every character in <paramref name="path"/> is safe to place

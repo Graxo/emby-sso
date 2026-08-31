@@ -10,7 +10,7 @@ namespace Emby.Sso
     /// providers and API services independently, so the stores they must share
     /// live here.
     /// </summary>
-    public static class SsoRuntime
+    internal static class SsoRuntime
     {
         private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         private static readonly object ClientLock = new object();

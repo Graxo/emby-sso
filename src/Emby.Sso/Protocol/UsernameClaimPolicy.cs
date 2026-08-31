@@ -7,7 +7,7 @@ namespace Emby.Sso.Protocol
     /// trusted to name a person on this token. Zero is a refusal, like every
     /// other decision enum here.
     /// </summary>
-    public enum UsernameClaimOutcome
+    internal enum UsernameClaimOutcome
     {
         /// <summary>Fail-closed default, and the answer for a claim nobody configured.</summary>
         Refused = 0,
@@ -57,7 +57,7 @@ namespace Emby.Sso.Protocol
     /// binding "already covers that" - the binding covers it AFTER the first
     /// sign-in.
     /// </summary>
-    public static class UsernameClaimPolicy
+    internal static class UsernameClaimPolicy
     {
         /// <summary>
         /// The OpenID Connect standard claim name. Compared case-insensitively

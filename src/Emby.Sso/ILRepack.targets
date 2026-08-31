@@ -33,6 +33,20 @@
       <MergeLibDir Include="$(OutputPath)" />
       <MergeLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
     </ItemGroup>
+    <!-- Internalize is not unconditional: ILRepack leaves a merged type PUBLIC
+         when internalizing it would break a public signature of the primary
+         assembly. So the plugin's own public surface decides how much of the
+         merged library surface escapes. Until this was noticed the plugin
+         exported 13 Microsoft.IdentityModel types (OpenIdConnectConfiguration,
+         JsonWebKey, SecurityKey, CryptoProviderFactory and friends) purely
+         because OidcClient and SsoRuntime were public and named them.
+
+         Everything except what Emby itself has to resolve - Plugin, the
+         configuration class, the authentication provider, the service and its
+         two route request types - is therefore internal, and must stay that
+         way. Making one Emby.Sso type public can quietly make a dozen library
+         types public with it; the check is the merged assembly's exported-type
+         list, which should contain nothing outside the Emby.Sso namespace. -->
     <ILRepack
       Parallel="true"
       Internalize="true"

@@ -8,7 +8,7 @@ namespace Emby.Sso.Protocol
     /// that was never assigned, or one produced by a future member nobody
     /// updated the callers for, must not admit anybody.
     /// </summary>
-    public enum ProviderStampOutcome
+    internal enum ProviderStampOutcome
     {
         /// <summary>
         /// Fail-closed default. Reachable only from a default-initialised value.
@@ -66,7 +66,7 @@ namespace Emby.Sso.Protocol
     /// Nothing here knows the plugin's own type name; the caller supplies it, so
     /// this file carries no Emby dependency and stays under test.
     /// </summary>
-    public static class ProviderStamp
+    internal static class ProviderStamp
     {
         /// <summary>
         /// Ordinal, not culture- or case-insensitive. The value is a CLR type

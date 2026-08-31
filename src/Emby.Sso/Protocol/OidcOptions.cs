@@ -1,6 +1,6 @@
 namespace Emby.Sso.Protocol
 {
-    public sealed class OidcOptions
+    internal sealed class OidcOptions
     {
         public string IssuerUrl { get; set; } = string.Empty;
 

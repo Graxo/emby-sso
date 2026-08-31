@@ -7,7 +7,7 @@ namespace Emby.Sso.Protocol
     /// One armed provisioning: the policy an account is about to be created
     /// with, the username that armed it, and when the arm stops being claimable.
     /// </summary>
-    public sealed class PendingPolicy
+    internal sealed class PendingPolicy
     {
         /// <summary>
         /// For the log only, and only ever indicative — <see cref="PendingPolicies.Take"/>
@@ -41,7 +41,7 @@ namespace Emby.Sso.Protocol
     /// test project can reach it. The Emby-facing serialisation of a UserPolicy
     /// into <see cref="PendingPolicy.PolicyJson"/> stays in the Auth layer.
     /// </summary>
-    public sealed class PendingPolicies
+    internal sealed class PendingPolicies
     {
         /// <summary>
         /// A ceiling on entries that were armed but never claimed. Arming
