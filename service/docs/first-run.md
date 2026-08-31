@@ -97,9 +97,16 @@ not one that needs a quieter `chmod`.
 
 ## 4. Configure
 
-Copy the compose block from `service/docker-compose.yml` into whatever compose
-file this host already uses, then set the values it marks as required. At
-minimum:
+Start from `service/.env.example` — it lists every variable the service reads,
+with the defaults, and the values a real first run was verified with:
+
+```
+cp service/.env.example service/.env
+chmod 600 service/.env
+```
+
+Then copy the compose block from `service/docker-compose.yml` into whatever
+compose file this host already uses. The values that must be set:
 
 | Variable | What it is |
 |---|---|
@@ -108,7 +115,7 @@ minimum:
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | from the PayPal developer dashboard |
 | `PAYPAL_WEBHOOK_ID` | from the webhook you create in that dashboard. PayPal signs it into every message, so a wrong value fails every webhook closed |
 | `PAYPAL_CURRENCY` / `PAYPAL_PRICE` | what you are charging |
-| `PAYPAL_MINIMUM_AMOUNT` | the floor a captured payment must clear. **Required** — without it a payment of any size, including a penny, would buy a licence. Normally the same as `PAYPAL_PRICE` |
+| `PAYPAL_MINIMUM_AMOUNT` | the floor a captured payment must clear. **Defaults to `PAYPAL_PRICE`**, so setting `PAYPAL_PRICE` is enough — but if neither is set the service refuses to start, because without a floor a captured payment of any size, a penny included, would buy a licence |
 
 Secrets belong in a `.env` file beside the compose file (mode 600), or in
 whatever secret store the host already uses — not in the compose file itself,

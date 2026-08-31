@@ -28,3 +28,7 @@ licence-signing-key.private.json
 # refuses to write it inside a git working tree, and this is the second line of
 # defence. It lives beside the signing key, outside any repository.
 licences-issued.jsonl
+
+# Service configuration: the example is committed, a real one never is.
+service/.env
+.env
