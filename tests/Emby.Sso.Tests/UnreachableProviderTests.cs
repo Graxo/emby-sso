@@ -245,21 +245,24 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public async Task An_outage_during_a_migration_does_not_shut_provisioning_for_everybody()
+        public async Task An_outage_during_a_migration_does_not_tighten_the_branch_for_everybody()
         {
             // The scenario this exemption exists for: many people signing in for
             // the first time while the identity provider is down. Counting those
-            // would trip the global bucket - which is only a hundred - and hold
-            // provisioning shut for every user for a further fifteen minutes
-            // after the provider came back.
+            // would raise a surge - the threshold is only a hundred - and hold
+            // every newcomer's allowance down to three for a further fifteen
+            // minutes after the provider came back, on a server where nobody had
+            // done anything wrong.
             _transport = new ThrowingHandler();
             var throttle = new ProvisioningThrottle();
 
-            for (var attempt = 0; attempt < ProvisioningThrottle.MaxFailuresGlobally * 2; attempt++)
+            for (var attempt = 0; attempt < ProvisioningThrottle.GlobalSurgeThreshold * 2; attempt++)
             {
                 throttle.RecordFailure("user-" + attempt, await Validate("user-" + attempt), Now);
             }
 
+            Assert.False(throttle.IsGlobalSurge(Now));
+            Assert.Equal(ProvisioningThrottle.MaxFailuresPerUsername, throttle.AllowanceFor(Now));
             Assert.False(throttle.IsThrottled("someone-who-never-tried", Now));
         }
 

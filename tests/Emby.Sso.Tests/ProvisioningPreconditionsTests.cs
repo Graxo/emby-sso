@@ -107,17 +107,18 @@ namespace Emby.Sso.Tests
             // The failure this whole reordering exists to prevent: a hundred
             // refusals across a hundred DIFFERENT usernames - the shape of a
             // mass first sign-in against a server whose operator has not set the
-            // required group - closing the global bucket for everybody, and
-            // keeping it closed for fifteen minutes after the setting is fixed.
+            // required group - counting as failures, raising a surge, and
+            // tightening every newcomer's allowance for fifteen minutes after
+            // the setting is fixed.
             //
             // Evaluate reads the throttle and never writes to it. Ten times the
-            // global budget, spread over that many distinct names, must leave it
-            // wide open.
+            // surge threshold, spread over that many distinct names, must leave
+            // it untouched.
             var throttle = new ProvisioningThrottle();
             var settings = Ready();
             settings.RequiredGroup = string.Empty;
 
-            for (var i = 0; i < ProvisioningThrottle.MaxFailuresGlobally * 10; i++)
+            for (var i = 0; i < ProvisioningThrottle.GlobalSurgeThreshold * 10; i++)
             {
                 Assert.Equal(
                     ProvisioningPreconditionOutcome.RequiredGroupNotConfigured,
@@ -151,7 +152,7 @@ namespace Emby.Sso.Tests
             var insecure = Ready();
             insecure.AllowInsecureHttp = true;
 
-            for (var i = 0; i < ProvisioningThrottle.MaxFailuresGlobally + 1; i++)
+            for (var i = 0; i < ProvisioningThrottle.GlobalSurgeThreshold + 1; i++)
             {
                 Evaluate(autoCreateOff, throttle, "a-" + i);
                 Evaluate(noTemplate, throttle, "b-" + i);

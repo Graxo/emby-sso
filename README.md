@@ -481,8 +481,15 @@ brakes cover it, and **both are required**:
 1. **The plugin's own throttle**, automatic and not configurable. It applies to
    the native provisioning branch only — the browser flow never hands this
    server a password to relay, so there is nothing there to brute-force.
-   - 10 failures for one username, and 100 failures across all usernames, each
-     inside a **15-minute** window measured from the first counted failure;
+   - **A sign-in is refused only because of failures recorded against that same
+     username**, inside a **15-minute** window measured from that username's
+     first counted failure. Nothing anybody else does can refuse it. A stranger
+     spraying invented usernames cannot stop a first-time user who has their
+     password right — that is a guarantee with a test behind it, not a hope;
+   - the allowance is **10 failures per username**, dropping to **3 per
+     username** while more than 100 failures have been counted across all
+     usernames in the window (a "surge"). The surge tightens what any one name
+     can push at Authentik; it never closes the branch;
    - **failures only**, and a success clears that username's own bucket, so a
      new user who mistypes their password a few times is not locked out by
      their own typos;
@@ -490,14 +497,25 @@ brakes cover it, and **both are required**:
      "this account is not set up on this server" — it must not tell an attacker
      that a name was worth counting. Only the server log says a limit was hit;
    - an attempt that failed because **Authentik could not be reached** is not
-     counted, so a provider outage during a mass first sign-in does not hold
-     provisioning shut for fifteen minutes after it recovers;
+     counted, so a provider outage during a mass first sign-in neither locks
+     individual newcomers out of their own retries nor raises a surge;
    - configuration mistakes are not counted either — every refusal above is
      decided before anything is sent anywhere;
-   - while the **global** bucket is full, no account can be provisioned for
-     anyone until that window expires. That is the intended shape of the brake,
-     but it is also worth knowing before a mass onboarding: 100 failed attempts
-     across any mix of usernames closes the branch for up to fifteen minutes.
+   - what this deliberately does **not** do is cap the total number of attempts
+     the branch may forward in a window. Earlier builds did (100, then the
+     branch closed for everyone), and that cap turned out to be a weapon: about
+     a hundred requests carrying random usernames — **no valid credential
+     needed** — shut first-time sign-in for every real user for 15 minutes,
+     exactly during the mass onboarding the branch exists to serve. Any
+     aggregate cap is reachable by an unauthenticated stranger, and a reached
+     cap is a refusal for whoever asks next, so the cap had to go and brake 2
+     below had to become non-negotiable. Per-source rate limiting belongs in
+     front of Emby (reverse proxy) — the plugin cannot see a client address at
+     all;
+   - one consequence to know: an attacker who knows the Authentik username of
+     someone **not yet onboarded** can spend that name's allowance and delay
+     that one person's first sign-in by up to 15 minutes (3 attempts during a
+     surge, 10 otherwise). It affects only that name and clears itself.
 
 2. **Authentik's own failed-login / reputation policy — this is required
    configuration, not optional hardening.** Configure it on the flows this
@@ -543,7 +561,7 @@ ever sees one of a fixed set of short, generic sentences:
 | "The sign-in provider rejected this sign-in." | Authentik returned an OAuth error on the callback, or an empty/malformed credential was submitted. | Check the Authentik provider/application logs for the same request; confirm the redirect URI matches exactly. |
 | "The sign-in response could not be verified." | The ID token failed validation — bad signature, wrong issuer, wrong audience, expired, or a nonce mismatch. | Server clocks in sync (Emby and Authentik); client ID matches the token's audience; issuer URL matches the token's `iss` exactly. |
 | "This sign-in attempt expired. Please try again." | The `state` value on the callback was unknown, already used, or too old (single-use, short TTL). | Usually a stale bookmark/back-button reuse — just start over from the sign-in URL. If it happens consistently, check for a reverse proxy caching or replaying the callback request. |
-| "This account is not set up on this server." | Deliberately indistinguishable to the user, and now one of several things: the username claim matched no existing Emby user and automatic creation is off; the token carried no groups claim; the identity did not hold the required group; the provisioning throttle is closed for that username or globally; **the account is not assigned to this plugin as its login provider**; or **the identity does not match the `sub` the account is bound to, or the binding store could not be read or written**. | **Only the log tells them apart** — it says which, naming the configured claim rather than any group value. Then: confirm the Emby account exists (or that auto-create and a template user are configured); confirm Authentik emits the groups claim on the flow in use, direct grant included; confirm the user is in the required group; if the log says the throttle is closed, wait out the 15-minute window. |
+| "This account is not set up on this server." | Deliberately indistinguishable to the user, and now one of several things: the username claim matched no existing Emby user and automatic creation is off; the token carried no groups claim; the identity did not hold the required group; the provisioning throttle is closed for that username; **the account is not assigned to this plugin as its login provider**; or **the identity does not match the `sub` the account is bound to, or the binding store could not be read or written**. | **Only the log tells them apart** — it says which, naming the configured claim rather than any group value. Then: confirm the Emby account exists (or that auto-create and a template user are configured); confirm Authentik emits the groups claim on the flow in use, direct grant included; confirm the user is in the required group; if the log says the throttle is closed, wait out the 15-minute window. |
 | "Password sign-in is disabled for this account." | A native app tried to sign in via direct grant, but either "Allow native apps to sign in with a password" is off, **or "Allow plain HTTP (testing only)" is on**, which disables native password sign-in entirely. The user-facing sentence is the same for both; the log says which. | Enable native sign-in in the plugin configuration if you want it, understanding the MFA trade-off above. If the log names plain HTTP, turn that off and serve the plugin over HTTPS — this server will not relay a password in cleartext. |
 | "This sign-in could not be completed in this browser. Please try signing in again." | `/emby/Sso/Start` sets a short-lived binding cookie that must come back unchanged on `/emby/Sso/Callback`. A reverse proxy sitting in front of Emby stripped or rewrote cookies on that path, or rewrote the path so the cookie's `Path` no longer covers `/emby/Sso/Callback`. | Check the log line next to this error: it distinguishes no cookie presented at all from a cookie that was presented but did not match. Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on both `/emby/Sso/Start` and `/emby/Sso/Callback`, and that it does not rewrite either path in a way that changes the cookie's directory. |
 

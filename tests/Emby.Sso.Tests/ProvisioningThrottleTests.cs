@@ -20,6 +20,19 @@ namespace Emby.Sso.Tests
             }
         }
 
+        /// <summary>
+        /// Pushes the branch over the global surge threshold using names nobody
+        /// legitimate would ever present, which is exactly how an attacker does
+        /// it: no valid credential is needed to record a failure.
+        /// </summary>
+        private static void Surge(ProvisioningThrottle throttle, DateTimeOffset now)
+        {
+            for (var index = 0; index < ProvisioningThrottle.GlobalSurgeThreshold; index++)
+            {
+                throttle.RecordFailure("surge-" + index, now);
+            }
+        }
+
         [Fact]
         public void A_username_with_no_history_is_not_throttled()
         {
@@ -92,41 +105,63 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public void Success_does_not_reopen_the_global_bucket()
+        public void Success_does_not_lift_a_surge()
         {
             // The attack this guards against: an attacker who holds one valid
-            // identity signing in with it to reset the only brake that
-            // constrains walking a list of names.
+            // identity signing in with it between guesses to clear the only
+            // count that constrains walking a list of names.
             var throttle = new ProvisioningThrottle();
 
-            for (var index = 0; index < ProvisioningThrottle.MaxFailuresGlobally; index++)
-            {
-                throttle.RecordFailure("victim" + index, Now);
-            }
-
+            Surge(throttle, Now);
             throttle.RecordSuccess("attacker", Now);
 
-            Assert.True(throttle.IsThrottled("someone-else", Now));
+            Assert.True(throttle.IsGlobalSurge(Now));
+            Assert.Equal(ProvisioningThrottle.SurgeFailuresPerUsername, throttle.AllowanceFor(Now));
         }
 
         [Fact]
-        public void The_global_bucket_closes_the_branch_for_a_username_with_no_failures_of_its_own()
+        public void An_attacker_burning_invented_usernames_cannot_refuse_a_clean_username()
         {
+            // Finding F3, and the property this class exists to guarantee: an
+            // unauthenticated stranger sending nothing but invented usernames
+            // must not be able to refuse anybody else. Ten times the surge
+            // threshold, every one of them a name nobody has ever used, and a
+            // first-time user arriving in the middle of it is still served.
             var throttle = new ProvisioningThrottle();
 
-            // One short of the per-username limit on each of enough names to
-            // pass the global limit: no single name is closed, and the branch is
-            // shut anyway.
-            const int justUnder = ProvisioningThrottle.MaxFailuresPerUsername - 1;
-            var names = (ProvisioningThrottle.MaxFailuresGlobally / justUnder) + 1;
-
-            for (var index = 0; index < names; index++)
+            for (var index = 0; index < ProvisioningThrottle.GlobalSurgeThreshold * 10; index++)
             {
-                Fail(throttle, "victim" + index, justUnder, Now);
+                throttle.RecordFailure("invented-" + index, Now);
             }
 
-            Assert.False(new ProvisioningThrottle().IsThrottled("victim0", Now));
-            Assert.True(throttle.IsThrottled("never-seen-before", Now));
+            Assert.True(throttle.IsGlobalSurge(Now));
+            Assert.False(throttle.IsThrottled("newcomer", Now));
+
+            // ...and the same for a newcomer who has fumbled their own password
+            // once, which is the ordinary way a real first sign-in goes.
+            Fail(throttle, "newcomer", 1, Now);
+
+            Assert.False(throttle.IsThrottled("newcomer", Now));
+        }
+
+        [Fact]
+        public void A_surge_tightens_the_allowance_without_closing_the_branch()
+        {
+            // What the global count still buys: while a surge is on, one name
+            // may push far fewer attempts at the identity provider - but a name
+            // that has not been failing is not refused.
+            var throttle = new ProvisioningThrottle();
+
+            Fail(throttle, "alice", ProvisioningThrottle.SurgeFailuresPerUsername, Now);
+
+            Assert.False(throttle.IsThrottled("alice", Now));
+            Assert.Equal(ProvisioningThrottle.MaxFailuresPerUsername, throttle.AllowanceFor(Now));
+
+            Surge(throttle, Now);
+
+            Assert.Equal(ProvisioningThrottle.SurgeFailuresPerUsername, throttle.AllowanceFor(Now));
+            Assert.True(throttle.IsThrottled("alice", Now));
+            Assert.False(throttle.IsThrottled("never-seen-before", Now));
         }
 
         [Fact]
@@ -170,25 +205,25 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public void The_global_window_clears_itself_too()
+        public void The_surge_clears_itself_too()
         {
             var throttle = new ProvisioningThrottle();
 
-            for (var index = 0; index < ProvisioningThrottle.MaxFailuresGlobally; index++)
-            {
-                throttle.RecordFailure("victim" + index, Now);
-            }
+            Surge(throttle, Now);
 
-            Assert.True(throttle.IsThrottled("never-seen-before", Now));
-            Assert.False(throttle.IsThrottled("never-seen-before", Now + ProvisioningThrottle.Window));
+            Assert.True(throttle.IsGlobalSurge(Now));
+            Assert.False(throttle.IsGlobalSurge(Now + ProvisioningThrottle.Window));
+            Assert.Equal(
+                ProvisioningThrottle.MaxFailuresPerUsername,
+                throttle.AllowanceFor(Now + ProvisioningThrottle.Window));
         }
 
         [Fact]
         public void The_map_stays_bounded_when_every_attempt_invents_a_new_username()
         {
-            // A caller that consults IsThrottled first can never get here - the
-            // global bucket closes long before - so this exercises the structural
-            // bound rather than the arithmetic one.
+            // Reachable in earnest now that no global lockout stops the branch
+            // first: inventing a name per attempt is the cheapest thing an
+            // attacker can do, and the map must not grow with it.
             var throttle = new ProvisioningThrottle();
 
             for (var index = 0; index < ProvisioningThrottle.MaxTrackedUsernames * 2; index++)
@@ -200,19 +235,18 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public void A_full_map_never_forgets_a_recorded_failure()
+        public void A_flood_of_invented_names_cannot_evict_a_name_that_is_being_guessed()
         {
-            // The eviction rule is "no eviction": at capacity a NEW username
-            // simply gets no bucket of its own and is counted globally. Dropping
-            // a live bucket to make room would hand that name a fresh ten-guess
-            // budget, which is a wrong ALLOW.
+            // The eviction rule is "drop the weakest bucket": at capacity the
+            // tracked name carrying the fewest failures makes room, and among
+            // equals the one closest to expiring. A rule that dropped the oldest
+            // - or that refused to evict at all and left the newcomer untracked
+            // - would hand a name under active guessing a fresh budget, which is
+            // a wrong ALLOW, and it would cost an attacker one cheap invented
+            // name to arrange.
             //
-            // Seeing that requires the one state in which the cap can decide
-            // anything: the global bucket's window rolled over while
-            // longer-lived per-username buckets are still live. While the global
-            // bucket is up it refuses everyone regardless, so an eviction is
-            // invisible - which is exactly why this test is built the awkward
-            // way round rather than asserting at a single instant.
+            // Asserted after the global window has rolled over, so the answer is
+            // the per-username bucket's own and not a surge's.
             var throttle = new ProvisioningThrottle();
 
             // Opens the global window at Now, so it expires before anything
@@ -297,7 +331,7 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public async Task Concurrent_invented_usernames_keep_the_map_bounded_and_the_branch_closed()
+        public async Task Concurrent_invented_usernames_keep_the_map_bounded_and_leave_newcomers_served()
         {
             const int callers = 256;
             const int failuresEach = 8;
@@ -330,9 +364,12 @@ namespace Emby.Sso.Tests
             Assert.Empty(faults);
             Assert.True(throttle.TrackedUsernames(Now) <= ProvisioningThrottle.MaxTrackedUsernames);
 
-            // 2048 failures is far past the global limit, so whatever the
-            // interleaving the branch is shut.
-            Assert.True(throttle.IsThrottled("never-seen-before", Now));
+            // 2048 failures is far past the surge threshold, so whatever the
+            // interleaving, the allowance is tightened - and a name that has not
+            // failed is still served. Under concurrency as under a single
+            // thread, the flood refuses nobody but itself.
+            Assert.True(throttle.IsGlobalSurge(Now));
+            Assert.False(throttle.IsThrottled("never-seen-before", Now));
         }
     }
 }
