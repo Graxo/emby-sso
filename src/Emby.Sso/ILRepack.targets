@@ -5,6 +5,31 @@
       <MergeInput Include="$(OutputPath)Microsoft.IdentityModel.*.dll" />
       <MergeInput Include="$(OutputPath)Newtonsoft.Json.dll" />
       <MergeInput Include="$(OutputPath)System.IdentityModel.Tokens.Jwt.dll" />
+      <!-- Everything below is a netstandard2.0 dependency that
+           Microsoft.IdentityModel 8 reaches for and the 6.35.0 build did not,
+           and that the .NET runtime Emby is built on does not carry:
+           Microsoft.Bcl.TimeProvider (the TimeProvider backport) and the
+           Microsoft.Bcl.AsyncInterfaces it needs, Microsoft.Extensions.Logging
+           .Abstractions, and - from 8.19 onwards - Microsoft.Bcl.Cryptography
+           together with the System.Formats.Asn1 version IT needs, which is
+           newer than the runtime's and so cannot bind to it.
+
+           They are merged rather than shipped alongside because the plugin is
+           installed as ONE file (see the README). Left unmerged they would
+           become external references the merged assembly cannot resolve unless
+           the server happens to carry each one, which is not something this
+           repository can check - the failure would be a plugin that silently
+           does not load. Merged, the shipped DLL's external references stay
+           inside the set the proven 6.35.0 build already needed plus assemblies
+           that are part of the .NET runtime itself.
+
+           If a future upgrade adds another dependency, the check that matters
+           is the merged assembly's own reference list, not this comment. -->
+      <MergeInput Include="$(OutputPath)Microsoft.Bcl.TimeProvider.dll" />
+      <MergeInput Include="$(OutputPath)Microsoft.Bcl.AsyncInterfaces.dll" />
+      <MergeInput Include="$(OutputPath)Microsoft.Extensions.Logging.Abstractions.dll" />
+      <MergeInput Include="$(OutputPath)Microsoft.Bcl.Cryptography.dll" />
+      <MergeInput Include="$(OutputPath)System.Formats.Asn1.dll" />
       <MergeLibDir Include="$(OutputPath)" />
       <MergeLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
     </ItemGroup>

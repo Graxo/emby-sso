@@ -17,11 +17,23 @@
 
   <ItemGroup>
     <PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" PrivateAssets="all" ExcludeAssets="runtime" />
-    <PackageReference Include="System.Memory" Version="4.6.0" PrivateAssets="all" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="6.35.0" />
-    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="6.35.0" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34.1" PrivateAssets="all" />
+    <PackageReference Include="System.Memory" Version="4.6.3" PrivateAssets="all" ExcludeAssets="runtime" />
+    <!-- The library that validates the id_token, and therefore the whole trust
+         model. Held at 6.35.0 until now because Emby Server ships its own
+         Microsoft.IdentityModel (7.6.2 as of Emby 4.9.5.0) and two identities of
+         the same assembly in one load context is fatal - but that argument was
+         about the SERVER's copy, and ILRepack internalizes ours, so it never
+         actually required staying on a line Microsoft has since marked Legacy
+         and stopped giving security fixes to. What the merge has to keep true is
+         checked, not assumed: the merged assembly exports no Microsoft.* or
+         Newtonsoft.* type and its external assembly references stay inside the
+         set the 6.35.0 build already needed. See ILRepack.targets for the two
+         netstandard2.0 dependencies version 8 added that must be merged in for
+         that to hold. -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.22.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.46" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

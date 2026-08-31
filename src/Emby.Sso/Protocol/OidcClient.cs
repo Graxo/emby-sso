@@ -115,7 +115,7 @@ namespace Emby.Sso.Protocol
 
             var idToken = await PostTokenRequestAsync(form, cancellationToken).ConfigureAwait(false);
             var configuration = await GetConfigurationOrThrowAsync(cancellationToken).ConfigureAwait(false);
-            return ValidateIdToken(idToken, login.Nonce, requireNonce: true, configuration);
+            return await ValidateIdTokenAsync(idToken, login.Nonce, requireNonce: true, configuration).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -144,7 +144,7 @@ namespace Emby.Sso.Protocol
             // No nonce: there was no authorization request to bind one to. Unlike
             // ExchangeCodeAsync, this is an explicit, named opt-out rather than an
             // inferred one.
-            return ValidateIdToken(idToken, null, requireNonce: false, configuration);
+            return await ValidateIdTokenAsync(idToken, null, requireNonce: false, configuration).ConfigureAwait(false);
         }
 
         private async Task<OpenIdConnectConfiguration> GetConfigurationOrThrowAsync(CancellationToken cancellationToken)
@@ -300,7 +300,14 @@ namespace Emby.Sso.Protocol
             SecurityAlgorithms.RsaSsaPssSha512,
         };
 
-        private OidcIdentity ValidateIdToken(string idToken, string expectedNonce, bool requireNonce, OpenIdConnectConfiguration configuration)
+        /// <summary>
+        /// Validates the id_token. Asynchronous only because IdentityModel 8's
+        /// <c>JsonWebTokenHandler</c> deprecated the synchronous
+        /// <c>ValidateToken</c> overload; nothing here actually awaits I/O -
+        /// the signing keys are already in hand from the cached discovery
+        /// document - so the shape of the check is unchanged.
+        /// </summary>
+        private async Task<OidcIdentity> ValidateIdTokenAsync(string idToken, string expectedNonce, bool requireNonce, OpenIdConnectConfiguration configuration)
         {
             var parameters = new TokenValidationParameters
             {
@@ -317,7 +324,7 @@ namespace Emby.Sso.Protocol
                 ClockSkew = TimeSpan.FromMinutes(2),
             };
 
-            var result = new JsonWebTokenHandler().ValidateToken(idToken, parameters);
+            var result = await new JsonWebTokenHandler().ValidateTokenAsync(idToken, parameters).ConfigureAwait(false);
 
             if (!result.IsValid)
             {
