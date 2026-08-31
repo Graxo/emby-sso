@@ -440,6 +440,19 @@ Without it every call to `ILogger.Info(...)` and `IHttpResultFactory.GetResult(.
 - Release-packaging tasks must copy from `merged/`.
 - Do not "fix" the plugin by bumping to `Microsoft.IdentityModel` 7.6.2 to match the server. Internalised 6.35.0 is proven to work and stays independent of whatever version a future Emby build ships.
 
+> **Superseded, 2026-08-31.** The second half of that sentence is the part that
+> lasted: the plugin must stay independent of the server's copy, and matching
+> the server's version is still the wrong way to get there. The *version pin*
+> did not last. Microsoft marked the 6.x line **Legacy** — no more security
+> fixes for the code that validates the id_token — so the plugin moved to
+> `Microsoft.IdentityModel` **8.22.0**, still internalised. The isolation was
+> re-measured rather than assumed: the merged assembly carries no assembly
+> reference to any `Microsoft.IdentityModel.*` at all, and exports no
+> `Microsoft.*` or `Newtonsoft.*` type, so there is nothing for the server's
+> 7.6.2 to bind to. Version 8's `netstandard2.0` build does pull in five
+> dependencies the runtime does not carry, which are merged in too — see
+> `src/Emby.Sso/ILRepack.targets`.
+
 ---
 
 ## 5. `AuthenticationException` — **DOES NOT EXIST**
