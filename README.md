@@ -152,6 +152,20 @@ backs a live session. **Do not delete either one as a cleanup step**: deleting
 the row this plugin's completion page created revokes the access token it
 minted, which signs that browser out of its current SSO session immediately.
 
+**The pages the plugin serves are locked down as hard as they can be.** Every
+response it produces — the completion page, the error page, and the redirect to
+Authentik, on failure paths as well as successful ones — carries
+`X-Frame-Options: DENY`, `Content-Security-Policy` with `frame-ancestors
+'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+`Cache-Control: no-store`. The completion page is the one that matters: it holds
+a live one-time handoff secret and posts it to Emby's own authentication
+endpoint, so it must never be framable or cached. Its policy starts at
+`default-src 'none'` and adds back only what the page uses — its own inline
+script and style, named by a fresh per-response nonce, and `connect-src 'self'`
+— so `unsafe-inline` appears nowhere and an injected script would not run even
+if one ever got in. If you put a reverse proxy in front of Emby, do not strip or
+weaken these headers.
+
 ---
 
 ## Starting a sign-in: there is no button on the login page

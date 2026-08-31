@@ -155,6 +155,16 @@ namespace Emby.Sso.Api
                 // complete the flow in someone else's browser.
                 IssueBrowserBinding(login);
 
+                // The redirect is the one response with no body of its own, and
+                // the one the result factory gives no header dictionary for -
+                // GetRedirectResult(string) takes nothing else (read from
+                // MediaBrowser.Controller 4.9.1.90 by reflection). So its
+                // headers go on the response object directly. It carries the
+                // same set as the pages rather than an abbreviated one: a
+                // reviewer should not have to work out which responses were
+                // considered worth protecting.
+                ApplySecurityHeadersToResponse(SecurityHeaders.ForRedirect());
+
                 return _resultFactory.GetRedirectResult(url);
             }
             catch (SsoException ex)
@@ -397,7 +407,13 @@ namespace Emby.Sso.Api
             var secret = SsoRuntime.HandoffSecrets.Issue(user.Name);
             _logger.Info("SSO: issued a sign-in handoff for {0}", user.Name);
 
-            return Html(CompletionPage.Render(user.Name, secret));
+            // The one page that holds a live credential, so the one whose
+            // headers matter most - see SecurityHeaders.
+            var nonce = SecurityHeaders.NewNonce();
+
+            return Html(
+                CompletionPage.Render(user.Name, secret, nonce),
+                SecurityHeaders.ForScriptedPage(nonce));
         }
 
         /// <summary>
@@ -692,17 +708,55 @@ namespace Emby.Sso.Api
                 }
             }
 
-            return Html(ErrorPage.Render(userSafeReason, SafeBaseUrl()));
+            // Every failure in this service leaves through here, so this is
+            // where the error page's headers are guaranteed - including for the
+            // catch-all handlers around both endpoints, which is the path a
+            // stranger reaches by malforming a request.
+            var nonce = SecurityHeaders.NewNonce();
+
+            return Html(
+                ErrorPage.Render(userSafeReason, SafeBaseUrl(), nonce),
+                SecurityHeaders.ForStaticPage(nonce));
         }
 
-        private object Html(string body)
+        /// <summary>
+        /// Adds a header set to the response object itself, for the one response
+        /// that is not built from a header dictionary.
+        ///
+        /// UNVERIFIED that Emby emits what is added here: <c>IResponse.AddHeader</c>
+        /// is read from MediaBrowser.Model 4.9.1.90 by reflection, and this
+        /// plugin runs on no reachable server, so nothing below has been seen on
+        /// the wire. It is written defensively for that reason - a missing
+        /// request, a missing response or a throw from the framework must not
+        /// turn a working sign-in into a failed one, because a redirect without
+        /// these headers is no worse than the redirect this build shipped
+        /// before.
+        /// </summary>
+        private void ApplySecurityHeadersToResponse(IDictionary<string, string> headers)
         {
-            var headers = new Dictionary<string, string>
-            {
-                ["Cache-Control"] = "no-store, no-cache, must-revalidate",
-                ["Pragma"] = "no-cache",
-            };
+            var response = Request?.Response;
 
+            if (response == null)
+            {
+                _logger.Error("SSO: no response object to set security headers on");
+                return;
+            }
+
+            try
+            {
+                foreach (var header in headers)
+                {
+                    response.AddHeader(header.Key, header.Value);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.ErrorException("SSO: {0}", ex, "could not set the response security headers");
+            }
+        }
+
+        private object Html(string body, IDictionary<string, string> headers)
+        {
             var request = Request;
 
             if (request == null)

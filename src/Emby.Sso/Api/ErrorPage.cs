@@ -17,7 +17,17 @@ namespace Emby.Sso.Api
         /// A validated http/https base URL with no trailing slash, or an empty
         /// string to emit root-relative links.
         /// </param>
-        public static string Render(string userSafeReason, string baseUrl)
+        /// <param name="nonce">
+        /// The per-response content-security-policy nonce, from
+        /// <see cref="SecurityHeaders.NewNonce"/>. This page has no script at
+        /// all, so the nonce names only its one inline &lt;style&gt; block - and
+        /// the policy that goes with it says <c>script-src 'none'</c>. The
+        /// headers are applied here as well as on the completion page on
+        /// purpose: an error page is the response a stranger can reach most
+        /// easily, and headers set only on the successful path are the usual way
+        /// this control is missed.
+        /// </param>
+        public static string Render(string userSafeReason, string baseUrl, string nonce)
         {
             var reason = PageText.Html(
                 string.IsNullOrWhiteSpace(userSafeReason)
@@ -30,7 +40,8 @@ namespace Emby.Sso.Api
             return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
                 + "<meta name=\"referrer\" content=\"no-referrer\">"
-                + "<title>Sign-in failed</title><style>" + PageText.BaseStyle
+                + "<title>Sign-in failed</title><style nonce=\"" + PageText.Html(nonce) + "\">"
+                + PageText.BaseStyle
                 + "</style></head><body><main>"
                 + "<h1>Sign-in failed</h1><p>" + reason + "</p>"
                 + "<p><a href=\"" + retry + "\">Try again</a> &middot; "

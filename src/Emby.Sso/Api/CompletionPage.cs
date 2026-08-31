@@ -28,28 +28,51 @@ namespace Emby.Sso.Api
     /// </summary>
     internal static class CompletionPage
     {
-        public static string Render(string username, string handoffSecret)
+        /// <param name="nonce">
+        /// The per-response content-security-policy nonce, from
+        /// <see cref="SecurityHeaders.NewNonce"/>. It names this page's two
+        /// inline blocks in the header, so the policy can refuse every OTHER
+        /// inline script rather than saying <c>'unsafe-inline'</c>. It is
+        /// base64url by construction and is emitted into single-quoted
+        /// attributes; <see cref="SecurityHeaders.IsValidNonce"/> is the guard
+        /// that keeps it that way.
+        /// </param>
+        public static string Render(string username, string handoffSecret, string nonce)
         {
-            return Head
+            var attribute = PageText.Html(nonce);
+
+            return Head(attribute)
                 + "var USERNAME = " + PageText.JsString(username) + ";\n"
                 + "var HANDOFF = " + PageText.JsString(handoffSecret) + ";\n"
                 + Body;
         }
 
-        private const string Head = @"<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
+        // Note what is NOT here any more: the two blocks used to start hidden
+        // with a style='display:none' ATTRIBUTE, and a nonce does not authorise
+        // those - only 'unsafe-inline' or 'unsafe-hashes' would, and neither is
+        // worth having on the page that holds the handoff secret. They start
+        // hidden by class instead, which the nonce'd <style> block below can
+        // define. Toggling .style.display from script, which show()/hide() used
+        // to do and which is not restricted by CSP, was replaced for the same
+        // reason: one mechanism, visible in one place.
+        private static string Head(string nonce)
+        {
+            return @"<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <meta name='referrer' content='no-referrer'>
-<title>Signing in</title><style>" + PageText.BaseStyle + @"code{color:#888;font-size:.85em}
+<title>Signing in</title><style nonce='" + nonce + "'>" + PageText.BaseStyle + @"code{color:#888;font-size:.85em}
+.hidden{display:none}
 </style></head><body><main>
-<div id='working' style='display:none'><h1>Signing you in</h1><p>One moment.</p></div>
-<div id='failed' style='display:none'><h1>Sign-in failed</h1>
+<div id='working' class='hidden'><h1>Signing you in</h1><p>One moment.</p></div>
+<div id='failed' class='hidden'><h1>Sign-in failed</h1>
 <p>Emby could not complete this sign-in. <code id='code'></code></p>
 <p><a id='retry' href='#'>Try again</a></p></div>
 <noscript><h1>Sign-in failed</h1><p>JavaScript is required to finish signing in.</p></noscript>
-</main><script>
+</main><script nonce='" + nonce + @"'>
 (function () {
 'use strict';
 ";
+        }
 
         private const string Body = @"
 var STORE_KEY = 'servercredentials3';
@@ -71,8 +94,8 @@ var serverUrl = CALLBACK_RE.test(here)
 // address exactly as served.
 var manualAddress = serverUrl.toLowerCase();
 
-function show(id) { document.getElementById(id).style.display = ''; }
-function hide(id) { document.getElementById(id).style.display = 'none'; }
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
 
 // Both blocks start hidden so that with scripting off the <noscript> message is
 // the only thing on the page, rather than a second heading under a claim that a
