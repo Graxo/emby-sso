@@ -194,6 +194,11 @@ including this one.
 - **Native apps (phone, TV).** Off by default. When enabled, a native
   client's normal username/password screen is checked against Authentik
   using an OIDC direct grant instead of Emby's local password.
+- **Native apps, with a one-time PIN instead.** Also off by default, and a
+  separate setting. The user completes a full browser sign-in (MFA and all) on
+  a phone or laptop, is shown a short PIN, and types their username and that
+  PIN into the TV app's ordinary sign-in screen. See **Native app sign-in with
+  a one-time PIN**.
 - **No account is created unless you switch that on.** If the username from
   Authentik does not match an existing Emby user, the sign-in is rejected with
   a generic error and nothing is written to the log except the fact that it
@@ -374,6 +379,7 @@ Open Dashboard → Plugins → **Authentik SSO** and fill in:
 | Emby public base URL | the address users reach this server on, e.g. `https://emby.example.com`. Used to build the redirect URI and the post-login redirect. Required — Emby cannot infer this reliably behind a reverse proxy. |
 | Username claim | defaults to `preferred_username`, matched case-insensitively against the Emby username. |
 | Allow native apps to sign in with a password | off by default — see "Native app sign-in" below. |
+| Allow native apps to sign in with a one-time PIN | off by default, and **not** governed by the setting above — see "Native app sign-in with a one-time PIN" below. |
 | Reserve a sign-in button on the login page | reserved for future use; currently does nothing. |
 | Allow plain HTTP | testing only. The browser flow refuses to start over plain HTTP unless this is set — and setting it **disables native password sign-in entirely**, see below. |
 | Allow an identity provider on a private or loopback address | off by default. The plugin resolves the identity provider's address before connecting and refuses loopback, private (RFC1918) and CGNAT ranges, so a hostile or mistyped issuer URL cannot make this server fetch from its own network. Tick this if your identity provider genuinely lives on a private address — a self-hosted Authentik at `https://10.0.0.5` or `https://authentik.lan` is a normal setup, not an attack. It is deliberately **separate** from "Allow plain HTTP": an identity provider on a private address with a valid certificate should not have to permit cleartext to be reachable. **Upgrade note:** an existing install whose identity provider resolves to a private address stops working until this is ticked; the log names the address and the rule that refused it. |
@@ -384,8 +390,9 @@ Open Dashboard → Plugins → **Authentik SSO** and fill in:
 | Licence key | the licence issued for **this** server. Without a valid one, new sign-ons and account creation are refused — see **Licensing** above. |
 
 After saving, the page displays the exact **redirect URI** to put in
-Authentik and the **sign-in URL** to give your users — both computed from
-the public base URL you just entered.
+Authentik, the **sign-in URL** to give your users, and the **PIN URL** for
+users signing in on a television — all computed from the public base URL you
+just entered.
 
 ---
 
@@ -532,6 +539,135 @@ unaffected either way.
 
 **It is switched off entirely while "Allow plain HTTP (testing only)" is on** —
 see "Group-gated sign-in and automatic account creation" below.
+
+---
+
+## Native app sign-in with a one-time PIN
+
+**Off by default, and a separate setting from the one above** — "Allow native
+apps to sign in with a one-time PIN". Neither setting turns the other on, and
+you can run either, both or neither.
+
+This is the answer to the question the direct grant does not answer well: how
+does somebody sign in on a **television** without either typing an app-password
+token with a D-pad or giving up multi-factor authentication?
+
+### How a user gets one
+
+1. On a phone or a laptop, they open the PIN URL:
+
+   ```
+   https://<your-emby-server>/emby/Sso/Pin
+   ```
+
+   The configuration page shows this exact URL for your server, next to the
+   ordinary sign-in URL, under "PIN URL for users to open on a phone or laptop".
+2. They sign in through Authentik **normally** — the full interactive flow, with
+   whatever MFA, passkeys and policies you have on it.
+3. The page that comes back shows an eight-character PIN, like `K7RM-3XQP`.
+4. On the television, they open Emby's ordinary sign-in screen, type their
+   **Emby username**, and type that **PIN** where it asks for a password.
+
+That is it. It works with **unmodified Emby apps**, because a PIN is typed into
+the one field those apps already have.
+
+### What the PIN is, exactly
+
+- **Eight characters** from a 30-character alphabet — digits 2–9 and A–Z without
+  I, L, O or U, so there is no `0`/`O` or `1`/`I`/`l` to misread. That is about
+  39 bits, or 656 billion possibilities. Case does not matter, and the hyphen is
+  optional.
+- **Five minutes**, from when it is shown.
+- **Single use.** It is consumed by the sign-in it completes.
+- **Destroyed by one wrong entry.** A PIN that is guessed at wrongly is gone; a
+  user who mistypes theirs opens the PIN URL again for a new one. That is
+  deliberate — see below.
+- **Bound to one Emby account.** A live PIN presented with somebody else's
+  username is refused, and refusing it does not spend it.
+- **Held in memory only.** Restarting Emby forgets every live PIN, which is
+  correct: they are worth minutes.
+- **Never logged, never in a URL.** The server log records that a PIN was issued
+  and for whom, never the PIN itself.
+
+### It inherits every guard an ordinary sign-in has
+
+The PIN endpoint is not a second way to authenticate anybody. It starts the
+**same browser flow** as `/emby/Sso/Start` — the same redirect, the same
+callback, the same checks — and differs only in what happens after all of them
+have passed. So a PIN is issued only to somebody who would have been signed in:
+the licence must be valid, the required group must be configured *and held*, the
+Emby account must already be stamped to this plugin (or be one this plugin is
+allowed to create), and the Authentik `sub` must match the account's recorded
+binding. If any of those would have refused the person, no PIN exists.
+
+Redeeming one is checked too: the licence, the required-group setting and the
+provider stamp are all re-checked at sign-in, and turning the PIN setting off
+stops PINs already issued from being redeemed as well as stopping new ones.
+
+### Why one wrong entry destroys it, and what that costs
+
+A PIN is far weaker per guess than the 256-bit secret the browser flow uses
+internally, and it is typed into a field anyone on the network can reach. The
+defence that has to hold is that it **cannot be ground down**: because a wrong
+guess consumes the PIN, a guesser's entire chance against an issued PIN is 1 in
+656 billion, no matter how fast they send guesses or how many usernames they
+spread across.
+
+The property the plugin guarantees, and tests:
+
+> The only thing a PIN attempt can consume is the PIN issued to the very
+> username that attempt names. Nothing done to one account's PIN can refuse
+> anything to any other account, and nothing done to it can refuse any other
+> credential — browser sign-in and, if you enabled it, password sign-in are
+> untouched.
+
+There is deliberately **no server-wide PIN rate limit**, and PIN attempts are
+deliberately **not** charged to the provisioning throttle described below. Both
+would be worse than useless here: any aggregate ceiling is reachable by an
+unauthenticated stranger, and a reached ceiling is a refusal for whoever asks
+next — the exact denial of service that was removed from the provisioning
+throttle. A limit that lives on one secret cannot be turned into a weapon
+against a third party.
+
+What an attacker *can* do, stated plainly: somebody who knows a username can
+send PIN-shaped guesses at it and destroy that person's PIN each time one is
+issued, denying **that one person** the PIN route for as long as they keep it
+up. It affects nobody else and no other sign-in path, and allowing three
+attempts instead of one would not fix it — three guesses a second destroys a PIN
+as reliably as one. The alternative, not consuming on failure, would let the
+same attacker grind the PIN instead of denying it, and a credential that can be
+ground is a credential that is eventually guessed.
+
+Two things that are **not** a problem, and are tested:
+
+- A user's own password, typed on the TV by mistake, does not destroy their live
+  PIN. Only a value that is PIN-*shaped* counts as an attempt at a PIN.
+- Presenting somebody's PIN under a different username does not destroy it.
+
+### PIN versus app password
+
+Both let a TV app sign in. They are not the same bargain.
+
+| | One-time PIN | Authentik app password (direct grant) |
+|---|---|---|
+| Where it comes from | Issued by this server at the end of a full browser sign-in | Created by the user in Authentik, outside this plugin |
+| MFA | **Yes** — the browser sign-in that issued it did whatever MFA you enforce | **No** — a direct grant cannot do MFA at all |
+| Lifetime | 5 minutes | Until the user's chosen expiry, if they set one |
+| Reuse | Once | Every sign-in, indefinitely |
+| Strength per guess | ~39 bits, and one guess allowed per issuance | A long random token |
+| If it leaks | Worthless within minutes, and only if unused | Library access until it is revoked |
+| Typing on a remote | 8 characters | A long token |
+
+The app-password route **stays supported** and is unchanged; nothing here
+deprecates it. The honest comparison is that a PIN is weaker *per guess* than a
+token and stronger *everywhere else* — it is short-lived, single-use,
+account-bound, rate-limited by construction, and it is the only one of the two
+that carries multi-factor authentication onto the television.
+
+Note that the plain-HTTP refusal that applies to the direct grant does **not**
+apply to PINs, for the same reason it does not apply to the browser flow: there
+is no real password involved. A PIN is a value this server issued, single-use,
+and an eavesdropper who sees one sees it inside the request that is spending it.
 
 ---
 
@@ -820,6 +956,34 @@ and the token's acceptance by Emby's API were all directly observed. **The
 one thing that was not observed is the browser/`localStorage` behavior
 itself** — no browser was available in the environment where this was
 tested.
+
+### One-time PIN sign-in: never run inside Emby, and the config page is unchecked
+
+PIN sign-in is **built and unit-tested and has never run on a server.** The
+decisions are covered by the automated suite — how a PIN is generated, that it
+is single-use, account-bound, expiring and destroyed by a wrong guess, that a
+non-PIN value never spends one, that no account's PIN can be affected by
+anything done to another's, and that a PIN is accepted by the credential
+validator without the identity provider ever being contacted.
+
+What is **not** measured, and cannot be from here:
+
+- That Emby routes the new `/emby/Sso/Pin` route to this plugin's service at
+  all. It is declared exactly as the two existing routes are, with the same
+  `[Route]` and `[Unauthenticated]` attributes on a request DTO handled by the
+  same service class, so it either works the way they do or none of them do —
+  but no request has been made to it.
+- That a native Emby app actually accepts an eight-character PIN in its password
+  field and posts it unchanged. The redemption path is the same
+  `AuthenticateByName` path the handoff secret already uses, which was observed
+  working with `curl`, but no TV app has typed a PIN into it.
+- **That the configuration page still renders and saves.** The new checkbox and
+  the PIN URL are copied structurally from the fields beside them, with no new
+  markup shapes, but Emby 4.9's plugin page loader is fragile and this project
+  has broken it before. **An operator must open Dashboard → Plugins → Authentik
+  SSO after installing this build, confirm the page renders, tick and untick the
+  new setting, and confirm it saves.** If the page comes up blank, the cause is
+  the page, not the feature.
 
 ### Group gating and automatic account creation: not exercised on a live server
 
