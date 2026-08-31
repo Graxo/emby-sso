@@ -318,7 +318,13 @@ namespace Emby.Sso.Api
             // non-holder can never trigger it.
             var user = _userManager.GetUserByName(identity.Username);
 
-            if (user != null && UsernameMatcher.Matches(identity.Username, user.Name))
+            // Decided BEFORE the provisioning block below, which reassigns
+            // `user`: afterwards there is no way to tell an account this plugin
+            // just created from one that was already there, and that difference
+            // is the whole point of the log line at the end of this method.
+            var adopting = user != null && UsernameMatcher.Matches(identity.Username, user.Name);
+
+            if (adopting)
             {
                 // The account already exists, so this plugin is being asked to
                 // ADOPT it rather than create it - and it may only do that for
@@ -344,7 +350,7 @@ namespace Emby.Sso.Api
                 }
             }
 
-            if (user == null || !UsernameMatcher.Matches(identity.Username, user.Name))
+            if (!adopting)
             {
                 if (!configuration.EnableAutoCreate)
                 {
@@ -402,6 +408,8 @@ namespace Emby.Sso.Api
                 return Error(SsoErrors.UnknownUser, null);
             }
 
+            LogAdoptionOfAnExistingAccount(bound, adopting, user.Name);
+
             // Keyed on Emby's own spelling of the name, which is what Emby will
             // hand the authentication provider when the page authenticates.
             var secret = SsoRuntime.HandoffSecrets.Issue(user.Name);
@@ -414,6 +422,45 @@ namespace Emby.Sso.Api
             return Html(
                 CompletionPage.Render(user.Name, secret, nonce),
                 SecurityHeaders.ForScriptedPage(nonce));
+        }
+
+        /// <summary>
+        /// Says out loud, at Error, that an identity has just taken over an Emby
+        /// account that ALREADY EXISTED - rather than one this sign-in created.
+        ///
+        /// Trust on first use is silent by design: the first subject to present
+        /// an account's name owns it from then on, and nothing about that
+        /// sign-in looks unusual. For an account being provisioned that is
+        /// unremarkable. For an account that was already there, already stamped
+        /// to this plugin, and until now unbound, it is the one moment an
+        /// operator would want to see - the renamed-account window in
+        /// <see cref="SubjectBindingStore"/>, or the first sign-in after this
+        /// build was installed on a server whose accounts predate it. Cheap to
+        /// emit, and it turns a silent claim into a line with a timestamp.
+        ///
+        /// Error rather than Info deliberately: it is not a failure, but it is
+        /// the class of event that should never pass unread. The subject is NOT
+        /// logged - subjects are stable per-person identifiers and this plugin
+        /// keeps them out of the log everywhere else.
+        ///
+        /// The twin of <c>SsoAuthenticationProvider.LogAdoptionOfAnExistingAccount</c>;
+        /// the two doors into an account each need their own.
+        /// </summary>
+        private void LogAdoptionOfAnExistingAccount(SubjectBindingOutcome outcome, bool adopting, string accountName)
+        {
+            // BoundOnFirstUse is the only outcome that WROTE a new binding.
+            // Bound means the account was already this subject's, which is an
+            // ordinary sign-in and must stay quiet or the log becomes noise.
+            if (!adopting || outcome != SubjectBindingOutcome.BoundOnFirstUse)
+            {
+                return;
+            }
+
+            _logger.Error(
+                "SSO: an Authentik identity has claimed the EXISTING Emby account {0} on first use - it had no "
+                + "recorded binding. Expected right after installing this build, or after an account rename; "
+                + "otherwise check who now owns that account.",
+                ForLog(accountName));
         }
 
         /// <summary>

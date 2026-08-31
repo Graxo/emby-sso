@@ -424,6 +424,30 @@ namespace Emby.Sso.Tests
             Assert.True(File.Exists(_path));
         }
 
+        [Fact]
+        public void ARenamedAccountIsRefusedToItsOwnerAndOpenToTheNextSubject()
+        {
+            // The README used to say a rename simply refuses the account until
+            // an operator edits the file. Only half of that is true, and this
+            // pins both halves so the corrected wording cannot drift back.
+            var store = NewStore();
+
+            Assert.Equal(SubjectBindingOutcome.BoundOnFirstUse, store.Bind("sub-alice", "alice"));
+
+            // Emby's account is renamed to "alicia". The row still says
+            // "alice", so its own owner is turned away...
+            Assert.Equal(SubjectBindingOutcome.SubjectBoundToAnotherAccount, store.Check("sub-alice", "alicia"));
+
+            // ...and the new name is unclaimed, so the store would let anybody
+            // else have it. Nothing in HERE narrows that: what does is the group
+            // gate and the caller's refusal to adopt an account that is not
+            // already stamped to this plugin, both of which live outside this
+            // class - and the Error-level adoption log line in the callers is
+            // what makes the claim visible when it happens.
+            Assert.Equal(SubjectBindingOutcome.BindingAvailable, store.Check("sub-somebody-else", "alicia"));
+            Assert.Equal(SubjectBindingOutcome.BoundOnFirstUse, store.Bind("sub-somebody-else", "alicia"));
+        }
+
         private void WriteStoreFile(string content)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path));

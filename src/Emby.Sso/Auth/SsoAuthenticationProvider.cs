@@ -275,6 +275,8 @@ namespace Emby.Sso.Auth
                 {
                     throw new Exception(RefuseBySubjectBinding(binding, resolvedUser.Name));
                 }
+
+                LogAdoptionOfAnExistingAccount(binding, resolvedUser.Name);
             }
 
             _logger.Info("Accepted {0} sign-in for {1}", result.Outcome, ForLog(resolvedUser.Name));
@@ -284,6 +286,44 @@ namespace Emby.Sso.Auth
                 Username = resolvedUser.Name,
                 DisplayName = result.DisplayName,
             };
+        }
+
+        /// <summary>
+        /// Says out loud, at Error, that an identity has just taken over an
+        /// account that ALREADY EXISTED in Emby.
+        ///
+        /// Every account reaching this method exists - it is the resolved-user
+        /// path - and has passed <see cref="RefuseUnlessStampedToThisPlugin"/>,
+        /// so a binding written here is by definition an adoption rather than a
+        /// first provisioning. Trust on first use is otherwise silent: the first
+        /// subject to present the name owns it from then on and the sign-in
+        /// looks like any other. That is unremarkable for an account being
+        /// created and is the one moment worth seeing for an account that was
+        /// already there - the renamed-account window described in
+        /// <see cref="SubjectBindingStore"/>, or the first sign-in after this
+        /// build was installed on a server whose accounts predate it.
+        ///
+        /// Error rather than Info deliberately: not a failure, but the class of
+        /// event that should never pass unread. The subject is NOT logged.
+        ///
+        /// The twin of <c>SsoService.LogAdoptionOfAnExistingAccount</c>; the two
+        /// doors into an account each need their own.
+        /// </summary>
+        private void LogAdoptionOfAnExistingAccount(SubjectBindingOutcome outcome, string accountName)
+        {
+            // BoundOnFirstUse is the only outcome that WROTE a new binding.
+            // Bound means the account was already this subject's, which is an
+            // ordinary sign-in and must stay quiet or the log becomes noise.
+            if (outcome != SubjectBindingOutcome.BoundOnFirstUse)
+            {
+                return;
+            }
+
+            _logger.Error(
+                "An Authentik identity has claimed the EXISTING Emby account {0} on first use - it had no "
+                + "recorded binding. Expected right after installing this build, or after an account rename; "
+                + "otherwise check who now owns that account.",
+                ForLog(accountName));
         }
 
         /// <summary>

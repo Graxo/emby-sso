@@ -110,15 +110,42 @@ namespace Emby.Sso.Protocol
     /// <c>File.Exists</c> probe, which answers false for an unreadable path too
     /// and would have turned "cannot read the bindings" into "there are none".
     ///
-    /// ACCOUNTS ARE KEYED BY NAME, deliberately, and with a consequence:
-    /// renaming an Emby account breaks its binding and the account is then
-    /// refused until an operator edits or removes the store file. The name is
-    /// the only handle both provisioning paths share - the native path binds
-    /// before Emby has created the account, so no Emby id exists to key on -
-    /// and a refusal is the correct direction for a rename nobody recorded.
-    /// The comparison is <see cref="UsernameMatcher"/>'s, so the store cannot
-    /// consider "Alice" and "alice" different accounts while the rest of the
-    /// plugin considers them the same.
+    /// ACCOUNTS ARE KEYED BY NAME, deliberately. The name is the only handle
+    /// both provisioning paths share - the native path binds before Emby has
+    /// created the account, so no Emby id exists to key on. The comparison is
+    /// <see cref="UsernameMatcher"/>'s, so the store cannot consider "Alice"
+    /// and "alice" different accounts while the rest of the plugin considers
+    /// them the same.
+    ///
+    /// RENAMING AN EMBY ACCOUNT CUTS BOTH WAYS, and this comment used to state
+    /// only the harmless half. A rename does not move the row, so:
+    ///
+    /// - the person who owned the account IS refused, which is the half that
+    ///   was documented: their subject is still recorded against the old name,
+    ///   so presenting the new one answers
+    ///   <see cref="SubjectBindingOutcome.SubjectBoundToAnotherAccount"/>;
+    /// - but the account under its NEW name has no row at all, so as far as
+    ///   this store is concerned it has never signed in: the next subject to
+    ///   present that name gets <see cref="SubjectBindingOutcome.BindingAvailable"/>
+    ///   and adopts it, watch history, policy, library access and all. It is
+    ///   the trust-on-first-use window reopened for one account, silently.
+    ///
+    /// What still stands between that and a takeover is not this store: it is
+    /// the group gate and the caller's refusal to adopt an account that is not
+    /// already stamped to this plugin (<see cref="ProviderStamp"/>). So the
+    /// window needs an identity-provider principal that holds the required
+    /// group AND can present the new name as its username claim - an in-group
+    /// insider, not a stranger. Narrow, but not closed, and the operator is
+    /// told in the README to edit this file in the same maintenance window as
+    /// any rename rather than afterwards.
+    ///
+    /// The callers log an adoption of an already-existing, already-stamped
+    /// account at Error for exactly this reason - see
+    /// <c>SsoService.LogAdoptionOfAnExistingAccount</c> and its twin in
+    /// <c>SsoAuthenticationProvider</c>. It is not logged here: this class is
+    /// told a name and a subject and nothing else, so it cannot tell a first
+    /// provisioning from an adoption. That distinction is the caller's, and so
+    /// is the log line.
     /// </summary>
     internal sealed class SubjectBindingStore
     {
