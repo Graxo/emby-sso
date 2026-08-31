@@ -7,10 +7,7 @@
         <label for="issuerUrl">Issuer URL</label>
         <input is="emby-input" type="url" id="issuerUrl" required />
         <div class="fieldDescription">
-          The OpenID Connect issuer, for example
-          https://auth.example.com/application/o/emby/ . Every field on this
-          page is explained in full in the plugin&#39;s documentation:
-          https://git.koper.cloud/Graxo/emby-sso/-/blob/main/docs/site/settings.md
+          Your provider&#39;s OpenID Connect issuer URL.
         </div>
       </div>
 
@@ -22,7 +19,9 @@
       <div class="inputContainer">
         <label for="clientSecret">Client secret</label>
         <input is="emby-input" type="password" id="clientSecret" />
-        <div class="fieldDescription">Leave empty for a public client.</div>
+        <div class="fieldDescription">
+          Leave empty for a public client.
+        </div>
       </div>
 
       <div class="inputContainer">
@@ -34,8 +33,7 @@
         <label for="embyPublicBaseUrl">Emby public base URL</label>
         <input is="emby-input" type="url" id="embyPublicBaseUrl" required />
         <div class="fieldDescription">
-          The address users reach this server on, for example
-          https://emby.example.com . Used to build the redirect URI.
+          The address your users reach this server on.
         </div>
       </div>
 
@@ -43,12 +41,7 @@
         <label for="usernameClaim">Username claim</label>
         <input is="emby-input" type="text" id="usernameClaim" />
         <div class="fieldDescription">
-          The claim matched against the Emby username; preferred_username is
-          the default and the safe choice. Emby stamps a user&#39;s provider
-          permanently and one way, and this plugin refuses any account not
-          already assigned to it: once somebody signs in through this plugin,
-          their Emby password no longer works until an administrator resets
-          that account through the API.
+          Must be immutable and unique. preferred_username is safest.
         </div>
       </div>
 
@@ -58,9 +51,7 @@
           <span>Allow native apps to sign in with a password</span>
         </label>
         <div class="fieldDescription checkboxFieldDescription">
-          Lets phone and TV apps sign in by sending the password to the
-          provider directly, a path that cannot do multi-factor authentication
-          and that is refused outright while &quot;Allow plain HTTP&quot; is on.
+          No multi-factor. Refused while plain HTTP is allowed.
         </div>
       </div>
 
@@ -70,8 +61,7 @@
           <span>Allow native apps to sign in with a one-time PIN</span>
         </label>
         <div class="fieldDescription checkboxFieldDescription">
-          Lets a user sign in on a TV with a one-time PIN taken from a browser
-          sign-in on a phone or laptop, instead of a password.
+          Sign in on a TV using a browser-issued PIN.
         </div>
       </div>
 
@@ -81,9 +71,7 @@
           <span>Reserve a sign-in button on the login page (not yet supported by Emby's web client)</span>
         </label>
         <div class="fieldDescription checkboxFieldDescription">
-          Emby's web login page cannot render a custom sign-in button, so
-          this setting reserves one and does nothing yet. Give users the
-          bookmarkable sign-in URL shown below instead.
+          Reserved. Emby&#39;s web client cannot render it yet.
         </div>
       </div>
 
@@ -100,9 +88,7 @@
           <span>Allow an identity provider on a private or loopback address</span>
         </label>
         <div class="fieldDescription checkboxFieldDescription">
-          Tick this only if your identity provider genuinely lives on a
-          loopback or private address, which this server otherwise refuses to
-          fetch from.
+          Only if your provider is on a private address.
         </div>
       </div>
 
@@ -112,10 +98,7 @@
         <label for="requiredGroup">Required group</label>
         <input is="emby-input" type="text" id="requiredGroup" />
         <div class="fieldDescription">
-          The Authentik group a user must hold to sign in. Leaving this empty
-          refuses EVERY single sign-on, including users who could sign in a
-          minute ago, so set it before you install this build over a working
-          one or your whole user base is locked out until you do.
+          Empty refuses every sign-in, including existing users.
         </div>
       </div>
 
@@ -123,9 +106,7 @@
         <label for="groupsClaim">Groups claim</label>
         <input is="emby-input" type="text" id="groupsClaim" />
         <div class="fieldDescription">
-          The claim the group list is read from. Authentik must be configured
-          to emit it, on the direct-grant flow too, or every sign-in is
-          refused.
+          Authentik must emit this, or everyone is refused.
         </div>
       </div>
 
@@ -133,9 +114,7 @@
         <label for="templateUserName">Template user</label>
         <input is="emby-input" type="text" id="templateUserName" />
         <div class="fieldDescription">
-          The existing Emby user whose libraries and permissions new accounts
-          are cloned from. New accounts are never administrators and never
-          disabled, so leave this one disabled.
+          New accounts clone this user&#39;s libraries and permissions.
         </div>
       </div>
 
@@ -145,9 +124,7 @@
           <span>Automatically create accounts for group holders</span>
         </label>
         <div class="fieldDescription checkboxFieldDescription">
-          Creates an Emby account for a group holder who does not have one,
-          cloned from the template user above. This is the only setting that
-          lets the plugin create users at all.
+          Creates accounts for group holders from the template.
         </div>
       </div>
 
@@ -157,16 +134,17 @@
         <label for="licenceKey">Licence key</label>
         <input is="emby-input" type="text" id="licenceKey" />
         <div class="fieldDescription">
-          The licence issued for this server, named by the id below. Without a
-          valid one, new sign-ons and account creation are refused, but existing
-          sessions and your own Emby accounts are unaffected.
+          Without a valid licence, new sign-ins are refused.
         </div>
       </div>
 
       <div class="inputContainer">
         <label>This server's id</label>
         <p id="serverId" style="user-select: all; font-family: monospace;"></p>
-        <div class="fieldDescription">A licence is issued for this id. It is not a secret.</div>
+        <div class="fieldDescription">
+          A licence is issued for this id. Not secret.
+          Full documentation: https://git.koper.cloud/Graxo/emby-sso/-/blob/main/docs/site/settings.md
+        </div>
       </div>
 
       <div class="inputContainer">
@@ -177,7 +155,9 @@
       <div class="inputContainer">
         <label for="redemptionCode">Redemption code</label>
         <input is="emby-input" type="text" id="redemptionCode" />
-        <div class="fieldDescription">Paste the code you were given, then press Activate.</div>
+        <div class="fieldDescription">
+          Paste your code, then press Activate.
+        </div>
       </div>
 
       <div class="inputContainer">
