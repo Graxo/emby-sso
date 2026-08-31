@@ -111,22 +111,13 @@ namespace Emby.Sso.LicenceService.Management
 
             var outbox = OutboxLog.Read(options.OutboxPath, warning => error.WriteLine("warning: " + warning));
             var all = CodeInventory.Build(rows, outbox, now, soon);
-            var shown = (IEnumerable<ManagedCode>)all;
 
-            if (args.ContainsKey("needs-attention"))
-            {
-                shown = shown.Where(code => code.NeedsAttention);
-            }
+            args.TryGetValue("for", out var who);
 
-            if (args.TryGetValue("for", out var who) && !string.IsNullOrWhiteSpace(who))
-            {
-                shown = shown.Where(code =>
-                    Contains(code.Code.Licensee, who)
-                    || Contains(code.Code.BuyerEmailOrNote, who)
-                    || Contains(code.Code.Tag, who));
-            }
-
-            var list = shown.ToList();
+            // The same narrowing the admin page's filter box does, from the same
+            // function: two front ends that disagree about which rows match is
+            // an operator who cannot trust either.
+            var list = CodeInventory.Filter(all, args.ContainsKey("needs-attention"), who);
 
             if (all.Count == 0)
             {
@@ -626,11 +617,6 @@ namespace Emby.Sso.LicenceService.Management
             }
 
             return "waiting";
-        }
-
-        private static bool Contains(string haystack, string needle)
-        {
-            return haystack != null && haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         // Describe, DescribeDelivery, Empty, Date, Relative and Count live in

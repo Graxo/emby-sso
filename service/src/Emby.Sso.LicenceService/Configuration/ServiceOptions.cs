@@ -76,11 +76,26 @@ namespace Emby.Sso.LicenceService.Configuration
         /// </summary>
         public MailOptions Mail { get; } = new MailOptions();
 
+        /// <summary>
+        /// The admin page. Entirely optional and ABSENT unless a password is
+        /// configured - see <see cref="AdminOptions"/>. With nothing set there
+        /// is no /admin, no login form and no route: the door is not there,
+        /// rather than there and unlocked.
+        /// </summary>
+        public AdminOptions Admin { get; } = new AdminOptions();
+
         public string DatabasePath => Path.Combine(DataDirectory, "licences.db");
 
         public string LedgerPath => Path.Combine(DataDirectory, Licensing.LicenceFormat.LedgerFileName);
 
         public string OutboxPath => Path.Combine(DataDirectory, "codes-outbox.jsonl");
+
+        /// <summary>
+        /// Where the admin page's audit trail is appended. Derived rather than
+        /// configured: it belongs beside the store it is an account of, and on
+        /// the volume that gets backed up. Nothing else writes to it.
+        /// </summary>
+        public string AdminAuditPath => Path.Combine(DataDirectory, "admin-audit.jsonl");
 
         public static ServiceOptions FromEnvironment(Func<string, string> read)
         {
@@ -145,6 +160,20 @@ namespace Emby.Sso.LicenceService.Configuration
             // that tells a paying customer to contact nobody is worse than one
             // that tells them to reply to it.
             options.Mail.SupportContact ??= options.Mail.ReplyTo ?? options.Mail.FromAddress;
+
+            // The admin page. Not trimmed, for the same reason SMTP_PASSWORD is
+            // not: a password may legitimately begin or end with a space, and
+            // eating one turns a correct password into a wrong one with no
+            // visible cause.
+            options.Admin.PasswordHash = Text(read, "ADMIN_PASSWORD_HASH");
+            options.Admin.Password = read("ADMIN_PASSWORD");
+            options.Admin.IdleMinutes = Number(read, "ADMIN_SESSION_IDLE_MINUTES", AdminOptions.DefaultIdleMinutes);
+            options.Admin.AbsoluteMinutes =
+                Number(read, "ADMIN_SESSION_ABSOLUTE_MINUTES", AdminOptions.DefaultAbsoluteMinutes);
+            options.Admin.LoginDelaySeconds =
+                Number(read, "ADMIN_LOGIN_DELAY_SECONDS", AdminOptions.DefaultLoginDelaySeconds);
+            options.Admin.LoginMaxDelaySeconds =
+                Number(read, "ADMIN_LOGIN_MAX_DELAY_SECONDS", AdminOptions.DefaultLoginMaxDelaySeconds);
 
             // Derived rather than required twice. An operator who has told the
             // service its own address should not also have to spell out two URLs
@@ -213,6 +242,7 @@ namespace Emby.Sso.LicenceService.Configuration
             problems.AddRange(RateLimit.Problems());
             problems.AddRange(PayPal.Problems());
             problems.AddRange(Mail.Problems());
+            problems.AddRange(Admin.Problems());
 
             return problems;
         }
@@ -642,6 +672,167 @@ namespace Emby.Sso.LicenceService.Configuration
                 && at < value.Length - 1
                 && value.IndexOf(' ') < 0
                 && value.IndexOf('.', at) > at + 1;
+        }
+    }
+
+    /// <summary>
+    /// The admin page at /admin: whether there is one at all, and the numbers
+    /// that bound a session and a guesser.
+    ///
+    /// THE PAGE IS ABSENT UNLESS A PASSWORD IS SET. Not open, not defaulted, not
+    /// behind a warning banner - the routes are never mapped, so /admin answers
+    /// exactly what /nonsense answers. An operator who has not set a password
+    /// must find the door missing rather than ajar, because this page reaches
+    /// the signing key by way of issuing licences and the password is the whole
+    /// barrier.
+    ///
+    /// A password that is set and WRONG - a hash this service cannot read, a
+    /// plaintext that is too short, both forms set at once - is a refusal to
+    /// start rather than a missing page. Those are not "no admin configured";
+    /// they are an operator who believes there is one.
+    /// </summary>
+    public sealed class AdminOptions
+    {
+        /// <summary>
+        /// Long enough that the operator is not retyping a long password all
+        /// afternoon, short enough that a session left open on a laptop in a
+        /// cafe is not a standing invitation.
+        /// </summary>
+        public const int DefaultIdleMinutes = 30;
+
+        /// <summary>
+        /// The ceiling no amount of activity extends. Eight hours: one working
+        /// day, after which the session is gone whatever it was doing.
+        /// </summary>
+        public const int DefaultAbsoluteMinutes = 480;
+
+        /// <summary>The first wait a wrong password buys. It doubles from here.</summary>
+        public const int DefaultLoginDelaySeconds = 2;
+
+        /// <summary>
+        /// Where the doubling stops. Deliberately not "locked out": see
+        /// Admin.AdminLoginThrottle for why a lockout on a one-operator service
+        /// is a denial of service against the only person who can lift it.
+        /// </summary>
+        public const int DefaultLoginMaxDelaySeconds = 60;
+
+        /// <summary>
+        /// ADMIN_PASSWORD_HASH - the supported form. See
+        /// Admin.AdminPassword for what it looks like and why the environment
+        /// should hold a verifier rather than a credential.
+        /// </summary>
+        public string PasswordHash { get; set; }
+
+        /// <summary>
+        /// ADMIN_PASSWORD - the plaintext form. Accepted, refused if weak, and
+        /// second best. It is turned into a verifier at startup and the
+        /// plaintext is not kept anywhere but the environment it came from.
+        /// </summary>
+        public string Password { get; set; }
+
+        public int IdleMinutes { get; set; } = DefaultIdleMinutes;
+
+        public int AbsoluteMinutes { get; set; } = DefaultAbsoluteMinutes;
+
+        public int LoginDelaySeconds { get; set; } = DefaultLoginDelaySeconds;
+
+        public int LoginMaxDelaySeconds { get; set; } = DefaultLoginMaxDelaySeconds;
+
+        /// <summary>
+        /// The one switch. There is an admin page if and only if this is true,
+        /// and there is no second way to turn one on.
+        /// </summary>
+        public bool Configured =>
+            !string.IsNullOrWhiteSpace(PasswordHash) || !string.IsNullOrEmpty(Password);
+
+        public bool UsesPlaintext => string.IsNullOrWhiteSpace(PasswordHash) && !string.IsNullOrEmpty(Password);
+
+        /// <summary>
+        /// What a log line may say about this. Neither the password nor the
+        /// verifier is in it, and there is no overload that puts them there.
+        /// </summary>
+        public string Describe()
+        {
+            if (!Configured)
+            {
+                return "off (no ADMIN_PASSWORD_HASH); /admin does not exist on this service";
+            }
+
+            return "on at /admin, "
+                + (UsesPlaintext ? "ADMIN_PASSWORD (plaintext in the environment)" : "ADMIN_PASSWORD_HASH")
+                + ", idle timeout " + IdleMinutes.ToString(CultureInfo.InvariantCulture)
+                + "m, absolute " + AbsoluteMinutes.ToString(CultureInfo.InvariantCulture) + "m";
+        }
+
+        public IReadOnlyList<string> Problems()
+        {
+            var problems = new List<string>();
+
+            if (!Configured)
+            {
+                // Not a problem. It is the default, and it is the safe one.
+                return problems;
+            }
+
+            if (!string.IsNullOrWhiteSpace(PasswordHash) && !string.IsNullOrEmpty(Password))
+            {
+                problems.Add(
+                    "ADMIN_PASSWORD_HASH and ADMIN_PASSWORD are both set. Only one can be the password and "
+                    + "guessing which would mean an operator whose password does not work, or worse, one whose "
+                    + "old password still does. Unset ADMIN_PASSWORD.");
+            }
+            else if (!string.IsNullOrWhiteSpace(PasswordHash))
+            {
+                if (!Admin.AdminPassword.TryParse(PasswordHash, out _, out var problem))
+                {
+                    problems.Add(problem);
+                }
+            }
+            else
+            {
+                var weakness = Admin.AdminPassword.Weakness(Password);
+
+                if (weakness != null)
+                {
+                    problems.Add(
+                        "ADMIN_PASSWORD is not acceptable: " + weakness + ". Set a longer one, or better, run "
+                        + "`hash-password` and put the result in ADMIN_PASSWORD_HASH so the environment holds a "
+                        + "verifier rather than the credential itself.");
+                }
+            }
+
+            if (IdleMinutes < 1 || IdleMinutes > 1440)
+            {
+                problems.Add("ADMIN_SESSION_IDLE_MINUTES must be between 1 and 1440.");
+            }
+
+            if (AbsoluteMinutes < 1 || AbsoluteMinutes > 10080)
+            {
+                problems.Add("ADMIN_SESSION_ABSOLUTE_MINUTES must be between 1 and 10080 (a week).");
+            }
+
+            if (AbsoluteMinutes < IdleMinutes)
+            {
+                problems.Add(
+                    "ADMIN_SESSION_ABSOLUTE_MINUTES is smaller than ADMIN_SESSION_IDLE_MINUTES, which makes the "
+                    + "idle timeout unreachable. The absolute one is the ceiling; it has to be the larger.");
+            }
+
+            if (LoginDelaySeconds < 1 || LoginDelaySeconds > 60)
+            {
+                problems.Add("ADMIN_LOGIN_DELAY_SECONDS must be between 1 and 60. It is the FIRST wait a wrong "
+                    + "password buys and it doubles from there; 0 would disable the brake entirely.");
+            }
+
+            if (LoginMaxDelaySeconds < LoginDelaySeconds || LoginMaxDelaySeconds > 3600)
+            {
+                problems.Add(
+                    "ADMIN_LOGIN_MAX_DELAY_SECONDS must be at least ADMIN_LOGIN_DELAY_SECONDS and at most 3600. "
+                    + "It is where the doubling stops - not a lockout, which this service deliberately does not "
+                    + "have.");
+            }
+
+            return problems;
         }
     }
 

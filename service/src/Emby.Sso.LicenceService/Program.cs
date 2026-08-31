@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Emby.Sso.LicenceService.Activation;
+using Emby.Sso.LicenceService.Admin;
 using Emby.Sso.LicenceService.Configuration;
 using Emby.Sso.LicenceService.Delivery;
 using Emby.Sso.LicenceService.Http;
@@ -67,6 +68,9 @@ namespace Emby.Sso.LicenceService
 
                     case "healthcheck":
                         return HealthCheck(args);
+
+                    case "hash-password":
+                        return HashPassword();
 
                     case "list-codes":
                         return Manage(args, ManagementCommands.ListCodes);
@@ -218,6 +222,7 @@ namespace Emby.Sso.LicenceService
                 builder.Services.AddHostedService(provider => provider.GetRequiredService<CodeDeliveryQueue>());
             }
             builder.Services.AddSingleton(TimeProvider.System);
+            builder.Services.AddSingleton(options.Admin);
             builder.Services.AddSingleton<ActivationRateLimiter>();
             builder.Services.AddSingleton<CheckoutRateLimiter>();
             builder.Services.AddSingleton<ActivationService>();
@@ -233,6 +238,45 @@ namespace Emby.Sso.LicenceService
             {
                 http.Timeout = TimeSpan.FromSeconds(20);
             });
+
+            // The admin page's own machinery, registered ONLY when a password
+            // is configured. With none set there is no session store, no login
+            // throttle, no audit file and no route: /admin is not a page that
+            // refuses, it is a page that does not exist. See AdminEndpoints.
+            AdminPassword adminPassword = null;
+
+            if (options.Admin.Configured)
+            {
+                if (!string.IsNullOrWhiteSpace(options.Admin.PasswordHash))
+                {
+                    if (!AdminPassword.TryParse(options.Admin.PasswordHash, out adminPassword, out var problem))
+                    {
+                        // Unreachable through Main, which runs Problems() first
+                        // and refuses to start. Here so that a caller that skips
+                        // that check cannot get a service with an admin page and
+                        // no working password on it.
+                        throw new InvalidOperationException(problem);
+                    }
+                }
+                else
+                {
+                    var weakness = AdminPassword.Weakness(options.Admin.Password);
+
+                    if (weakness != null)
+                    {
+                        throw new InvalidOperationException("ADMIN_PASSWORD is not acceptable: " + weakness + ".");
+                    }
+
+                    adminPassword = AdminPassword.FromPlaintext(options.Admin.Password);
+                }
+
+                builder.Services.AddSingleton(adminPassword);
+                builder.Services.AddSingleton<AdminSessions>();
+                builder.Services.AddSingleton<AdminLoginThrottle>();
+                builder.Services.AddSingleton(provider => new AdminAudit(
+                    options.AdminAuditPath,
+                    provider.GetRequiredService<ILoggerFactory>().CreateLogger("admin")));
+            }
 
             configure?.Invoke(builder);
 
@@ -265,7 +309,18 @@ namespace Emby.Sso.LicenceService
                     options.Mail.Port);
             }
 
+            log.LogInformation("admin page: {Admin}", options.Admin.Describe());
+
+            // Before any route, so that every response carries them - including
+            // the ones a route never reaches, such as a 404 or a 413.
+            app.UseSecurityHeaders();
+
             MapRoutes(app, options);
+
+            if (adminPassword != null)
+            {
+                AdminEndpoints.Map(app, options, adminPassword);
+            }
 
             return app;
         }
@@ -785,6 +840,57 @@ namespace Emby.Sso.LicenceService
         }
 
         /// <summary>
+        /// `hash-password` - turns a password into the verifier that goes in
+        /// ADMIN_PASSWORD_HASH.
+        ///
+        /// It reads the password on STDIN and not from an argument, deliberately.
+        /// An argument is in the shell history of whoever typed it, in the
+        /// process list of everybody on the box while it runs, and in the
+        /// container logs of anything that wraps it. Stdin is in none of those.
+        ///
+        ///     read -rs ADMIN; printf %s "$ADMIN" | ... hash-password
+        ///
+        /// The verifier is printed on stdout and nothing else is, so it can be
+        /// redirected straight into an env file.
+        /// </summary>
+        private static int HashPassword()
+        {
+            Console.Error.WriteLine("Type the admin password and press enter (it is read from stdin, not from an");
+            Console.Error.WriteLine("argument, so it does not reach your shell history or the process list).");
+
+            var password = Console.In.ReadToEnd();
+
+            // A trailing newline is what a pipe or a terminal adds; anything
+            // else the operator typed is theirs, including spaces at the ends.
+            password = password.TrimEnd('\r', '\n');
+
+            var weakness = Admin.AdminPassword.Weakness(password);
+
+            if (weakness != null)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("REFUSED: " + weakness + ".");
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("This password is the only thing between the internet and a page that can");
+                Console.Error.WriteLine("issue a licence for any server, forever, with no way to recall one. Use a");
+                Console.Error.WriteLine("long random string from a password manager.");
+
+                return 1;
+            }
+
+            var encoded = Admin.AdminPassword.Encode(password);
+
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Put this in the service's environment, and keep the password itself only in");
+            Console.Error.WriteLine("your password manager. There is no way to recover it from the line below.");
+            Console.Error.WriteLine();
+
+            Console.WriteLine("ADMIN_PASSWORD_HASH=" + encoded);
+
+            return 0;
+        }
+
+        /// <summary>
         /// The one place the management commands meet the process: the
         /// environment, the parsed flags, the two streams and the clock. They
         /// take those rather than reaching for Console or DateTimeOffset.UtcNow
@@ -917,6 +1023,13 @@ namespace Emby.Sso.LicenceService
 
   healthcheck [--url <url>]
       Exits 0 if /healthz answers 200. What the container HEALTHCHECK runs.
+
+  hash-password
+      Reads a password on stdin and prints the ADMIN_PASSWORD_HASH line that
+      turns on the admin page at /admin. With no such variable set there is no
+      admin page at all: the routes are never mapped. Read the section in
+      service/README.md before turning it on - it is a public door to the box
+      that holds the signing key.
 
 Exit codes: 0 done, 1 no such code or bad usage, 66 there is no store at
 LICENCE_DATA_DIR, 78 the configuration is wrong.";

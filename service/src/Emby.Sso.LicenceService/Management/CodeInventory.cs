@@ -167,6 +167,50 @@ namespace Emby.Sso.LicenceService.Management
         }
 
         /// <summary>
+        /// The two narrowings both front ends offer: only what needs attention,
+        /// and only what matches a piece of text. Shared, because `list-codes
+        /// --for jane` and the page's filter box must find the same rows - an
+        /// operator who checks one against the other and gets different answers
+        /// has to work out which one lied.
+        ///
+        /// The search matches a licensee, a buyer address or note, or a tag,
+        /// case-insensitively. It is never matched against a code, because
+        /// there is no code here to match against.
+        /// </summary>
+        public static IReadOnlyList<ManagedCode> Filter(
+            IEnumerable<ManagedCode> codes,
+            bool onlyAttention,
+            string search)
+        {
+            if (codes == null)
+            {
+                throw new ArgumentNullException(nameof(codes));
+            }
+
+            var shown = codes;
+
+            if (onlyAttention)
+            {
+                shown = shown.Where(code => code.NeedsAttention);
+            }
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                shown = shown.Where(code =>
+                    Contains(code.Code.Licensee, search)
+                    || Contains(code.Code.BuyerEmailOrNote, search)
+                    || Contains(code.Tag, search));
+            }
+
+            return shown.ToList();
+        }
+
+        private static bool Contains(string haystack, string needle)
+        {
+            return haystack != null && haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
         /// The first true thing about a code, in the order that decides what an
         /// operator does about it.
         ///
