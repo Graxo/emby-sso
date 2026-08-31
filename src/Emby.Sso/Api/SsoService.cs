@@ -17,6 +17,14 @@ namespace Emby.Sso.Api
     /// provider, /emby/Sso/Callback brings them back and returns the page that
     /// completes the sign-in.
     ///
+    /// /emby/Sso/Pin is the same flow with a different ending. It redirects to
+    /// the identity provider exactly as /Sso/Start does, comes back to the same
+    /// callback, and passes every guard the ordinary sign-in passes; only at
+    /// the very end, once all of them have, does it show a one-time PIN for a
+    /// television instead of signing this browser in. It is deliberately not a
+    /// second way to authenticate anybody - there is one flow here, with two
+    /// endings.
+    ///
     /// Every failure leaves through <see cref="Error"/>, which logs the detail and
     /// renders a fixed, user-safe sentence. Nothing the identity provider supplied
     /// is ever written into a page, and no exception is allowed to escape into
@@ -62,13 +70,32 @@ namespace Emby.Sso.Api
         {
             try
             {
-                return await HandleStartAsync().ConfigureAwait(false);
+                return await HandleStartAsync(pinRequested: false).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 // Nothing escapes to Emby's error handling, which would put the
                 // exception message in the response body.
                 return Error(null, "unhandled failure starting the sign-in", ex);
+            }
+        }
+
+        /// <summary>
+        /// The PIN endpoint. It is the ordinary sign-in flow with one bit set
+        /// on the pending login, NOT a second way in: no identity is learned
+        /// here, no PIN is issued here, and the caller is simply sent to the
+        /// identity provider. Everything that decides whether this person may
+        /// have a PIN happens in the callback, below every guard.
+        /// </summary>
+        public async Task<object> Get(SsoPin request)
+        {
+            try
+            {
+                return await HandleStartAsync(pinRequested: true).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return Error(null, "unhandled failure starting the PIN sign-in", ex);
             }
         }
 
@@ -84,7 +111,15 @@ namespace Emby.Sso.Api
             }
         }
 
-        private async Task<object> HandleStartAsync()
+        /// <param name="pinRequested">
+        /// True when this flow was started at <c>/Sso/Pin</c> and must end in a
+        /// one-time PIN rather than in this browser being signed in. It changes
+        /// NOTHING above this point - the same licence check, the same
+        /// configuration refusals, the same redirect - and is recorded on the
+        /// pending login so the callback cannot be talked into a different
+        /// ending than the one that was started.
+        /// </param>
+        private async Task<object> HandleStartAsync(bool pinRequested)
         {
             // The licence, before anything else. Nothing has left this server at
             // this point - no discovery document is fetched until the
@@ -155,6 +190,27 @@ namespace Emby.Sso.Api
                     "refusing to start sign-in: no required group is configured, so the callback could only refuse");
             }
 
+            // The fifth configuration refusal, and it applies to the PIN
+            // endpoint alone: a PIN is a credential this server issues, so an
+            // operator who has not switched that on must not be able to have
+            // one issued by anybody, and the refusal belongs here - before the
+            // user is sent on a round trip to the identity provider that could
+            // only end in a refusal. The callback checks the SAME setting again
+            // rather than trusting this one, because a settings save can land
+            // in between and the fail-closed direction is to refuse.
+            //
+            // Unlike the refusals above, this one says what it is. It is
+            // decided from configuration alone, before anybody is identified,
+            // so it reveals nothing about any account - and an administrator
+            // who has not enabled the feature is the only person who can fix
+            // it. See SsoErrors.PinSignInDisabled.
+            if (pinRequested && !configuration.EnablePinSignIn)
+            {
+                return Error(
+                    SsoErrors.PinSignInDisabled,
+                    "refusing to start a PIN sign-in: PIN sign-in is not enabled");
+            }
+
             try
             {
                 var client = SsoRuntime.GetClient();
@@ -164,7 +220,7 @@ namespace Emby.Sso.Api
                     return Error(SsoErrors.NotConfigured, "sign-in started while the plugin was not configured");
                 }
 
-                var login = SsoRuntime.PendingLogins.Create();
+                var login = SsoRuntime.PendingLogins.Create(pinRequested);
                 var url = await client.BuildAuthorizationUrlAsync(login, CancellationToken.None).ConfigureAwait(false);
 
                 // Bind the flow to this browser. Without it, state is a
@@ -443,6 +499,26 @@ namespace Emby.Sso.Api
 
             LogAdoptionOfAnExistingAccount(bound, adopting, user.Name);
 
+            // The two endings of one flow. EVERYTHING above this line is
+            // shared, and that is the whole design of the PIN feature: the
+            // licence check, the configuration refusals, the browser binding,
+            // the code exchange, the group gate, the provider stamp, the
+            // provisioning rules and the subject binding have all already run
+            // and all already refused anybody they would refuse. A PIN is
+            // issued at the same point, and only at the point, a handoff secret
+            // would have been. If a future reader adds a third ending, it goes
+            // HERE, below all of them, and nowhere else.
+            //
+            // The two endings are exclusive. A PIN flow issues no handoff
+            // secret and signs this browser into nothing: the person asked for
+            // a credential to carry to a television, not for a session in the
+            // browser they are holding, and minting a session they did not ask
+            // for is spare credential material lying around for no reason.
+            if (login.PinRequested)
+            {
+                return IssuePin(configuration, user.Name);
+            }
+
             // Keyed on Emby's own spelling of the name, which is what Emby will
             // hand the authentication provider when the page authenticates.
             var secret = SsoRuntime.HandoffSecrets.Issue(user.Name);
@@ -455,6 +531,52 @@ namespace Emby.Sso.Api
             return Html(
                 CompletionPage.Render(user.Name, secret, nonce),
                 SecurityHeaders.ForScriptedPage(nonce));
+        }
+
+        /// <summary>
+        /// Issues the one-time PIN and renders the page that shows it.
+        ///
+        /// Called from exactly one place: the very end of the callback, below
+        /// every guard. It takes an account NAME rather than an identity on
+        /// purpose - by this point the decision about who this is has been
+        /// made, and nothing here may re-open it.
+        ///
+        /// The setting is read AGAIN here, from the configuration snapshot this
+        /// callback has been deciding from. The /Sso/Pin endpoint refused
+        /// already when PIN sign-in was off, but a settings save can land
+        /// between the start of the flow and its callback, and a credential
+        /// must not be issued under a setting that has since been withdrawn. It
+        /// refuses with the ordinary generic page rather than the specific
+        /// sentence the endpoint uses: by this point a real identity has been
+        /// verified, and there is no reason to start telling a verified user
+        /// about the administrator's settings mid-flow.
+        ///
+        /// The page carries the static-page security headers - no script at
+        /// all, unframable, uncacheable. See <see cref="PinPage"/>.
+        /// </summary>
+        private object IssuePin(Configuration.PluginConfiguration configuration, string accountName)
+        {
+            if (configuration?.EnablePinSignIn != true)
+            {
+                return Error(SsoErrors.NotConfigured, "a PIN flow completed after PIN sign-in was switched off");
+            }
+
+            // Keyed on Emby's own spelling of the name, because that is the
+            // name Emby will hand the authentication provider when the person
+            // types it into their television - the same rule the handoff secret
+            // follows.
+            var pin = SsoRuntime.SignInPins.Issue(accountName);
+
+            // The PIN itself is NEVER logged. It is a live credential for the
+            // next five minutes and the log is the wrong place for it; the
+            // account name is what an operator needs, and is already theirs.
+            _logger.Info("SSO: issued a one-time sign-in PIN for {0}", ForLog(accountName));
+
+            var nonce = SecurityHeaders.NewNonce();
+
+            return Html(
+                PinPage.Render(accountName, pin, (int)SignInPinStore.DefaultTtl.TotalMinutes, nonce),
+                SecurityHeaders.ForStaticPage(nonce));
         }
 
         /// <summary>

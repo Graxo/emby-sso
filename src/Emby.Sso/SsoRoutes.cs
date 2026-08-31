@@ -24,5 +24,15 @@ namespace Emby.Sso
         public const string StartPath = "/Sso/Start";
 
         public const string CallbackPath = "/Sso/Callback";
+
+        /// <summary>
+        /// The PIN endpoint. It starts the SAME browser sign-in
+        /// <see cref="StartPath"/> does - same redirect, same identity
+        /// provider, same callback, same guards - and differs only in what the
+        /// callback does once every one of those guards has passed: show the
+        /// user a one-time PIN instead of signing this browser in. There is no
+        /// second way to authenticate anybody here, which is the point.
+        /// </summary>
+        public const string PinPath = "/Sso/Pin";
     }
 }

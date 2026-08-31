@@ -40,14 +40,21 @@ namespace Emby.Sso.Protocol
             _minEvictionAge = minEvictionAge ?? DefaultMinEvictionAge;
         }
 
-        public PendingLogin Create()
+        /// <param name="pinRequested">
+        /// Records that this flow was started at the PIN endpoint, so the
+        /// callback ends by issuing a one-time PIN rather than signing this
+        /// browser in. See <see cref="PendingLogin.PinRequested"/> for why the
+        /// intent is kept here rather than read back off the callback.
+        /// </param>
+        public PendingLogin Create(bool pinRequested = false)
         {
             var login = new PendingLogin(
                 SecureRandom.CreateToken(32),
                 SecureRandom.CreateToken(32),
                 SecureRandom.CreateCodeVerifier(),
                 _clock().Add(_ttl),
-                SecureRandom.CreateToken(32));
+                SecureRandom.CreateToken(32),
+                pinRequested);
 
             lock (_lock)
             {

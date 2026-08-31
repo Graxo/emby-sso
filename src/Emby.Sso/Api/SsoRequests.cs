@@ -21,6 +21,24 @@ namespace Emby.Sso.Api
     }
 
     /// <summary>
+    /// Begins a browser sign-in that ends in a one-time PIN for a television,
+    /// rather than in this browser being signed in. Redirects to the identity
+    /// provider exactly as <see cref="SsoStart"/> does.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="UnauthenticatedAttribute"/> for the same reason the other two
+    /// carry it, and it gives away nothing: this endpoint issues no PIN and
+    /// learns no identity. All it can do is send the caller to the identity
+    /// provider to sign in properly, and the PIN is issued at the callback,
+    /// below every guard an ordinary sign-in passes.
+    /// </remarks>
+    [Route(SsoRoutes.PinPath, "GET")]
+    [Unauthenticated]
+    public class SsoPin : IReturnVoid
+    {
+    }
+
+    /// <summary>
     /// The identity provider's redirect target. Completes the sign-in.
     /// </summary>
     [Route(SsoRoutes.CallbackPath, "GET")]
