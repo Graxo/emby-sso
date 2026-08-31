@@ -1,0 +1,95 @@
+# The vendor runs this. It is a snippet to paste into whatever compose file the
+# host already has, not a file to run as-is: the two paths and the six values
+# under `environment` have to be the operator's own.
+#
+# UNRUN. Docker was not available where this was written, so neither this nor
+# the Dockerfile beside it has ever been built or started.
+
+services:
+  licence:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Or, once it is in a registry:
+    # image: registry.example.com/emby-sso-licence:1.0.0
+    restart: unless-stopped
+
+    # Nothing else runs on this box, and this container needs almost nothing.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    volumes:
+      # THE SIGNING KEY. Read-only, and mounted as a file rather than a
+      # directory so that nothing else in that directory - the ledger the
+      # offline tool keeps, a backup, an editor's swap file - is inside the
+      # container at all.
+      #
+      # On the host it must be `chmod 600` and owned by uid 5678, which is the
+      # account the container runs as. The service refuses to start if any bit
+      # beyond the owner's is set:
+      #
+      #   sudo install -o 5678 -g 5678 -m 600 \
+      #     licence-signing-key.private.json /srv/emby-sso/secrets/
+      - /srv/emby-sso/secrets/licence-signing-key.private.json:/run/secrets/licence-signing-key.private.json:ro
+
+      # The state: SQLite store, the ledger in the offline tool's format, and
+      # the outbox of codes waiting to be sent. Must be owned by uid 5678.
+      # BACK THIS UP. Losing it loses who bought what.
+      - /srv/emby-sso/data:/data
+
+    environment:
+      # --- required ---------------------------------------------------------
+      LICENCE_SIGNING_KEY_PATH: /run/secrets/licence-signing-key.private.json
+      LICENCE_DATA_DIR: /data
+
+      # The address the plugin has compiled in and the address PayPal sends
+      # buyers back to. Must match what the plugin ships with.
+      LICENCE_PUBLIC_BASE_URL: https://licence.example.com
+
+      # From the PayPal developer dashboard, on the webhook you created. It is
+      # part of the message PayPal signs, so this being wrong fails every
+      # webhook closed.
+      PAYPAL_ENV: sandbox
+      PAYPAL_WEBHOOK_ID: WH-0000000000000000-000000000000000
+
+      # --- required to sell anything ---------------------------------------
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
+      PAYPAL_CURRENCY: GBP
+      PAYPAL_PRICE: "19.00"
+
+      # --- optional, with the defaults shown --------------------------------
+      # LICENCE_ACTIVATIONS_ALLOWED: "3"
+      # LICENCE_DAYS: "365"
+      # PAYPAL_MINIMUM_AMOUNT: "19.00"      # defaults to PAYPAL_PRICE
+      # PAYPAL_PRODUCT_NAME: "Emby SSO plugin licence"
+      # LICENCE_TRUSTED_PROXY_HOPS: "0"     # 1 if a reverse proxy is in front
+      # LICENCE_RATE_PER_CLIENT_PER_MINUTE: "10"
+      # LICENCE_RATE_PER_CLIENT_BURST: "5"
+      # LICENCE_RATE_GLOBAL_PER_MINUTE: "300"
+
+    # Bound to localhost, because TLS is the reverse proxy's job and this
+    # service must never be the thing on port 443. If there is no proxy, there
+    # is no HTTPS, and the contract says HTTPS only.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    healthcheck:
+      # /healthz proves the volume is writable, which is the failure that would
+      # otherwise show up as a lost sale.
+      test: ["CMD", "dotnet", "Emby.Sso.LicenceService.dll", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

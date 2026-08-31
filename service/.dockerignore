@@ -1,0 +1,16 @@
+# Nothing but the two source projects reaches the build context.
+#
+# The exclusions below are not tidiness. A signing key, a ledger or an outbox
+# that finds its way into a build context finds its way into an image layer,
+# and an image layer is a thing that gets pushed to a registry.
+**/bin
+**/obj
+**/*.private.json
+**/*.pem
+**/*.p12
+**/*.pfx
+**/licences-issued.jsonl
+**/codes-outbox.jsonl
+**/licences.db*
+**/data
+.git
