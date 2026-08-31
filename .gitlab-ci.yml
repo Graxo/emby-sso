@@ -220,7 +220,11 @@ pages:
         find public -path '*superpowers*' >&2
         exit 1
       fi
-    - echo "pages: built $(find public -name '*.html' | wc -l) pages into public/"
+    # Block scalar, not a bare list entry: `- echo "pages: built ..."` parses as
+    # a YAML mapping because of the colon-space, and GitLab rejects the whole
+    # file - every job, not just this one. Second time in this file; see publish.
+    - |
+      echo "pages: built $(find public -name '*.html' | wc -l) pages into public/"
   artifacts:
     paths:
       - public
