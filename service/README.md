@@ -506,6 +506,74 @@ sudo install -o 5678 -g 5678 -m 600 \
 The service refuses to start if any bit beyond the owner's is set, if the file
 is missing, if it is the public half, or if it is inside a git working tree.
 
+### The image CI builds
+
+CI builds `service/Dockerfile` and pushes it to this project's own container
+registry, so the deployment host pulls an image instead of being handed a copy
+of the source:
+
+```
+registry.koper.cloud/graxo/emby-sso/licence-service
+```
+
+The `service-image` job prints the exact base it pushed to — trust that over
+this line, which is derived from the project path and has never been pulled.
+
+**What gets published, and when.**
+
+| Ref | Tags | For |
+|---|---|---|
+| `v1.4.0` | `1.4.0` and `latest` | what a production host runs. `1.4.0` never moves |
+| `v1.4.0-rc.1` | `1.4.0-rc.1` only | a prerelease is deliberately **not** `latest` |
+| a push to `main` | `main-<short sha>` and `main` | trying a commit before it is tagged |
+| any other branch | nothing | a branch nobody reviewed does not get published |
+
+`latest` means *the newest released version*, never "the tip of main" — so an
+operator who types it gets something that was deliberately cut, not whatever
+landed twenty minutes ago. It still moves when a release is tagged, which is why
+`docker-compose.yml` tells you to pin `LICENCE_IMAGE` to an `X.Y.Z`.
+
+**Nothing broken gets published.** The service is its own solution and nothing
+in CI used to compile it, so a service that did not even build was publishable.
+The `service-image` job now runs only behind `service-test`, which runs
+`dotnet test service/Emby.Sso.Service.sln`.
+
+**No privileged runner is needed.** The image is built with kaniko, in
+userspace, with no Docker daemon and no `docker:dind` service — deliberately,
+because docker-in-docker needs `privileged = true` on the runner and fails
+confusingly without it (`Cannot connect to the Docker daemon at
+tcp://docker:2375`, which looks like a network fault and is not one). The
+dind fallback, and what it costs, is written out in the job's comments in
+`.gitlab-ci.yml`.
+
+**Pulling needs credentials**, because the project is private: a deploy token
+scoped to `read_registry`, and `docker login registry.koper.cloud`.
+`docs/first-run.md`, section 5, has the steps and says how to treat the token.
+
+**UNVERIFIED — all three halves of this.** No pipeline has run, no image has
+been built by anything, and no host has pulled one. Each is one command to
+confirm, in order, and each tells you which half failed:
+
+```
+# 1. Does the runner build and push it? Push to main, then watch the
+#    service-image job. Success looks like kaniko printing each
+#    "Pushing image to registry.koper.cloud/..." line and exiting 0.
+#    A runner that cannot do this fails inside kaniko, not at the push.
+
+# 2. Did the registry accept it? On any machine that can reach the
+#    registry, with a read_registry deploy token:
+docker login registry.koper.cloud -u <token-username> --password-stdin
+docker manifest inspect registry.koper.cloud/graxo/emby-sso/licence-service:main | head
+
+# 3. Can the deployment host pull and run it?
+docker compose pull licence && docker compose up -d licence
+docker compose logs licence | head -20
+curl -fsS http://127.0.0.1:8080/healthz && echo OK
+```
+
+Until (1) has been watched once, the host still deploys the old way: source on
+the host, `docker compose up -d --build licence`.
+
 ### Answering "did this person's activation reach me?"
 
 `show-code --code '<what they sent you>'` answers this directly, listing every
@@ -942,8 +1010,10 @@ well, which is what `show-code` prints back at you in six months.
 ## Building and testing
 
 Not in `Emby.Sso.sln`, and that is deliberate: `dotnet build` at the repository
-root — which is what CI runs — must not build or ship any of this into the
-plugin. It has its own solution.
+root must not build or ship any of this into the plugin. It has its own
+solution, and CI runs it as its own job (`service-test`) — which it did not
+always, and until it did, a service that failed its tests could still have been
+shipped.
 
 ```
 export DOTNET_ROOT=$HOME/.dotnet
@@ -985,7 +1055,13 @@ and **nothing here has ever simulated a success and called it working.**
 - **Certificate trust.** Tested: that a self-signed certificate and a
   wrong-named one are *refused*. Untested: that PayPal's real certificate is
   *accepted*, which needs PayPal's real certificate.
-- **The Docker image.** Never built. Docker was not available.
+- **The Docker image, and everything CI does with it.** Never built — not by
+  hand, not by a runner. Docker was not available where any of this was
+  written, and no pipeline has run since the `service-image` job was added, so
+  three separate things are unproven: that the runner can build an image at
+  all without a privileged executor, that `registry.koper.cloud` accepts the
+  push, and that the deployment host can pull it. *The image CI builds*, above,
+  has the command that settles each one.
 - **The management commands inside the container.** `list-codes`, `show-code`,
   `void-code` and `list-outbox` were run against a real store on disk and are
   covered by tests, but never through `docker compose exec` — the same reason:

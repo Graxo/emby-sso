@@ -153,10 +153,52 @@ mapping if it is busy:
 ss -tln | grep ':8080 ' && echo "8080 is taken, pick another"
 ```
 
+### Log in to the registry, once
+
+CI builds the image and pushes it to `registry.koper.cloud`, so this host never
+needs a copy of the source. The project is **private**, so the pull needs
+credentials of its own — the host must not be given a personal access token or
+anything that can write.
+
+Create a **deploy token** in GitLab: *Settings → Repository → Deploy tokens*,
+on the `Graxo/emby-sso` project. Name it after this host, tick **`read_registry`
+and nothing else**, and leave the expiry set — a token with no expiry is a
+credential nobody ever revokes. GitLab shows the password **once**.
+
 ```
-docker compose up -d --build licence
+docker login registry.koper.cloud -u <token-username> --password-stdin
+```
+
+Paste the token password and press Ctrl-D. Treat it as a credential: it is a
+password to your registry, it is written in clear in `~/.docker/config.json`
+(base64 is not encryption), so the file must be `chmod 600` and owned by the
+user that runs compose. If it leaks, revoke the token in GitLab — that is the
+whole point of it being a deploy token rather than a personal one. When it
+expires, the failure is `docker compose pull` returning `unauthorized:
+authentication required`; make a new one the same way.
+
+### Pull and start
+
+```
+docker compose pull licence
+docker compose up -d licence
 docker compose logs -f licence
 ```
+
+`docker compose pull` fetching the image is the proof the login worked. Later
+updates are the same two lines — pull, then up — and `docker compose up -d`
+recreates the container only if the image actually changed.
+
+If the registry is unreachable, or you are testing an uncommitted change, the
+alternative is still there: uncomment `build:` in the compose file, comment out
+`image:`, put the source on this host and run `docker compose up -d --build
+licence`. That is the old way of doing it, kept deliberately, not the normal
+one.
+
+**UNVERIFIED, and worth watching the first time:** no image has ever been built
+by CI, pushed to that registry, or pulled onto this host. The `docker login`
+and `docker compose pull` above are the two commands that prove it; if either
+fails, nothing has been deployed and the build path above still works.
 
 A healthy first start logs the key it loaded (by fingerprint, never contents),
 the data directory, the PayPal environment, and whether mail is on. Then:

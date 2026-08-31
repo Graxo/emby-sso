@@ -8,15 +8,40 @@
 # under `environment` have to be the operator's own.
 #
 # UNRUN. Docker was not available where this was written, so neither this nor
-# the Dockerfile beside it has ever been built or started.
+# the Dockerfile beside it has ever been built or started - by hand or by CI.
 
 services:
   licence:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # Or, once it is in a registry:
-    # image: registry.example.com/emby-sso-licence:1.0.0
+    # THE NORMAL PATH: pull the image CI built. No source tree on this host,
+    # nothing to copy up, nothing to rebuild - `docker compose pull licence &&
+    # docker compose up -d licence` is the whole deployment.
+    #
+    # The project is private, so the pull needs credentials. Create a deploy
+    # token scoped to read_registry and `docker login registry.koper.cloud`
+    # once; service/docs/first-run.md, section 5, has the exact steps.
+    #
+    # PIN IT. `:latest` is the newest *released* version and moves when a
+    # vX.Y.Z tag is pushed; a specific `1.4.0` never moves and is what a
+    # production host should name, so that a deploy is a decision rather than
+    # whatever happened to be latest at restart time. `main-<short sha>` is
+    # also published, for testing a commit before it is tagged; `main` moves
+    # with every push to the default branch and is not for this file.
+    #
+    #   LICENCE_IMAGE=registry.koper.cloud/graxo/emby-sso/licence-service:1.4.0
+    #
+    # UNVERIFIED: no image has been pushed yet, so this exact reference has
+    # never been pulled. The service-image job prints the base it pushed to -
+    # take it from there rather than trusting this line.
+    image: ${LICENCE_IMAGE:-registry.koper.cloud/graxo/emby-sso/licence-service:latest}
+
+    # THE ALTERNATIVE: build here from a source tree on this host. Only needed
+    # if the registry is unreachable or you are testing an uncommitted change -
+    # then `docker compose up -d --build licence`. Uncomment `build:` and
+    # comment out `image:` above; leaving both means compose builds and *tags*
+    # the result with that name, which is not what a pull-based host wants.
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     restart: unless-stopped
 
     # Nothing else runs on this box, and this container needs almost nothing.
