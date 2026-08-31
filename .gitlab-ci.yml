@@ -13,6 +13,8 @@ stages:
   - build
   - publish
   - release
+  # Independent of everything above it. See the pages job at the bottom.
+  - docs
 
 variables:
   # Pinned: rebuilding an old tag should use the SDK that tag was tested with.
@@ -149,3 +151,77 @@ release:
         - name: "THIRD-PARTY-NOTICES"
           url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/THIRD-PARTY-NOTICES"
           link_type: other
+
+# The documentation site (docs/site/, MkDocs with the Material theme),
+# published by GitLab Pages from public/ as GitLab's contract requires.
+#
+# Deliberately independent of the release chain in both directions. `needs: []`
+# means it never waits for the test suite, and `allow_failure: true` means a
+# broken docs build cannot turn a tag's pipeline red or stop a release from
+# being cut. The converse also holds: publish and release hang off build
+# through `needs:`, so they run regardless of what this job does.
+#
+# `allow_failure: true` costs something — a docs build that breaks shows as a
+# warning rather than a failure, and it is possible to stop noticing. The
+# trade was made deliberately: documentation must never be able to hold up a
+# security fix. If that stops being the right call, flip it to false; nothing
+# else here depends on it.
+pages:
+  stage: docs
+  # Pinned by digest, not just by tag. An operator reads this site while their
+  # server is broken; a toolchain that silently changes what it renders is not
+  # acceptable. The Python version and the whole dependency tree in
+  # docs/requirements.txt are pinned for the same reason - including mkdocs
+  # itself, which matters because MkDocs 2.0 is announced as a
+  # backwards-incompatible break that would take the Material theme with it.
+  image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+  # Starts immediately. Nothing it produces depends on a build artifact, and
+  # nothing that produces an artifact depends on it.
+  needs: []
+  allow_failure: true
+  rules:
+    # GitLab Pages only ever publishes from the default branch, so building the
+    # site on a feature branch produces something nobody can look at. `changes`
+    # keeps it off pipelines that touched no documentation; on those, the site
+    # already published simply stays up.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - mkdocs.yml
+        - docs/requirements.txt
+        - docs/site/**/*
+        - .gitlab-ci.yml
+    # And on demand from the Pipelines page, to republish without a commit.
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PIP_NO_CACHE_DIR: "1"
+    PIP_ROOT_USER_ACTION: "ignore"
+  script:
+    - python -m pip install --no-input -r docs/requirements.txt
+    # docs/superpowers/ is this project's internal development record - specs,
+    # plans, spikes, verification notes - and none of it is documentation for
+    # an operator. The site's sources live in docs/site/ precisely so that
+    # MkDocs cannot reach it: MkDocs only ever reads what is inside docs_dir.
+    # This is the tripwire for someone "tidying" that line later.
+    - |
+      if ! grep -qx 'docs_dir: docs/site' mkdocs.yml; then
+        echo "pages: docs_dir is no longer docs/site. Refusing to build: pointing it at docs/ would publish docs/superpowers/, which is internal." >&2
+        exit 1
+      fi
+    # Warnings are errors: a dead cross-reference in a site the plugin's own
+    # settings page links into is a real failure, not a nit.
+    - mkdocs build --strict
+    # Belt and braces, on the built output this time. If anything from the
+    # internal record ever reaches public/, do not publish it.
+    - |
+      if find public -path '*superpowers*' -print -quit | grep -q .; then
+        echo "pages: internal development records reached public/. Refusing to publish." >&2
+        find public -path '*superpowers*' >&2
+        exit 1
+      fi
+    - echo "pages: built $(find public -name '*.html' | wc -l) pages into public/"
+  artifacts:
+    paths:
+      - public
+    expire_in: 30 days
