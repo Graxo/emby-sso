@@ -80,7 +80,20 @@ publish:
     - job: build
       artifacts: true
   script:
+    # VERSION arrives from build's dotenv report. If that ever stops working,
+    # every URL below silently gains an empty path segment and the upload goes
+    # somewhere nobody will find. Fail here instead, naming the cause.
+    - |
+      if [ -z "${VERSION:-}" ]; then
+        echo "publish: VERSION is empty - the dotenv report from the build job did not arrive." >&2
+        exit 1
+      fi
     - PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION"
+    # Quoted as one block: an unquoted "echo foo: bar" entry is a YAML mapping,
+    # not a string, and the pipeline is rejected before anything runs.
+    - |
+      echo "publish: version=$VERSION tag=$CI_COMMIT_TAG"
+      echo "publish: package base $PACKAGE_URL"
     - |
       for file in Emby.Sso.dll Emby.Sso.dll.sha256; do
         echo "Uploading $file to $PACKAGE_URL/$file"
