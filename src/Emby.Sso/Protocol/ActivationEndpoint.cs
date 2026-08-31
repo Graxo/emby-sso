@@ -30,8 +30,16 @@ namespace Emby.Sso.Protocol
         ///
         /// Getting it wrong costs an activation attempt and nothing else. It is
         /// NOT a trust boundary: see the class comment.
+        ///
+        /// Spelled "license", not "licence". The rest of this codebase uses the
+        /// British spelling for the noun and this host does not, because a
+        /// hostname is not prose - it is whatever DNS actually answers for, and
+        /// DNS answers for license.koper.cloud. The other spelling has no record
+        /// at all, so a plugin built against it fails to resolve, and the
+        /// symptom - "the licence service could not be reached" - reads like a
+        /// firewall or a certificate rather than one letter.
         /// </summary>
-        public const string DefaultServiceBase = "https://licence.koper.cloud";
+        public const string DefaultServiceBase = "https://license.koper.cloud";
 
         /// <summary>The activation endpoint's path, fixed by the API contract.</summary>
         public const string ActivatePath = "/v1/activate";
