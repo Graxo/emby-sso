@@ -5,12 +5,24 @@ to anyone.** No code in this directory reaches the plugin DLL: this project hold
 no reference to `src/Emby.Sso`, nothing in the plugin references it, and ILRepack
 merges only the plugin's own build output.
 
-## Where the private key lives
+## Where the private key and the ledger live
 
 **Not in this repository, and not in any repository.** The tool refuses to write
-a key inside a git working tree for exactly that reason, and
-`licence-signing-key.private.json` is in `.gitignore` as a second line of
-defence.
+either file inside a git working tree for exactly that reason, and both
+`licence-signing-key.private.json` and `licences-issued.jsonl` are in
+`.gitignore` as a second line of defence.
+
+Two files, one directory:
+
+| File | What it is |
+| --- | --- |
+| `licence-signing-key.private.json` | The signing key. Everything rests on it. |
+| `licences-issued.jsonl` | The ledger: one line per licence issued. Who holds what, and when it lapses. |
+
+The ledger is not a signing key, but it is a list of who runs your plugin on
+which server, and there is no way to rebuild it — the plugin never calls home,
+so no server can be asked what it holds. Both files are written owner-read/write
+only, and the tool says so loudly if it finds the ledger readable by anyone else.
 
 Somewhere sensible:
 
@@ -60,10 +72,108 @@ The licence goes to stdout on its own — the summary goes to stderr — so
 `> licence.txt` gives you just the key. It is roughly 700 characters. The
 customer pastes it into **Dashboard → Plugins → Authentik SSO → Licence key**.
 
+Every `issue` appends one line to the ledger, `licences-issued.jsonl` beside the
+key, or wherever `--ledger <file>` says. The line records the licensee, the
+server id, the issue and expiry times, and a SHA-256 fingerprint of the licence.
+
+**The licence itself is not stored.** It is a live credential, and a file
+holding every credential ever issued is a far worse thing to lose than a list of
+names; the only thing storing them would buy is resending one to a tester who
+lost theirs, and issuing them another for the same server id is one command. The
+fingerprint is what ties a string somebody emails back to a row in the ledger —
+`show` prints the same fingerprint.
+
+If the ledger cannot be written, the licence is still issued and printed, with a
+loud warning: losing the record of a licence is bad, and failing to issue one
+because a log file is wrong is worse. **When you see that warning, write the
+licensee, server id and expiry down by hand.** Nothing else knows them.
+
 A licence must expire; `--days` has to be a positive number. There is no
 revocation: the plugin checks the licence offline against the embedded public
 key and never calls home, so the only way a licence stops working before its
 expiry is a new keypair and a new build.
+
+## Who holds what: `list`
+
+```
+dotnet run --project tools/Emby.Sso.LicenceTool -- list \
+  --ledger ~/emby-sso-licence/licences-issued.jsonl
+```
+
+```
+STATUS   EXPIRES     IN DAYS  LICENSEE                  SERVER
+LAPSED   2026-06-01      -91  Lapsed Larry              9999aaaa8888bbbb7777cccc6666dddd
+LAPSING  2026-09-05        4  Acme Media                c5bc6e91458540caa295c4efdda1a58a
+active   2027-08-31      364  Beta Tester Bob           aaaa1111bbbb2222cccc3333dddd4444
+```
+
+Soonest expiry first, so what needs attention is at the top. `--soon <days>`
+sets how far ahead counts as `LAPSING`; the default of 21 days is the window in
+which the customer's own server has already started warning them in its log.
+
+One line per holder: a reissue supersedes the earlier licence for the same
+licensee and server, and the earlier ones are counted (`(+1 earlier)`) rather
+than listed. `--all` lists every record instead.
+
+A line the tool cannot parse is skipped with a warning naming the line number,
+so one damaged record never hides the rest.
+
+Nothing in `list` revokes anything, because nothing can: a lapsed holder is
+fixed by issuing them a new licence, never by editing this file.
+
+## Is this licence genuine: `show`
+
+A tester emails "it says my licence is invalid". Ask them for the licence string
+and put it through `show`:
+
+```
+dotnet run --project tools/Emby.Sso.LicenceTool -- show \
+  --key ~/emby-sso-licence/licence-signing-key.private.json \
+  --licence /tmp/theirs.txt \
+  --server-id c5bc6e91458540caa295c4efdda1a58a
+```
+
+The licence can come from `--licence <file>` or on stdin. `--server-id` is
+optional; without it the server the licence names is printed but not checked
+against anything.
+
+```
+Signature   : VERIFIED against /home/you/emby-sso-licence/licence-signing-key.private.json
+Licensee    : Acme Media
+Server      : c5bc6e91458540caa295c4efdda1a58a
+Issued      : 2026-08-31T11:14:15Z
+Expires     : 2027-08-31T11:14:15Z
+Fingerprint : sha256:025285f6...
+
+VALID - expires in 364 days, and is for that server.
+```
+
+**`show` verifies the signature; it does not merely decode the token.** It runs
+the same checks the plugin runs — the signature against your public key, `alg`
+pinned to RS256, unsigned tokens refused — and if any of them fails it prints
+*nothing at all* out of the token and exits non-zero:
+
+```
+SIGNATURE NOT VERIFIED - this was not issued with this key.
+  the signature does not match this key, or there is no signature at all
+```
+
+That silence is deliberate. Anyone can write a JWT payload saying whatever they
+like; the contents of a token that did not verify are whatever its author chose,
+and printing them beside the word "Licensee" is how you come to believe one.
+
+Expiry and the server binding are *reported* rather than enforced, because
+"expired three weeks ago" is the answer you came for. A licence that verifies
+but cannot be used says so and exits non-zero:
+
+```
+NOT USABLE, though it is genuinely signed by this key:
+  - it EXPIRED 40 days ago
+```
+
+`--key` takes the private key file or a public JWK; only the public half is ever
+used, and no private material is printed. Exit status is 0 only when the licence
+verified *and* is usable, so `show` can be used in a script.
 
 ## What this protects, and what it does not
 

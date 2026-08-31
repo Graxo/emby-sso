@@ -18,3 +18,9 @@ licence-signing-key.private.json
 *.pem
 *.p12
 *.pfx
+
+# The issuing tool's ledger of who was given a licence for which server. It is
+# a record of credentials, so it follows the private key's rule: the tool
+# refuses to write it inside a git working tree, and this is the second line of
+# defence. It lives beside the signing key, outside any repository.
+licences-issued.jsonl
