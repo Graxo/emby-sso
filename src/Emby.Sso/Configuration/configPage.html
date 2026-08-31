@@ -83,6 +83,23 @@
 
       <div class="checkboxContainer checkboxContainer-withDescription">
         <label>
+          <input is="emby-checkbox" type="checkbox" id="enablePinSignIn" />
+          <span>Allow native apps to sign in with a one-time PIN</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          Lets a user sign in on a TV without typing a password there. They
+          open the PIN URL shown below in a browser on a phone or laptop, sign
+          in through the identity provider normally &mdash; multi-factor and
+          all &mdash; and are shown an eight-character PIN. On the TV they
+          enter their Emby username and that PIN in place of a password. The
+          PIN lasts five minutes, works once, is tied to that one account, and
+          is destroyed by a single wrong entry. This is a separate setting from
+          native password sign-in above and neither one turns the other on.
+        </div>
+      </div>
+
+      <div class="checkboxContainer checkboxContainer-withDescription">
+        <label>
           <input is="emby-checkbox" type="checkbox" id="enableButtonInjection" />
           <span>Reserve a sign-in button on the login page (not yet supported by Emby's web client)</span>
         </label>
@@ -204,6 +221,11 @@
       <div class="inputContainer">
         <label>Sign-in URL for users to bookmark</label>
         <p id="startUrl" style="user-select: all; font-family: monospace;"></p>
+      </div>
+
+      <div class="inputContainer">
+        <label>PIN URL for users to open on a phone or laptop</label>
+        <p id="pinUrl" style="user-select: all; font-family: monospace;"></p>
       </div>
 
       <div>

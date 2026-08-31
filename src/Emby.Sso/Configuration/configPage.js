@@ -7,6 +7,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         var base = (baseUrl || '').replace(/[\/]+$/, '');
         page.querySelector('#redirectUri').textContent = base + '/emby/Sso/Callback';
         page.querySelector('#startUrl').textContent = base + '/emby/Sso/Start';
+        page.querySelector('#pinUrl').textContent = base + '/emby/Sso/Pin';
     }
 
     function loadPage(page, config) {
@@ -17,6 +18,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#embyPublicBaseUrl').value = config.EmbyPublicBaseUrl || '';
         page.querySelector('#usernameClaim').value = config.UsernameClaim || 'preferred_username';
         page.querySelector('#enableDirectGrant').checked = config.EnableDirectGrant === true;
+        page.querySelector('#enablePinSignIn').checked = config.EnablePinSignIn === true;
         page.querySelector('#enableButtonInjection').checked = config.EnableButtonInjection === true;
         page.querySelector('#allowInsecureHttp').checked = config.AllowInsecureHttp === true;
         page.querySelector('#allowPrivateNetworkProvider').checked = config.AllowPrivateNetworkProvider === true;
@@ -54,6 +56,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             config.EmbyPublicBaseUrl = form.querySelector('#embyPublicBaseUrl').value.trim();
             config.UsernameClaim = form.querySelector('#usernameClaim').value.trim();
             config.EnableDirectGrant = form.querySelector('#enableDirectGrant').checked;
+            config.EnablePinSignIn = form.querySelector('#enablePinSignIn').checked;
             config.EnableButtonInjection = form.querySelector('#enableButtonInjection').checked;
             config.AllowInsecureHttp = form.querySelector('#allowInsecureHttp').checked;
             config.AllowPrivateNetworkProvider = form.querySelector('#allowPrivateNetworkProvider').checked;
