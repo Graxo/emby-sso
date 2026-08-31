@@ -86,6 +86,23 @@ namespace Emby.Sso.Api
 
         private async Task<object> HandleStartAsync()
         {
+            // The licence, before anything else. Nothing has left this server at
+            // this point - no discovery document is fetched until the
+            // authorization URL is built - so an unlicensed server refuses here
+            // rather than sending a user to the identity provider for a round
+            // trip that was always going to be refused on the way back.
+            //
+            // The callback below carries the SAME check rather than trusting
+            // this one. They are two separate doors, and a callback can arrive
+            // with a live pending login that was created while the licence was
+            // still valid.
+            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, "/Sso/Start").ConfigureAwait(false);
+
+            if (licenceRefusal != null)
+            {
+                return Error(licenceRefusal, null);
+            }
+
             var configuration = SsoRuntime.Configuration;
 
             if (configuration == null || !configuration.IsConfigured)
@@ -186,6 +203,22 @@ namespace Emby.Sso.Api
             // outcome, including the provider-error path below, which would
             // otherwise leave the pending login live for its whole TTL.
             var login = SsoRuntime.PendingLogins.Consume(request.State);
+
+            // Then the licence, above every other decision here. This is the
+            // door that issues the handoff secret an Emby session is minted
+            // from, and the door that provisions accounts, so refusing here is
+            // what actually stops an unlicensed server admitting anybody. The
+            // check at /Sso/Start is the courtesy; this one is the enforcement.
+            //
+            // Above the code exchange in particular: an unlicensed server must
+            // not spend a user's authorization code, which is single-use, on a
+            // flow it is about to refuse.
+            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, "/Sso/Callback").ConfigureAwait(false);
+
+            if (licenceRefusal != null)
+            {
+                return Error(licenceRefusal, null);
+            }
 
             if (!string.IsNullOrEmpty(request.Error))
             {

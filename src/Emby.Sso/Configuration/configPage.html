@@ -181,6 +181,22 @@
       <br />
 
       <div class="inputContainer">
+        <label for="licenceKey">Licence key</label>
+        <input is="emby-input" type="text" id="licenceKey" />
+        <div class="fieldDescription">
+          The licence issued for this server. Without a valid one, NEW single
+          sign-ons and automatic account creation are refused &mdash; people
+          who are already signed in stay signed in, and your own Emby
+          accounts are unaffected, so you are never locked out of your
+          server. The server log names the exact reason and warns for three
+          weeks before the licence expires.
+          <br /><br />
+          A licence is issued for one server. This server&#39;s id is the
+          <code>ServerId</code> Emby writes to the log at startup.
+        </div>
+      </div>
+
+      <div class="inputContainer">
         <label>Redirect URI to configure in Authentik</label>
         <p id="redirectUri" style="user-select: all; font-family: monospace;"></p>
       </div>

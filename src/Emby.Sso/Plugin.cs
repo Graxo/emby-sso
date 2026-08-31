@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Emby.Sso.Configuration;
+using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
@@ -12,12 +13,42 @@ namespace Emby.Sso
     {
         public static Plugin Instance { get; private set; }
 
-        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, IApplicationHost applicationHost)
             : base(applicationPaths, xmlSerializer)
         {
             Instance = this;
             SubjectBindingFilePath = BuildSubjectBindingFilePath(applicationPaths);
+            ServerId = applicationHost?.SystemId;
         }
+
+        /// <summary>
+        /// This server's identity, which the licence is bound to
+        /// (<see cref="Protocol.LicenceCheck"/>). It is
+        /// <c>IApplicationHost.SystemId</c> - the same value Emby logs at
+        /// startup as "ServerId" and returns as <c>ServerId</c> in an
+        /// authentication response, confirmed present on the 4.9.1.90 reference
+        /// assembly and read off <c>ApplicationHost.SystemId</c> in a decompiled
+        /// 4.9.5.0 server.
+        ///
+        /// Taken as a CONSTRUCTOR argument rather than resolved later because
+        /// Emby builds plugins through its container
+        /// (<c>ApplicationHost.FindParts</c> -&gt;
+        /// <c>GetExportsWithInfo&lt;IPlugin&gt;</c> -&gt;
+        /// <c>Container.GetInstance</c>, decompiled from 4.9.5.0), which
+        /// auto-wires constructor dependencies, and
+        /// <c>RegisterSingleInstance&lt;IApplicationHost&gt;(this)</c> runs in
+        /// <c>RegisterResources</c>, before <c>FindParts</c>. There is no other
+        /// route: <c>BasePlugin</c> exposes paths and serialisation and nothing
+        /// about the host.
+        ///
+        /// UNVERIFIED on a live server. If the container ever failed to supply
+        /// it, <c>CreateInstanceSafe</c> catches the exception and logs "Error
+        /// creating Emby.Sso.Plugin", and the plugin simply does not load -
+        /// visible in the log and in the dashboard, not a silent weakening.
+        /// Null here (a host that reports no system id) makes the licence check
+        /// refuse rather than skip the server binding.
+        /// </summary>
+        public string ServerId { get; }
 
         /// <summary>
         /// Where the subject-to-account bindings live

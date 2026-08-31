@@ -61,6 +61,16 @@ namespace Emby.Sso
 
         public static PluginConfiguration Configuration => Plugin.Instance?.Configuration;
 
+        /// <summary>
+        /// This Emby server's own id, which the licence is bound to. Null until
+        /// Emby has constructed the plugin - nothing in the reference assemblies
+        /// promises it does that before it constructs the authentication
+        /// provider or the API service - and null makes
+        /// <see cref="LicenceCheck"/> refuse rather than skip the binding, which
+        /// is the fail-closed direction. See <see cref="Plugin.ServerId"/>.
+        /// </summary>
+        public static string ServerId => Plugin.Instance?.ServerId;
+
         private static readonly object SubjectBindingLock = new object();
         private static SubjectBindingStore _subjectBindings;
 

@@ -144,6 +144,28 @@ namespace Emby.Sso.Auth
 
         public async Task<ProviderAuthenticationResult> Authenticate(string username, string password, User resolvedUser)
         {
+            // The licence, first, above BOTH branches below - a sign-in and the
+            // account provisioning that a sign-in for an unknown username can
+            // trigger are the same door and must be refused together.
+            //
+            // Decided before anything else because it needs no identity, no
+            // token and no network: an unlicensed server must not forward
+            // somebody's password to the identity provider on the way to a
+            // refusal that was certain from the start. It also costs the
+            // provisioning throttle nothing, which is right - a refusal for
+            // something nobody tried must not spend budget.
+            //
+            // What this refusal does NOT do is anything to an existing session.
+            // Emby never asks this provider about an access token it has already
+            // issued, so people who are signed in stay signed in, and Emby's own
+            // local accounts are its own provider's business. See LicenceGate.
+            var licenceRefusal = await LicenceGate.RefusalAsync(_logger, "native sign-in").ConfigureAwait(false);
+
+            if (licenceRefusal != null)
+            {
+                throw new Exception(licenceRefusal);
+            }
+
             if (resolvedUser == null)
             {
                 // Load-bearing, and no longer absolute: see the class comment.

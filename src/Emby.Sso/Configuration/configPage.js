@@ -24,6 +24,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#groupsClaim').value = config.GroupsClaim || 'groups';
         page.querySelector('#templateUserName').value = config.TemplateUserName || '';
         page.querySelector('#enableAutoCreate').checked = config.EnableAutoCreate === true;
+        page.querySelector('#licenceKey').value = config.LicenceKey || '';
         showUrls(page, config.EmbyPublicBaseUrl);
 
         loading.hide();
@@ -60,6 +61,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             config.GroupsClaim = form.querySelector('#groupsClaim').value.trim();
             config.TemplateUserName = form.querySelector('#templateUserName').value.trim();
             config.EnableAutoCreate = form.querySelector('#enableAutoCreate').checked;
+            config.LicenceKey = form.querySelector('#licenceKey').value.trim();
 
             return ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                 loading.hide();

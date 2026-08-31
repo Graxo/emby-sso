@@ -33,6 +33,24 @@ namespace Emby.Sso.Configuration
         public string TemplateUserName { get; set; } = string.Empty;
         public string GroupsClaim { get; set; } = "groups";
 
+        /// <summary>
+        /// The signed licence key the vendor issued for THIS Emby server,
+        /// pasted in by an administrator the way Emby's own supporter key is.
+        /// See <see cref="Protocol.LicenceCheck"/>.
+        ///
+        /// It is not a secret in any interesting sense - it is a signed
+        /// assertion, readable by anyone who has it, and it is useless on any
+        /// other server. It is stored in the plugin configuration XML like every
+        /// other setting.
+        ///
+        /// Empty, or invalid, refuses NEW single sign-ons and account
+        /// provisioning and nothing else: sessions that already hold an Emby
+        /// access token keep working, and Emby's own local accounts are
+        /// unaffected because they are not this plugin's to authenticate. An
+        /// operator can always still reach their own server.
+        /// </summary>
+        public string LicenceKey { get; set; } = string.Empty;
+
         public bool IsConfigured =>
             !string.IsNullOrWhiteSpace(IssuerUrl) &&
             !string.IsNullOrWhiteSpace(ClientId) &&

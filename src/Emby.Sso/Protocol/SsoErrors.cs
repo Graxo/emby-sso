@@ -29,6 +29,21 @@ namespace Emby.Sso.Protocol
         /// </summary>
         public const string GroupNotHeld = "This account is not set up on this server.";
 
+        /// <summary>
+        /// The plugin's licence is missing, invalid or expired.
+        ///
+        /// DELIBERATELY NOT identical to <see cref="UnknownUser"/>, and it must
+        /// never be made so. The three constants above are character-identical
+        /// on purpose, because distinguishing them would tell a stranger whether
+        /// an account exists or holds a group. This one is the opposite case:
+        /// nothing about it is a secret, it is nobody's fault but the
+        /// administrator's, and the only way it ever gets fixed is if the person
+        /// staring at the refusal can tell it apart from "wrong password".
+        /// </summary>
+        public const string LicenceInvalid =
+            "Single sign-on is unavailable: this server's SSO plugin licence is missing, invalid or expired. "
+            + "Please contact the server administrator.";
+
         public const string DirectGrantDisabled = "Password sign-in is disabled for this account.";
         public const string EmptyCredential = "A username and password are required.";
     }
