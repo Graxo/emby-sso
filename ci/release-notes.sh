@@ -42,6 +42,16 @@ cat <<NOTES
    version $version. A different version there means the old DLL is still in
    place.
 
+## Before you restart, you also need a licence key
+
+This plugin is licensed software. Paste the licence issued for **this** Emby
+server into Dashboard → Plugins → Authentik SSO → **Licence key**. Without a
+valid one the plugin refuses NEW single sign-ons and automatic account
+creation, and says so in the server log; sessions that are already signed in
+keep working and Emby's own local accounts are unaffected, so you are never
+locked out of your server. A licence names one server id — the \`ServerId\`
+Emby writes to its log at startup.
+
 ## Before you restart, if you are upgrading
 
 Every sign-on this build performs is gated on an Authentik group, and until
@@ -58,6 +68,8 @@ what a refusal looks like in the log.
 | --- | --- |
 | \`Emby.Sso.dll\` | The merged plugin. Install this. |
 | \`Emby.Sso.dll.sha256\` | \`sha256sum -c\` input for the above. |
+| \`LICENSE\` | The terms this plugin is licensed to you under. |
+| \`THIRD-PARTY-NOTICES\` | Licences of the libraries merged into the DLL. Keep it with the DLL if you pass it on. |
 
-Both are also downloadable directly from $package_url.
+All four are also downloadable directly from $package_url.
 NOTES

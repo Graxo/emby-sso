@@ -59,8 +59,17 @@ build:
     - echo "Building $VERSION from $CI_COMMIT_SHA"
     - dotnet build -c Release -p:Version="$VERSION" -p:SourceRevisionId="$CI_COMMIT_SHA"
     - ci/verify-artifact.sh "$MERGED_DLL" "$INFORMATIONAL_VERSION"
+    # The merged DLL physically contains a dozen MIT- and Apache-licensed
+    # libraries, and merging is redistribution: their notices have to ship with
+    # it. This fails the build if a dependency was added to ILRepack.targets
+    # without THIRD-PARTY-NOTICES being updated.
+    - ci/verify-notices.sh src/Emby.Sso/ILRepack.targets THIRD-PARTY-NOTICES
     - rm -rf dist && mkdir dist
     - cp "$MERGED_DLL" dist/Emby.Sso.dll
+    # LICENSE and THIRD-PARTY-NOTICES travel with the DLL, in the artifact and
+    # in the package registry. Not optional: the third-party licences require
+    # it, and an operator who downloads one file should get all three.
+    - cp LICENSE THIRD-PARTY-NOTICES dist/
     - (cd dist && sha256sum Emby.Sso.dll > Emby.Sso.dll.sha256)
     - cat dist/Emby.Sso.dll.sha256
     - echo "VERSION=$VERSION" > build.env
@@ -95,7 +104,7 @@ publish:
       echo "publish: version=$VERSION tag=$CI_COMMIT_TAG"
       echo "publish: package base $PACKAGE_URL"
     - |
-      for file in Emby.Sso.dll Emby.Sso.dll.sha256; do
+      for file in Emby.Sso.dll Emby.Sso.dll.sha256 LICENSE THIRD-PARTY-NOTICES; do
         echo "Uploading $file to $PACKAGE_URL/$file"
         curl --fail-with-body --silent --show-error --retry 3 \
           --header "JOB-TOKEN: $CI_JOB_TOKEN" \
@@ -133,4 +142,10 @@ release:
           link_type: package
         - name: "Emby.Sso.dll.sha256"
           url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/Emby.Sso.dll.sha256"
+          link_type: other
+        - name: "LICENSE"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/LICENSE"
+          link_type: other
+        - name: "THIRD-PARTY-NOTICES"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/THIRD-PARTY-NOTICES"
           link_type: other

@@ -1,0 +1,73 @@
+Copyright (c) 2026 graxo <robin@koper.cloud>. All rights reserved.
+
+PROPRIETARY SOFTWARE - NOT OPEN SOURCE
+
+
+ABOUT THIS FILE
+
+This licence covers the source code in this repository and the Emby.Sso.dll
+built from it. It does NOT cover the third-party libraries that ILRepack merges
+into that DLL; those keep their own licences, which are reproduced in
+THIRD-PARTY-NOTICES and which must be shipped with the DLL.
+
+If the name above is not the legal entity you trade under, change it. Nothing
+else in this repository depends on that line.
+
+
+GRANT
+
+No licence to use, copy, modify or distribute this software is granted except
+by a separate written agreement with the copyright holder, or by a licence key
+issued by the copyright holder for a named Emby server. Possession of a copy of
+this software is not itself a licence to run it.
+
+A licence key issued by the copyright holder permits the licensee to install and
+run one copy of the compiled plugin on the single Emby server the key names, for
+the period the key is valid, and to make copies for backup and disaster
+recovery. It does not permit redistribution, sublicensing, resale, or use on any
+other server.
+
+
+RESTRICTIONS
+
+Except to the extent this restriction is void under applicable law - in the
+European Union, Directive 2009/24/EC preserves certain rights to observe, study
+and decompile a program for interoperability, and nothing here purports to
+override them - you may not:
+
+  * distribute, publish, sublicense, rent, lease or sell this software or any
+    part of it;
+  * reverse engineer, decompile or disassemble the compiled plugin;
+  * remove, disable or circumvent the licence check, or the notices in this file
+    and in THIRD-PARTY-NOTICES;
+  * use this software on a server for which no valid licence key has been
+    issued.
+
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+This software is not affiliated with, endorsed by, or a product of Emby LLC or
+of the Authentik project.
+
+
+WHY ALL-RIGHTS-RESERVED, AND WHAT IT IS WORTH
+
+This is the conservative default, chosen because the intent is to sell this
+plugin and because picking an open-source licence on someone's behalf is not
+reversible - anything released under one stays released under it for that
+version, forever. If a permissive licence is wanted later, it can be granted;
+the other direction cannot.
+
+It is also worth being clear about what a licence and a licence check actually
+achieve here. The plugin ships as a .NET assembly, and a .NET assembly can be
+decompiled and a check patched out. The licence check in this software raises
+the cost of casual copying between servers; it is not DRM and cannot be made
+into DRM. What this file provides is the legal position, which is the part that
+is actually enforceable.
