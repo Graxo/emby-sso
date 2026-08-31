@@ -396,6 +396,25 @@ namespace Emby.Sso.LicenceService
             // prefetcher, crawler or reload creates a PayPal order; 303 to
             // PayPal, so the browser's back button returns to the buy page rather
             // than re-submitting.
+            // Someone will open /buy/start in a browser - it is the URL in the
+            // address bar mid-purchase, so it gets bookmarked, shared and
+            // retried. A GET must not create an order (that is why the purchase
+            // is a form POST: prefetchers, link previewers and crawlers all
+            // follow GETs), but 405 is a dead end. Send them to the page with
+            // the button on it instead.
+            app.MapGet("/buy/start", (HttpContext context) =>
+            {
+                var serverId = context.Request.Query["serverId"].ToString();
+
+                context.Response.Redirect(
+                    string.IsNullOrEmpty(serverId)
+                        ? "/buy"
+                        : "/buy?serverId=" + Uri.EscapeDataString(serverId),
+                    permanent: false);
+
+                return Task.CompletedTask;
+            });
+
             app.MapPost("/buy/start", async (
                 HttpContext context,
                 PayPalOrdersClient paypal,
@@ -829,7 +848,12 @@ namespace Emby.Sso.LicenceService
             return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : -1;
         }
 
-        private static IDictionary<string, string> ParseArguments(string[] args)
+        /// <summary>
+        /// `--flag value` and `--flag`, from the second argument on - the first
+        /// is the command name. Internal so the command tests parse exactly what
+        /// an operator types rather than a dictionary a test made up.
+        /// </summary>
+        internal static IDictionary<string, string> ParseArguments(string[] args)
         {
             var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -849,7 +873,12 @@ namespace Emby.Sso.LicenceService
             return parsed;
         }
 
-        private const string Usage = @"Emby SSO licence service
+        /// <summary>
+        /// What `--help` prints. Internal so a test can assert every command
+        /// the binary answers to is listed: a command nobody can discover is a
+        /// command that does not exist.
+        /// </summary>
+        internal const string Usage = @"Emby SSO licence service
 
   (no arguments)
       Runs the service. Everything is configured through the environment;
