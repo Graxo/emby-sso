@@ -9,6 +9,10 @@ artifacts/
 dist/
 .nuget/
 
+# The documentation site MkDocs builds. Generated from docs/site/; GitLab
+# Pages publishes it from the job's artifact, so it is never committed.
+/public/
+
 # Licence signing keys. The issuing tool refuses to write one inside a git
 # working tree at all (tools/Emby.Sso.LicenceTool/README.md); this is the
 # second line of defence, because a private key that reaches a commit has to

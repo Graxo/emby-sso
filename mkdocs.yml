@@ -1,0 +1,125 @@
+# Documentation site for the Emby OIDC SSO plugin, published by GitLab Pages.
+#
+# docs_dir is deliberately docs/site, NOT docs/. docs/superpowers/ holds this
+# project's internal development record — specs, plans, spikes, verification
+# notes — and none of it is user documentation. Pointing docs_dir at docs/
+# would sweep every one of those files into the published site. Keeping the
+# site's sources one level down means it cannot happen by accident: MkDocs
+# only ever reads what is inside docs_dir. The pages job checks the built
+# output for the same thing again before it publishes.
+site_name: Emby OIDC SSO
+site_description: >-
+  Sign in to Emby with Authentik. Installation, group gating, native app and
+  PIN sign-in, licensing, and what each error message actually means.
+# UNVERIFIED: nothing here has been able to reach this GitLab instance over
+# HTTPS, so the site's real published address is unknown. GitLab sets
+# CI_PAGES_URL in the pages job to whatever the address actually is, and that
+# is what the published build uses; the fallback is only for local builds.
+# Do not hard-code a guess here - a wrong site_url produces wrong canonical
+# links and a wrong sitemap.
+site_url: !ENV [CI_PAGES_URL, "http://127.0.0.1:8000/"]
+docs_dir: docs/site
+# GitLab Pages publishes the contents of public/, per its own contract.
+site_dir: public
+use_directory_urls: true
+
+# Nothing here loads from a CDN or phones home. The theme, its fonts and the
+# search index are all built into the output, so the site works on an
+# air-gapped network exactly as it does on a public one.
+theme:
+  name: material
+  language: en
+  font: false
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.tooltips
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    admonition:
+      danger: material/alert-octagon
+
+extra_css:
+  - stylesheets/evidence.css
+
+extra:
+  # No analytics, no trackers, no external requests.
+  social: []
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Link to this section
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.keys
+  - pymdownx.smartsymbols
+
+plugins:
+  - search
+
+# Broken cross-references are a real failure mode for a site that exists to be
+# linked into from a settings form. --strict turns every one of these into a
+# build failure.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# Structured around what a reader is trying to do, not around how the repo is
+# laid out.
+nav:
+  - Start here: index.md
+  - Getting started:
+      - Read this before you install: before-you-install.md
+      - Installing and upgrading: installing.md
+      - Setting up Authentik: authentik.md
+      - Assigning each user's login provider: login-providers.md
+  - Signing in:
+      - Browser sign-in: browser-sign-in.md
+      - Native apps with a password: native-apps.md
+      - Native apps with a one-time PIN: pin-sign-in.md
+  - Who may sign in:
+      - Group gating and account creation: groups-and-account-creation.md
+      - One Emby account, one Authentik identity: identity-binding.md
+      - Brute-force protection: brute-force-protection.md
+  - Reference:
+      - Every setting, explained: settings.md
+      - Licensing: licensing.md
+      - Troubleshooting: troubleshooting.md
+      - What has and has not been verified: verification-status.md
+      - Building from source: building.md
