@@ -188,17 +188,17 @@ this server will not relay a password in cleartext, in any configuration.
 
 ## This sign-in could not be completed in this browser. Please try signing in again.
 
-**What it means.** `/emby/Sso/Start` sets a short-lived binding cookie that must
-come back unchanged on `/emby/Sso/Callback`. A reverse proxy sitting in front of
+**What it means.** `/sso/start` sets a short-lived binding cookie that must
+come back unchanged on `/sso/callback`. A reverse proxy sitting in front of
 Emby stripped or rewrote cookies on that path, or rewrote the path so the
-cookie's `Path` no longer covers `/emby/Sso/Callback`.
+cookie's `Path` no longer covers `/sso/callback`.
 
 **What to check.**
 
 - The log line next to this error distinguishes **no cookie presented at all**
   from **a cookie that was presented but did not match**.
 - Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on
-  both `/emby/Sso/Start` and `/emby/Sso/Callback`.
+  both `/sso/start` and `/sso/callback`.
 - Confirm it does not rewrite either path in a way that changes the cookie's
   directory.
 

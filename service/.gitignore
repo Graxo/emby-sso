@@ -10,3 +10,4 @@ licences.db-wal
 licences.db-shm
 codes-outbox.jsonl
 data/
+.env

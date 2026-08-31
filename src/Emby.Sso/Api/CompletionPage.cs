@@ -3,7 +3,7 @@ using Emby.Sso;
 namespace Emby.Sso.Api
 {
     /// <summary>
-    /// The page /emby/Sso/Callback returns after a successful sign-in, and the
+    /// The page /sso/callback returns after a successful sign-in, and the
     /// one place the Emby web client's credential format is written down.
     ///
     /// Emby's login page cannot be scripted (no branding hook survives), but this
@@ -78,7 +78,7 @@ namespace Emby.Sso.Api
 var STORE_KEY = 'servercredentials3';
 var DEVICE_KEY = 'emby-sso-device-id';
 
-// This page is served at <base>/emby/Sso/Callback (the bare /Sso/Callback form
+// This page is served at <base>/sso/callback (the /emby/sso/callback form
 // also routes, so strip either). What remains has to equal what app.js computes
 // for itself, which is location.href truncated at the last '/web' - so for a
 // server published under a reverse-proxy sub-path, both end up as

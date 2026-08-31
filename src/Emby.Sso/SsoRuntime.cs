@@ -364,7 +364,15 @@ namespace Emby.Sso
 
         private static string BuildRedirectUri(PluginConfiguration configuration)
         {
-            return configuration.EmbyPublicBaseUrl.TrimEnd('/') + "/emby" + SsoRoutes.CallbackPath;
+            // No "/emby" prefix. Emby serves a plugin's routes both bare and
+            // under /emby, case-insensitively - verified against 4.9.5.0 - so
+            // the shorter form is the one worth showing people, and it is the
+            // one registered with the identity provider.
+            //
+            // CHANGING THIS BREAKS SIGN-IN until the identity provider's list of
+            // allowed redirect URIs contains the new value. They are compared as
+            // strings by the provider, not resolved.
+            return configuration.EmbyPublicBaseUrl.TrimEnd('/') + SsoRoutes.CallbackPath;
         }
     }
 }

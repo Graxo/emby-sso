@@ -21,7 +21,7 @@ token with a D-pad or giving up multi-factor authentication?
 1. On a phone or a laptop, they open the PIN URL:
 
     ```
-    https://<your-emby-server>/emby/Sso/Pin
+    https://<your-emby-server>/sso/pin
     ```
 
     The configuration page shows this exact URL for your server, next to the
@@ -58,7 +58,7 @@ the one field those apps already have.
 ## It inherits every guard an ordinary sign-in has
 
 The PIN endpoint is not a second way to authenticate anybody. It starts the
-**same browser flow** as `/emby/Sso/Start` — the same redirect, the same
+**same browser flow** as `/sso/start` — the same redirect, the same
 callback, the same checks — and differs only in what happens after all of them
 have passed.
 
@@ -150,7 +150,7 @@ eavesdropper who sees one sees it inside the request that is spending it.
 
 !!! unverified "Three things, and none of them can be checked without a server and a TV"
 
-    - **That Emby routes the new `/emby/Sso/Pin` route to this plugin's service
+    - **That Emby routes the new `/sso/pin` route to this plugin's service
       at all.** It is declared exactly as the two existing routes are, with the
       same `[Route]` and `[Unauthenticated]` attributes on a request DTO handled
       by the same service class, so it either works the way they do or none of

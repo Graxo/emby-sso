@@ -60,9 +60,9 @@ turn it on.
 ## How it works
 
 - **Browser sign-in.** The user opens a bookmarkable URL
-  (`https://<emby>/emby/Sso/Start`). The plugin redirects to Authentik,
+  (`https://<emby>/sso/start`). The plugin redirects to Authentik,
   Authentik authenticates the user under its own flows (including MFA and
-  passkeys), and redirects back to `https://<emby>/emby/Sso/Callback`. The
+  passkeys), and redirects back to `https://<emby>/sso/callback`. The
   plugin validates the response, checks that the username matches an existing
   Emby user, and completes the sign-in — the browser lands directly on the
   Emby home screen with no further clicks.

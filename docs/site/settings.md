@@ -115,7 +115,7 @@ There is **no default**.
 !!! danger "Leaving this empty refuses every SSO sign-in, existing accounts included"
 
     It is not a way to switch the gate off. A browser sign-in is refused at
-    `/emby/Sso/Start` before the browser is sent to Authentik; a native sign-in
+    `/sso/start` before the browser is sent to Authentik; a native sign-in
     is refused before the password is forwarded anywhere. The user sees the
     ordinary "Single sign-on is not configured on this server."; only the log
     says why.

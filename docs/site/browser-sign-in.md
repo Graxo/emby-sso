@@ -14,7 +14,7 @@ directly on the Emby home screen with no further clicks.
 **Users start a sign-in from a bookmarkable URL, not a button:**
 
 ```
-https://<your-emby-server>/emby/Sso/Start
+https://<your-emby-server>/sso/start
 ```
 
 The plugin's configuration page (Dashboard → Plugins → Authentik SSO) displays

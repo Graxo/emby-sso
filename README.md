@@ -60,7 +60,7 @@ group* empty does not mean "the group check is off". It means:
 - every existing SSO user is refused, including accounts that were signing in
   fine a minute before the upgrade — this is not limited to the new
   account-creation path;
-- a browser sign-in is refused at `https://<emby>/emby/Sso/Start` itself,
+- a browser sign-in is refused at `https://<emby>/sso/start` itself,
   before the browser is sent to Authentik;
 - a native app sign-in is refused before the password is forwarded anywhere.
 

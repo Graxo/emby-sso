@@ -5,9 +5,9 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
 
     function showUrls(page, baseUrl) {
         var base = (baseUrl || '').replace(/[\/]+$/, '');
-        page.querySelector('#redirectUri').textContent = base + '/emby/Sso/Callback';
-        page.querySelector('#startUrl').textContent = base + '/emby/Sso/Start';
-        page.querySelector('#pinUrl').textContent = base + '/emby/Sso/Pin';
+        page.querySelector('#redirectUri').textContent = base + '/sso/callback';
+        page.querySelector('#startUrl').textContent = base + '/sso/start';
+        page.querySelector('#pinUrl').textContent = base + '/sso/pin';
     }
 
     // Admin-only endpoints on this plugin's own service. Fails quietly: the

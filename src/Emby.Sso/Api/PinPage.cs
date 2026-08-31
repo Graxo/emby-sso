@@ -4,7 +4,7 @@ using Emby.Sso.Protocol;
 namespace Emby.Sso.Api
 {
     /// <summary>
-    /// The page <c>/emby/Sso/Pin</c>'s callback returns: the one-time PIN, and
+    /// The page <c>/sso/pin</c>'s callback returns: the one-time PIN, and
     /// what to do with it on a television.
     ///
     /// It carries NO SCRIPT, deliberately. The completion page has to run one,

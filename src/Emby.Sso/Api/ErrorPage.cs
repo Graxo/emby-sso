@@ -35,7 +35,7 @@ namespace Emby.Sso.Api
                     : userSafeReason);
             var prefix = baseUrl ?? string.Empty;
             var home = PageText.Html(prefix + "/web/index.html");
-            var retry = PageText.Html(prefix + "/emby" + SsoRoutes.StartPath);
+            var retry = PageText.Html(prefix + SsoRoutes.StartPath);
 
             return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"

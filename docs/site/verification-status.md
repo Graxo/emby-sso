@@ -74,7 +74,7 @@ end-to-end with `curl`.
 
     **Not measured, and not measurable from here:**
 
-    - that Emby routes `/emby/Sso/Pin` to this plugin's service at all. It is
+    - that Emby routes `/sso/pin` to this plugin's service at all. It is
       declared exactly as the two existing routes are — same `[Route]` and
       `[Unauthenticated]` attributes, same service class — so it either works
       the way they do or none of them do. But no request has been made to it.

@@ -21,9 +21,9 @@ namespace Emby.Sso
     /// </summary>
     internal static class SsoRoutes
     {
-        public const string StartPath = "/Sso/Start";
+        public const string StartPath = "/sso/start";
 
-        public const string CallbackPath = "/Sso/Callback";
+        public const string CallbackPath = "/sso/callback";
 
         /// <summary>
         /// The PIN endpoint. It starts the SAME browser sign-in
@@ -33,6 +33,6 @@ namespace Emby.Sso
         /// user a one-time PIN instead of signing this browser in. There is no
         /// second way to authenticate anybody here, which is the point.
         /// </summary>
-        public const string PinPath = "/Sso/Pin";
+        public const string PinPath = "/sso/pin";
     }
 }

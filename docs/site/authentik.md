@@ -13,7 +13,7 @@ Set its **redirect URI** to exactly the value shown on the plugin's
 configuration page under "Redirect URI to configure in Authentik":
 
 ```
-https://<your-emby-server>/emby/Sso/Callback
+https://<your-emby-server>/sso/callback
 ```
 
 **It must match exactly** — scheme, host, and path.
@@ -86,9 +86,9 @@ the public base URL you entered:
 
 | Shown as | Value | For |
 |---|---|---|
-| Redirect URI to configure in Authentik | `https://<emby>/emby/Sso/Callback` | Pasting into the Authentik provider |
-| Sign-in URL for users to bookmark | `https://<emby>/emby/Sso/Start` | Giving to your users |
-| PIN URL for users to open on a phone or laptop | `https://<emby>/emby/Sso/Pin` | Users signing in on a television |
+| Redirect URI to configure in Authentik | `https://<emby>/sso/callback` | Pasting into the Authentik provider |
+| Sign-in URL for users to bookmark | `https://<emby>/sso/start` | Giving to your users |
+| PIN URL for users to open on a phone or laptop | `https://<emby>/sso/pin` | Users signing in on a television |
 
 ## Other identity providers
 

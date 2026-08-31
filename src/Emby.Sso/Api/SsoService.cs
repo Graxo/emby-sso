@@ -13,11 +13,11 @@ using MediaBrowser.Model.Services;
 namespace Emby.Sso.Api
 {
     /// <summary>
-    /// The browser sign-in flow: /emby/Sso/Start sends the user to the identity
-    /// provider, /emby/Sso/Callback brings them back and returns the page that
+    /// The browser sign-in flow: /sso/start sends the user to the identity
+    /// provider, /sso/callback brings them back and returns the page that
     /// completes the sign-in.
     ///
-    /// /emby/Sso/Pin is the same flow with a different ending. It redirects to
+    /// /sso/pin is the same flow with a different ending. It redirects to
     /// the identity provider exactly as /Sso/Start does, comes back to the same
     /// callback, and passes every guard the ordinary sign-in passes; only at
     /// the very end, once all of them have, does it show a one-time PIN for a
