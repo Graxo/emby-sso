@@ -4,14 +4,14 @@ using System.Threading.Tasks;
 
 namespace Emby.Sso.Protocol
 {
-    public enum SsoCredentialOutcome
+    internal enum SsoCredentialOutcome
     {
         Rejected = 0,
         HandoffAccepted = 1,
         DirectGrantAccepted = 2,
     }
 
-    public sealed class SsoCredentialResult
+    internal sealed class SsoCredentialResult
     {
         private SsoCredentialResult(
             SsoCredentialOutcome outcome,

@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Emby.Sso.Protocol
 {
-    public sealed class OidcIdentity
+    internal sealed class OidcIdentity
     {
         public OidcIdentity(string subject, string username, string displayName,
             IReadOnlyList<string> groups, bool hasGroupsClaim, bool? emailVerified = null)
