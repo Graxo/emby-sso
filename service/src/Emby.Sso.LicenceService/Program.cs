@@ -319,6 +319,20 @@ namespace Emby.Sso.LicenceService
                 }
             });
 
+            // The bare domain. Nothing is served here, but this host exists to
+            // sell licences and its name is the thing that ends up in an email
+            // or on a page, so somebody will type it. A 404 is a poor answer to
+            // "what is this?" when the answer is one redirect away.
+            //
+            // 302, not 301: a permanent redirect is cached by browsers more or
+            // less forever, and this is a young service whose root may yet grow
+            // a real page.
+            app.MapGet("/", (HttpContext context) =>
+            {
+                context.Response.Redirect("/buy", permanent: false);
+                return Task.CompletedTask;
+            });
+
             // GET /buy is the link the plugin's configuration page renders. It is
             // opened by a person, in a browser, so it answers HTML. See BuyPage
             // for why it shows a button instead of redirecting straight into a
