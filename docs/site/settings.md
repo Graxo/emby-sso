@@ -242,8 +242,19 @@ If you want native sign-in in a lab, give the lab HTTPS.
 **Off by default.**
 
 The plugin resolves the identity provider's address before connecting and
-refuses loopback, private (RFC1918) and CGNAT ranges, so a hostile or mistyped
-issuer URL cannot make this server fetch from its own network.
+refuses loopback (127.0.0.0/8, `::1`), private (10.0.0.0/8, 172.16.0.0/12,
+192.168.0.0/16, `fc00::/7`) and carrier-grade NAT (100.64.0.0/10) ranges, so a
+hostile or mistyped issuer URL cannot make this server fetch from its own
+network. It also refuses a redirect that leaves the issuer URL's own scheme,
+host and port. These fetches — the discovery document, the signing keys, the
+token endpoint — run inside this server with its full network reach, which is
+what makes them worth guarding.
+
+!!! warning "Link-local addresses stay refused either way"
+
+    169.254.0.0/16 carries the cloud metadata service, and this setting does not
+    unblock it. When any fetch is refused, the server log names the exact
+    address and the rule that refused it.
 
 Tick this if your identity provider genuinely lives on a private address — a
 self-hosted Authentik at `https://10.0.0.5` or `https://authentik.lan` is a
