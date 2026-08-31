@@ -131,8 +131,9 @@ People will reach it directly.
 
 ### How the buyer gets their code, and what happens if they close the tab
 
-**The code is sent by the vendor, out of `/data/codes-outbox.jsonl`.** It is
-never shown on a web page.
+**The code is emailed if `SMTP_HOST` is set, and otherwise sent by the vendor
+out of `/data/codes-outbox.jsonl`.** Either way it is written to that file
+first, and it is never shown on a web page.
 
 Closing the tab therefore loses nothing, and that is the point of doing it this
 way. The code is created when PayPal's webhook confirms the payment — a
@@ -153,10 +154,12 @@ order of weight:
 3. **It would make delivery depend on a browser tab**, which fails for exactly
    the people least equipped to chase it.
 
-**The honest gap:** this service has no mail transport, so "the vendor sends it"
-means a human reading `codes-outbox.jsonl` and sending an email. That is the
-largest operational weakness here and it is the obvious next thing to build —
-`Delivery/CodeOutbox.cs` is the seam. Until then, watch that file.
+**With mail unconfigured** — which is the default, and a perfectly workable
+arrangement for a one-person vendor — "the vendor sends it" means a human
+reading `codes-outbox.jsonl`. With `SMTP_HOST` set, the service emails it and
+the outbox becomes the fallback for when that fails. See *Emailing the code*
+below; a real send is UNVERIFIED until you have run
+`docs/email-delivery-checklist.md`.
 
 `codes-outbox.jsonl` is **the one place a redemption code exists in readable
 form.** The database holds only SHA-256 hashes, so a stolen database yields
@@ -407,6 +410,30 @@ rather than starting half-configured.
 | `PAYPAL_RETURN_URL` | derived | |
 | `PAYPAL_CANCEL_URL` | derived | |
 
+**Email delivery — all optional.** `SMTP_HOST` is the switch: unset it and the
+service behaves exactly as it did before mail existed. See *Emailing the code*
+below.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `SMTP_HOST` | — | **Set this and only this to turn mail on.** Unset = outbox only. |
+| `SMTP_SECURITY` | `starttls` | `tls` (implicit TLS), `starttls`, or `none`. Nothing else. |
+| `SMTP_PORT` | `465`/`587`/`25` | Whichever matches `SMTP_SECURITY`. |
+| `SMTP_USERNAME` | — | Omit for a relay that needs no login. |
+| `SMTP_PASSWORD` | — | Never logged, never in `Describe()`. Not trimmed. |
+| `SMTP_FROM_ADDRESS` | *(required with a host)* | |
+| `SMTP_FROM_NAME` | `Emby SSO licences` | |
+| `SMTP_REPLY_TO` | — | |
+| `SMTP_SUBJECT` | `Your Emby SSO plugin licence code` | Never contains the code. |
+| `SMTP_SUPPORT_CONTACT` | `SMTP_REPLY_TO`, else `SMTP_FROM_ADDRESS` | What the message tells the buyer to write to. |
+| `SMTP_TEMPLATE_PATH` | — | A plain-text template to use instead of the built-in wording. |
+| `SMTP_TIMEOUT_SECONDS` | `30` | |
+| `SMTP_MAX_ATTEMPTS` | `4` | Then the outbox is the fallback. |
+| `SMTP_RETRY_SECONDS` | `30` | First backoff; quadrupled each attempt. |
+
+The message name comes from `PAYPAL_PRODUCT_NAME` rather than a variable of its
+own, so the email and the PayPal receipt cannot disagree about what was sold.
+
 ### The hostname, and reconciling it with the plugin
 
 **The plugin currently compiles in `https://license.koper.cloud` as its default
@@ -509,10 +536,156 @@ this**, because an endpoint that mints saleable credentials needs an
 authentication story and the only honest one at this size is "you have a shell
 on the box or you do not".
 
+## Emailing the code
+
+**Off by default, and that is deliberate.** With no `SMTP_HOST` this service
+does what it has always done: the code goes to `codes-outbox.jsonl` and a human
+sends it. Nothing about that changes when you upgrade. Setting `SMTP_HOST` and
+`SMTP_FROM_ADDRESS` is the whole of turning it on.
+
+Mail is layered **on top of** the outbox, never instead of it:
+
+```
+webhook verified -> code created in one transaction -> WRITTEN TO THE OUTBOX
+                 -> handed to a background sender -> 200 to PayPal
+                                                       (mail happens after this)
+```
+
+The outbox write is the durable step. The email is a convenience on top of a
+code that is already written down, so nothing this feature does can lose a code
+that the old arrangement would have kept.
+
+### A mail failure never fails the webhook
+
+PayPal needs its 2xx. A webhook that answers late, or answers 500, is retried —
+and a retry of a payment that was processed correctly is exactly the thing the
+event-id primary key and the capture-id unique index exist to make harmless. So
+the send does not happen inside the request at all. The webhook hands the code
+to a bounded in-process queue and returns; a background worker does the sending,
+where taking eleven minutes to give up costs nobody anything.
+
+That makes it structural rather than a matter of catching the right exception:
+the relay is not on the webhook's call stack and there is no path by which one
+can fail the other. `CodeDeliveryTests` asserts it, including the case of a
+relay that accepts the connection and then stops answering.
+
+When every attempt has failed the log says `EMAIL FAILED` at error, names the
+relay, the recipient and the code's hash tag, and tells you the code is in the
+outbox. **That is the same file, in the same state, that you work from today.**
+
+### Retries
+
+Four attempts by default, at 30s, 2m and 8m, then it gives up and leaves the
+outbox to it. A 5xx from the relay — no such mailbox, bad password — is **not**
+retried at all: it will not get better, and retrying only delays the log line
+somebody has to act on. A 4xx, a refused connection or a timeout is retried,
+because a relay restarting while somebody pays should not cost a sale.
+
+The queue holds 256 codes. If it fills, the enqueue is refused, logged at error,
+and the code is in the outbox — which is to say the worst this feature can do
+under load is degrade to the behaviour it replaced.
+
+### The three transport modes
+
+| `SMTP_SECURITY` | Port | |
+| --- | --- | --- |
+| `tls` | 465 | Implicit TLS. The session is inside TLS from the first byte. |
+| `starttls` | 587 | **The default.** A plain connection that must upgrade. |
+| `none` | 25 | No encryption. For a relay on this machine, or a network you own. |
+
+`starttls` **fails closed**: if the relay does not offer STARTTLS the send fails
+rather than continuing in the clear with a bearer credential in it. There is no
+"try TLS and carry on without it" mode, no way to accept an untrusted
+certificate, and no way to turn certificate validation off — the same position
+this service takes on webhook signatures, for the same reason.
+
+`SMTP_SECURITY=none` together with `SMTP_USERNAME` is **a refusal to start**.
+SMTP AUTH over a cleartext socket puts the relay password on the wire on every
+message; an operator who genuinely has an unauthenticated local relay only has
+to leave the username unset. Starting with `none` and no username logs a warning
+naming the host, every time.
+
+### Why MailKit and not `System.Net.Mail.SmtpClient`
+
+Two reasons, and the first is not a matter of taste:
+
+1. **`SmtpClient` cannot do implicit TLS.** Its `EnableSsl` issues STARTTLS on a
+   connection that begins in the clear, so a relay expecting TLS from the first
+   byte on port 465 — which is most hosted mail today — is unreachable through
+   it. Two of the three modes above is not enough.
+2. Microsoft's own documentation for `SmtpClient` says it is not recommended for
+   new development and names MailKit as the alternative.
+
+Beyond that: MailKit distinguishes `StartTls` (fails closed) from
+`StartTlsWhenAvailable` (downgradeable), which is the distinction that matters
+here; it is async and cancellable throughout; and it reports the relay's status
+code, which is what makes "retry a 451, never retry a 550" possible.
+
+The cost is two transitive dependencies — MimeKit and BouncyCastle — **in the
+vendor's service image only.** Nothing in `src/` references any of it and the
+plugin does not ship it.
+
+### What the buyer gets
+
+Plain text, one part, no HTML. That is not a shortcut. A message carrying a
+credential somebody has to retype is worse in HTML: a proportional font makes
+`0`/`O` and `1`/`l` harder to tell apart, clients linkify and hyphenate, and a
+remote image in an HTML part is a read receipt on a message containing a live
+secret.
+
+It tells them the code, where to paste it and which button to press, how long
+the licence lasts and from when, how many servers it covers and that
+re-activating the same one is free, that the code is a password, and who to
+write to. `CodeMessageTests` asserts each of those, because each of them is a
+support email that otherwise gets written.
+
+**The wording is a template you can replace without rebuilding the image.** Point
+`SMTP_TEMPLATE_PATH` at a plain-text file using `{code}`, `{licensee}`,
+`{product}`, `{licence_days}`, `{activations_allowed}` and `{support}`. A
+template with no `{code}` in it is a refusal to start, because a cheerful email
+containing no code is worse than no email. Braces that are not placeholders are
+left alone. It is read once at startup, so changing it needs a restart.
+
+### What is in the outbox once mail is on
+
+The code line is written exactly as before. A **successful** send appends a
+second line — `{"record":"delivered", ...}` — carrying the code's hash tag and
+the recipient, and **not** the code, so it is safe to keep after you prune the
+code line. To find codes that still need sending by hand:
+
+```
+cd /srv/emby-sso/data
+comm -23 \
+  <(jq -r 'select(.code) | .code_tag' codes-outbox.jsonl | sort -u) \
+  <(jq -r 'select(.record=="delivered") | .code_tag' codes-outbox.jsonl | sort -u)
+```
+
+With mail off, no `delivered` lines are ever written and the file is identical
+to the one you have today.
+
+### What is never logged
+
+The redemption code, the rendered message body, and `SMTP_PASSWORD`. A send is
+logged as the recipient plus the code's twelve-character hash tag — the same tag
+every other line about that code uses — so *"did this reach them?"* is
+answerable without the log becoming a place credentials live. This is the
+treatment `PAYPAL_CLIENT_SECRET` already gets. `CodeMailerTests` drives every
+path — success, transient failure, permanent refusal, no recipient — and
+searches the whole rendered log, exception text included, for both.
+
+---
+
 ### When a code cannot be delivered
 
-If the outbox cannot be written, the log says `CODE LOST` at critical, naming
-the capture and the buyer. The buyer has paid and has no code, and the code is
+Two different failures, and they are not the same size.
+
+**`EMAIL FAILED` at error** means the relay would not take it. The code exists,
+it is in the outbox, and the sale is fine — send it by hand and fix the relay.
+See *Emailing the code* above.
+
+**`CODE LOST` at critical** is the serious one: the outbox itself could not be
+written. If the outbox cannot be written, the log says `CODE LOST` at critical,
+naming the capture and the buyer. The buyer has paid and has no code, and the code is
 not recoverable — it was a local variable, and it is deliberately **not** logged,
 because a log file is not where live credentials belong even in a disaster.
 
@@ -539,20 +712,24 @@ export DOTNET_ROOT=$HOME/.dotnet
 dotnet test service/Emby.Sso.Service.sln
 ```
 
-212 tests. What they cover, and why each is there, is in the class comments; the
+290 tests. What they cover, and why each is there, is in the class comments; the
 ones that carry weight are `PayPalWebhookVerifierTests` (a tampered payload is
 refused), `PayPalCertificateValidatorTests` (an untrusted certificate is
 refused), `ActivationStateMachineTests` (the cap and free re-activation),
 `RateLimiterTests` (the four properties above, each asserted), and
-`LicenceToolCompatibilityTests` (the offline tool has not drifted).
+`LicenceToolCompatibilityTests` (the offline tool has not drifted), and the delivery set - `CodeDeliveryTests`
+(a mail failure still answers PayPal and leaves the code in the outbox),
+`CodeMailerTests` (no secret reaches a log) and `MailKitSmtpTransportTests`
+(a loopback listener this process owns, so the suite needs no mail server and
+cannot send mail anywhere).
 
 ---
 
 ## What is UNVERIFIED
 
-Everything that requires PayPal. There were no credentials and no network route
-to them where this was written, and **nothing here has ever simulated a success
-and called it working.**
+Everything that requires PayPal, **and every real email send.** There were no
+credentials of either kind and no network route to them where this was written,
+and **nothing here has ever simulated a success and called it working.**
 
 - **Creating an order** (`PayPalOrdersClient`). The requests are built from
   PayPal's Orders v2 documentation. Tested: the token request is
@@ -569,6 +746,19 @@ and called it working.**
 - **The Docker image.** Never built. Docker was not available.
 - **Any concurrency beyond the tests' own.** The transaction boundaries are
   argued for in `LicenceStore`'s comments, not proven under load.
+- **A real email send — no message has left this machine.** There were no SMTP
+  credentials, and nothing here has ever connected to a mail server on a network.
+  What *is* tested: the whole of the retry, fallback and logging behaviour
+  against a fake transport; the message wording; and — against a loopback
+  listener this process owns, on `127.0.0.1` — that `MailKitSmtpTransport` really
+  speaks EHLO/MAIL/RCPT/DATA, really puts the code on a wire, and turns a `550`
+  into a permanent failure and a `451` into a retry.
+  What is **not** tested: that implicit TLS or STARTTLS work against a real
+  relay, that authentication works at all, and that any particular provider
+  accepts the message. The mapping from `SMTP_SECURITY` to MailKit's option is
+  asserted; the TLS handshake it produces is not.
 
-`docs/paypal-sandbox-checklist.md` is the run that closes these, in order, with
-the log lines to expect at each step. Do it before live money.
+`docs/paypal-sandbox-checklist.md` is the run that closes the PayPal half, in
+order, with the log lines to expect at each step, and
+`docs/email-delivery-checklist.md` closes the mail half the same way. Do both
+before live money.

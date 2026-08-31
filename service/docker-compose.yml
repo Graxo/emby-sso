@@ -63,6 +63,49 @@ services:
       PAYPAL_CURRENCY: GBP
       PAYPAL_PRICE: "19.00"
 
+      # --- emailing the code: ALL OPTIONAL, and off by default ---------------
+      # With SMTP_HOST unset, a paid code goes to /data/codes-outbox.jsonl and
+      # you send it by hand - which is what this service did before mail
+      # existed, and is a perfectly good arrangement. Setting SMTP_HOST is the
+      # whole of turning delivery on.
+      #
+      # A failed send NEVER fails the webhook: the code is written to the outbox
+      # first, the mail is sent afterwards on a background thread, and PayPal
+      # gets its 200 either way. See service/README.md, "Emailing the code", and
+      # docs/email-delivery-checklist.md before you trust a real send - no
+      # message has ever left the machine this was written on.
+      #
+      # SMTP_HOST: smtp.example.com
+      # SMTP_FROM_ADDRESS: licences@example.com
+      # SMTP_USERNAME: licences@example.com
+      # SMTP_PASSWORD: ${SMTP_PASSWORD}
+      #
+      # SMTP_SECURITY is one of three words and nothing else:
+      #   tls       implicit TLS, the session is encrypted from the first byte,
+      #             usually port 465
+      #   starttls  a plain connection that MUST upgrade - the send fails rather
+      #             than continuing in the clear - usually 587. THE DEFAULT.
+      #   none      no encryption. Only for a relay on this host or a network
+      #             you own; every code sent through it is readable in transit,
+      #             and the service refuses to start if you also set a username,
+      #             because that would put the relay password on the wire too.
+      # SMTP_PORT defaults to 465/587/25 to match, so set it only if your relay
+      # is somewhere unusual.
+      #
+      # SMTP_SECURITY: starttls
+      # SMTP_PORT: "587"
+      # SMTP_FROM_NAME: "Emby SSO licences"
+      # SMTP_REPLY_TO: help@example.com
+      # SMTP_SUBJECT: "Your Emby SSO plugin licence code"
+      # SMTP_SUPPORT_CONTACT: help@example.com
+      # SMTP_TIMEOUT_SECONDS: "30"
+      # SMTP_MAX_ATTEMPTS: "4"       # then the outbox is the fallback
+      # SMTP_RETRY_SECONDS: "30"     # first backoff, quadrupled each attempt
+      #
+      # To change the wording without rebuilding the image, mount a plain-text
+      # template read-only and point at it. It must contain {code}.
+      # SMTP_TEMPLATE_PATH: /run/config/licence-email.txt
+
       # --- optional, with the defaults shown --------------------------------
       # LICENCE_ACTIVATIONS_ALLOWED: "3"
       # LICENCE_DAYS: "365"

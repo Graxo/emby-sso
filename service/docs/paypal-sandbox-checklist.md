@@ -99,6 +99,12 @@ this step proves it **accepts** PayPal's.
 - [ ] Send the same event again from the dashboard's "resend" button. The log
       says `REPLAY` and no second line appears in the outbox.
 
+**If you have set `SMTP_HOST`,** this is also the step where the code is
+emailed. Do `docs/email-delivery-checklist.md` alongside this one; a real send
+has never been verified anywhere and it has its own list of ways to be wrong.
+With `SMTP_HOST` unset, nothing about this step changes and the outbox is the
+whole of delivery, as before.
+
 ## 5. The code works
 
 - [ ] Take the code out of the outbox, paste it into the plugin on a real Emby
@@ -141,3 +147,5 @@ Only after every box above is ticked.
   tests' own.
 - The Docker image itself, which has never been built — see the note at the top
   of `service/Dockerfile`.
+- Every real email send. No message has ever left the machine this was written
+  on. `docs/email-delivery-checklist.md` is the run that closes that.
