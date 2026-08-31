@@ -733,21 +733,31 @@ namespace Emby.Sso.LicenceService
                 return ConfigurationError;
             }
 
-            if (!parsed.TryGetValue("licensee", out var licensee) || string.IsNullOrWhiteSpace(licensee))
+            parsed.TryGetValue("licensee", out var licensee);
+            parsed.TryGetValue("note", out var note);
+
+            // One implementation, shared with the admin page's Issue form. The
+            // validation, the ceilings and what reaches the store are all in
+            // CodeIssuing, so the two front ends cannot mint different things.
+            var request = new CodeIssuing.Request
             {
-                Console.Error.WriteLine("--licensee is required: who is this code for?");
+                Licensee = licensee,
+                ActivationsAllowed = Number(parsed, "activations", options.ActivationsAllowed),
+                LicenceDays = Number(parsed, "days", options.LicenceDays),
+                Note = note,
+            };
+
+            var wrong = CodeIssuing.Problems(request);
+
+            if (wrong.Count > 0)
+            {
+                foreach (var problem in wrong)
+                {
+                    Console.Error.WriteLine(problem);
+                }
+
                 Console.Error.WriteLine();
                 Console.Error.WriteLine(Usage);
-
-                return 1;
-            }
-
-            var allowed = Number(parsed, "activations", options.ActivationsAllowed);
-            var days = Number(parsed, "days", options.LicenceDays);
-
-            if (allowed < 1 || days < 1)
-            {
-                Console.Error.WriteLine("--activations and --days must both be positive.");
 
                 return 1;
             }
@@ -756,25 +766,20 @@ namespace Emby.Sso.LicenceService
 
             store.Initialise();
 
-            var code = RedemptionCode.Generate();
-            var hash = RedemptionCode.Hash(code);
+            var issued = CodeIssuing.Issue(store, request, DateTimeOffset.UtcNow);
 
-            parsed.TryGetValue("note", out var note);
-
-            var id = store.CreateManualCode(hash, licensee, allowed, days, note, DateTimeOffset.UtcNow);
-
-            Console.Error.WriteLine("Code id     : " + id.ToString(CultureInfo.InvariantCulture));
-            Console.Error.WriteLine("Licensee    : " + licensee);
-            Console.Error.WriteLine("Activations : " + allowed.ToString(CultureInfo.InvariantCulture));
-            Console.Error.WriteLine("Licence     : " + days.ToString(CultureInfo.InvariantCulture) + " days from first activation");
-            Console.Error.WriteLine("Tag         : " + RedemptionCode.LogTag(hash) + "  (this is what the logs show)");
+            Console.Error.WriteLine("Code id     : " + issued.Id.ToString(CultureInfo.InvariantCulture));
+            Console.Error.WriteLine("Licensee    : " + request.Licensee);
+            Console.Error.WriteLine("Activations : " + request.ActivationsAllowed.ToString(CultureInfo.InvariantCulture));
+            Console.Error.WriteLine("Licence     : " + request.LicenceDays.ToString(CultureInfo.InvariantCulture) + " days from first activation");
+            Console.Error.WriteLine("Tag         : " + issued.Tag + "  (this is what the logs show)");
             Console.Error.WriteLine();
             Console.Error.WriteLine("The code itself is on stdout, and is stored here ONLY as a hash. If you lose it,");
             Console.Error.WriteLine("nothing can recover it and you issue another one.");
             Console.Error.WriteLine();
 
             // stdout alone, so `> code.txt` gives just the code.
-            Console.WriteLine(RedemptionCode.Format(code));
+            Console.WriteLine(issued.Code);
 
             return 0;
         }

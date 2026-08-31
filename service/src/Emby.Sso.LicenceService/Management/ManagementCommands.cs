@@ -65,31 +65,11 @@ namespace Emby.Sso.LicenceService.Management
         private static void ExplainWhatVoidingCannotDo(TextWriter output, CodeSummary code)
         {
             output.WriteLine();
-            output.WriteLine("THIS DOES NOT RECALL A LICENCE ALREADY ISSUED FROM THIS CODE.");
 
-            if (code.ActivationsUsed == 0)
+            foreach (var line in VoidExplanation.Lines(code))
             {
-                output.WriteLine("Nothing has ever been activated with it, so in this case there is nothing");
-                output.WriteLine("running that could have needed recalling - but that is luck, not a guarantee");
-                output.WriteLine("this command offers.");
+                output.WriteLine(line);
             }
-            else
-            {
-                output.WriteLine(
-                    "  " + code.ActivationsUsed.ToString(CultureInfo.InvariantCulture)
-                    + " server(s) have already been given a licence from it"
-                    + (code.ExpiresUtc.HasValue
-                        ? ", and each keeps working until " + LicenceFormat.Iso(code.ExpiresUtc.Value) + "."
-                        : "."));
-                output.WriteLine("  `show-code` lists them.");
-            }
-
-            output.WriteLine();
-            output.WriteLine("The plugin verifies its licence offline against a public key compiled into it and");
-            output.WriteLine("never calls this service, so no revocation exists and none can be added here.");
-            output.WriteLine("Voiding stops the NEXT activation. That is the whole of what it does. If a refunded");
-            output.WriteLine("customer must actually lose the plugin, the only remedy is a new signing keypair and");
-            output.WriteLine("a new plugin build - which invalidates every other customer at the same time.");
         }
 
         // ---------------------------------------------------------------- list
@@ -608,107 +588,24 @@ namespace Emby.Sso.LicenceService.Management
             TextWriter error,
             out CodeSummary code)
         {
-            code = null;
-
             args.TryGetValue("code", out var typed);
             args.TryGetValue("tag", out var tag);
 
-            var hasCode = !string.IsNullOrWhiteSpace(typed);
-            var hasTag = !string.IsNullOrWhiteSpace(tag);
+            var result = CodeLookup.ByEither(store, typed, tag);
 
-            if (hasCode == hasTag)
+            code = result.Code;
+
+            if (result.Found)
             {
-                error.WriteLine(hasCode
-                    ? "Give either --code or --tag, not both."
-                    : "Give --code <the code the customer typed> or --tag <the 12 characters the logs show>.");
-
-                return false;
-            }
-
-            try
-            {
-                if (hasCode)
-                {
-                    if (!RedemptionCode.TryNormalise(typed, out var normalised))
-                    {
-                        error.WriteLine("That is not a well-formed redemption code, whatever else it is.");
-                        error.WriteLine("A code is " + RedemptionCode.Symbols.ToString(CultureInfo.InvariantCulture)
-                            + " characters from " + RedemptionCode.Alphabet + ", usually written in groups of five.");
-                        error.WriteLine("Nothing was looked up: /v1/activate would refuse this one before reaching the store.");
-
-                        return false;
-                    }
-
-                    code = store.FindCodeByHash(RedemptionCode.Hash(normalised));
-
-                    if (code == null)
-                    {
-                        error.WriteLine("That is a well-formed code, and this store has never held it.");
-                        error.WriteLine("It was issued by a different service, mistyped in a way that is still");
-                        error.WriteLine("well-formed, or invented.");
-
-                        return false;
-                    }
-
-                    return true;
-                }
-
-                var prefix = tag.Trim().ToLowerInvariant();
-
-                if (prefix.Length < 4 || !prefix.All(Uri.IsHexDigit))
-                {
-                    error.WriteLine("--tag is hexadecimal, at least 4 characters: the start of the code's SHA-256,");
-                    error.WriteLine("which is what `code=` in the log lines and TAG in `list-codes` show.");
-
-                    return false;
-                }
-
-                var matches = store.FindCodesByHashPrefix(prefix);
-
-                if (matches.Count == 0)
-                {
-                    error.WriteLine("No code in this store has a hash starting " + prefix + ".");
-
-                    return false;
-                }
-
-                if (matches.Count > 1)
-                {
-                    error.WriteLine(Count(matches.Count, "code") + " start with " + prefix + ". Give more of it:");
-
-                    foreach (var match in matches)
-                    {
-                        error.WriteLine("  " + match.Tag + "  " + Describe(match));
-                    }
-
-                    return false;
-                }
-
-                code = matches[0];
-
                 return true;
             }
-            catch (SqliteException ex)
-            {
-                error.WriteLine("The store at " + store.Path + " could not be read: " + ex.Message);
 
-                return false;
-            }
-        }
-
-        private static string DescribeDelivery(CodeSummary code, OutboxRecord delivery)
-        {
-            if (delivery == null)
+            foreach (var line in result.Explain())
             {
-                return code.IsManual
-                    ? "n/a - `issue-code` printed this one to whoever ran it"
-                    : "no line in the outbox: sent and pruned, or written before this service kept one";
+                error.WriteLine(line);
             }
 
-            return delivery.Delivered
-                ? "emailed to " + Empty(delivery.DeliveredTo) + " at " + Empty(delivery.DeliveredUtc)
-                : "NOT SENT - line " + delivery.LineNumber.ToString(CultureInfo.InvariantCulture)
-                    + " of the outbox, with no receipt beside it";
+            return false;
         }
 
         private static string StoreNote(IDictionary<string, CodeSummary> byTag, OutboxRecord record)
@@ -731,55 +628,27 @@ namespace Emby.Sso.LicenceService.Management
             return "waiting";
         }
 
-        private static string Describe(CodeSummary code)
-        {
-            var who = string.IsNullOrWhiteSpace(code.Licensee) ? "(no licensee)" : code.Licensee;
-
-            if (string.IsNullOrWhiteSpace(code.BuyerEmailOrNote)
-                || string.Equals(code.BuyerEmailOrNote, code.Licensee, StringComparison.OrdinalIgnoreCase))
-            {
-                return who;
-            }
-
-            // Angle brackets for a buyer's address, parentheses for a note. A
-            // comp's `--note` lives in the same column as a buyer's email (see
-            // CodeSummary.BuyerEmailOrNote) and must not be dressed up as one.
-            return code.IsManual
-                ? who + " (" + code.BuyerEmailOrNote + ")"
-                : who + " <" + code.BuyerEmailOrNote + ">";
-        }
-
         private static bool Contains(string haystack, string needle)
         {
             return haystack != null && haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static string Empty(string value)
-        {
-            return string.IsNullOrWhiteSpace(value) ? "-" : value;
-        }
+        // Describe, DescribeDelivery, Empty, Date, Relative and Count live in
+        // CodeText: the admin page renders the same rows to the same operator,
+        // and the rule that a comp's note is never dressed up as a buyer's email
+        // address must hold in both. See CodeText.
+        private static string Describe(CodeSummary code) => CodeText.Describe(code);
 
-        private static string Date(DateTimeOffset when)
-        {
-            return when.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        }
+        private static string DescribeDelivery(CodeSummary code, OutboxRecord delivery) =>
+            CodeText.DescribeDelivery(code, delivery);
 
-        private static string Relative(DateTimeOffset when, DateTimeOffset now)
-        {
-            var days = (int)Math.Floor((when - now).TotalDays);
+        private static string Empty(string value) => CodeText.Empty(value);
 
-            if (days < 0)
-            {
-                return "lapsed " + (-days).ToString(CultureInfo.InvariantCulture) + " days ago";
-            }
+        private static string Date(DateTimeOffset when) => CodeText.Date(when);
 
-            return "in " + days.ToString(CultureInfo.InvariantCulture) + " days";
-        }
+        private static string Relative(DateTimeOffset when, DateTimeOffset now) => CodeText.Relative(when, now);
 
-        private static string Count(int number, string noun)
-        {
-            return number.ToString(CultureInfo.InvariantCulture) + " " + noun + (number == 1 ? string.Empty : "s");
-        }
+        private static string Count(int number, string noun) => CodeText.Count(number, noun);
 
         private static int Number(IDictionary<string, string> args, string name, int fallback)
         {
