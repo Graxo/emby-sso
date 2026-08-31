@@ -16,7 +16,9 @@ PKCE) and, optionally, the OIDC direct-grant flow for native apps.
        password again — only an API call can undo it. See
        [Provider stamping](before-you-install.md#emby-stamps-the-provider-permanently).
     3. **This is licensed software, not open source**, and a licence key
-       issued for your specific server must be pasted into the configuration.
+       issued for your specific server must be pasted into the configuration —
+       or bought and redeemed from the configuration page itself, see
+       [Buying and activating a licence](activation.md).
        See [Licensing](licensing.md).
 
 **Out of the box this plugin creates no Emby users.** The Emby account must

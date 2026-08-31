@@ -120,6 +120,7 @@ nav:
   - Reference:
       - Every setting, explained: settings.md
       - Licensing: licensing.md
+      - Buying and activating a licence: activation.md
       - Troubleshooting: troubleshooting.md
       - What has and has not been verified: verification-status.md
       - Building from source: building.md

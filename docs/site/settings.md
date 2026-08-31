@@ -30,6 +30,11 @@ actually needs explaining lives below.
 | Allow plain HTTP (testing only) | `allowInsecureHttp` | [#allow-plain-http-testing-only](#allow-plain-http-testing-only) |
 | Allow an identity provider on a private or loopback address | `allowPrivateNetworkProvider` | [#allow-an-identity-provider-on-a-private-or-loopback-address](#allow-an-identity-provider-on-a-private-or-loopback-address) |
 | Licence key | `licenceKey` | [#licence-key](#licence-key) |
+| This server's id | — | [#this-servers-id](#this-servers-id) |
+| Buy a licence | `buyLink` | [#buy-a-licence](#buy-a-licence) |
+| Redemption code | `redemptionCode` | [#redemption-code](#redemption-code) |
+| Activate | `activateButton` | [#activate](#activate) |
+| *(not on the form)* | `ActivationServiceUrl` | [#activation-service-address](#activation-service-address) |
 
 ---
 
@@ -266,8 +271,59 @@ Without a valid one, new sign-ons and account creation are refused. Existing
 sessions keep working, your own Emby accounts are unaffected, and nothing is
 disabled, deleted or reconfigured.
 
-The check is entirely offline: nothing is sent anywhere, and a server with no
-internet access validates its licence exactly as well as one with it.
+The check is entirely offline: the licence is verified against a public key
+compiled into the build, and a server with no internet access validates it
+exactly as well as one with it. The one thing that does use the network is
+[activation](activation.md), which happens only when an administrator presses
+Activate.
 
 Read [Licensing](licensing.md) for what an invalid licence does and does not
 stop, and how to read the log lines it produces.
+
+### This server's id
+
+Display only, and not a secret. It is `IApplicationHost.SystemId` — the
+`ServerId` Emby writes to its own log at startup — and it is what a licence is
+issued against.
+
+Empty means this server reported no id, and a licence can then be neither issued
+for it nor checked against it.
+
+### Buy a licence
+
+A link to the vendor's shop with this server's id already in it. It is hidden
+when there is no server id or no usable service address, rather than shown
+broken.
+
+See [Buying and activating a licence](activation.md#buying-one).
+
+### Redemption code
+
+What you were given when you bought a licence, exchanged for a licence by
+pressing Activate. It is a bearer secret: it travels in the request body, never
+in a URL, and is never written to the log.
+
+Nothing is stored in the configuration — the field is cleared once activation
+succeeds.
+
+### Activate
+
+Redeems the code above in a single call to the vendor's service and, if the
+licence that comes back verifies against this build's public key and this
+server's id, saves it into [Licence key](#licence-key) above.
+
+The sentence that appears under the button is the outcome.
+[Buying and activating a licence](activation.md#what-the-answers-on-the-page-mean)
+lists every one of them and what to do about it.
+
+### Activation service address
+
+`ActivationServiceUrl` in `plugins/configurations/Emby.Sso.xml`. **Deliberately
+not on the configuration page**: it is a vendor's knob for testing a service
+before it is live, and a field nobody needs is a field that can only break the
+most fragile page in this plugin.
+
+Empty — the normal state — means the address compiled into the build. An
+override must be HTTPS, and it is safe to set because the licence that comes
+back is verified locally either way. See
+[Pointing the plugin at a different activation service](activation.md#pointing-the-plugin-at-a-different-activation-service).

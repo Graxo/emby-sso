@@ -125,6 +125,21 @@ server. See [Licensing](licensing.md#what-has-not-been-observed) for the detail
 and for why the `IApplicationHost` inference would fail loudly rather than
 silently.
 
+### Buying and activating a licence
+
+!!! unverified "The vendor's activation service has never answered one of these requests"
+
+    The decision layer is covered by 48 test methods — that the redemption code
+    never reaches a URL, a log line or a message; that a licence the vendor did
+    not sign, or that names another server, or that has expired, is refused and
+    nothing is stored; that a redirect is not an activation; and that each
+    contract error code maps to a sentence an administrator can act on.
+
+    Never observed: the service itself, the new controls rendering on Emby's
+    plugin page, the endpoints being reachable, or the licence surviving a
+    restart. See
+    [Buying and activating a licence](activation.md#what-has-not-been-verified).
+
 ### The configuration page
 
 !!! unverified "Emby 4.9's plugin page loader is fragile and this project has broken it before"

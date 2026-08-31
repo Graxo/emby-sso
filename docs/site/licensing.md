@@ -4,15 +4,22 @@
 distribution.
 
 The plugin checks a signed licence key issued for one Emby server. Paste it into
-Dashboard → Plugins → Authentik SSO → **Licence key**.
+Dashboard → Plugins → Authentik SSO → **Licence key**, or get one put there for
+you by buying a code and pressing Activate — see
+[Buying and activating a licence](activation.md).
 
 A licence names your server's id — the `ServerId` Emby writes to its log at
 startup — so it is valid on that server and no other.
 
 !!! note "The check is entirely offline"
 
-    Nothing is sent anywhere. There is no licence server. An Emby server with no
+    Nothing is sent anywhere when a licence is checked. An Emby server with no
     internet access validates its licence exactly as well as one with it.
+
+    There **is** a licensing service, but only
+    [activation](activation.md) ever contacts it: once, when an administrator
+    presses Activate. No sign-in path can reach it, and a service that is
+    unreachable — or shut down for good — does not affect sign-ins at all.
 
 ## What an invalid or missing licence actually does
 
@@ -62,9 +69,11 @@ at most one every six hours — telling you how many days are left.
 
 !!! danger "There is no revocation, and there cannot be"
 
-    The check is offline by design: the plugin never contacts anything, so there
-    is nowhere for a revocation to come from. A licence that has been issued is
-    valid on the server it names until its own expiry date.
+    The check is offline by design: nothing is contacted when a licence is
+    checked, so there is nowhere for a revocation to come from. A licence that
+    has been issued is valid on the server it names until its own expiry date —
+    activating it was a one-time call, and there is no second one that could
+    take it away.
 
     An expiry date is the only lever. Issue accordingly.
 
