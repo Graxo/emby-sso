@@ -71,8 +71,10 @@
         <div class="fieldDescription checkboxFieldDescription">
           Lets phone and TV apps sign in by sending the password to the
           provider directly. This path cannot perform multi-factor
-          authentication, and needs a direct-grant authentication flow bound to
-          the provider in Authentik. It is refused outright while &quot;Allow
+          authentication. With Authentik the password is not the user's
+          account password: Authentik authenticates this grant with an app
+          password token, which each user creates for themselves under
+          Settings &rarr; Tokens and App passwords. It is refused outright while &quot;Allow
           plain HTTP (testing only)&quot; is on: that combination is the only one
           that would have this server relay a native client's real password in
           cleartext, so the two settings are mutually exclusive.

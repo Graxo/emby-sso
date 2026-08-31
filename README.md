@@ -212,10 +212,15 @@ release and currently does nothing — leave it as you find it.
    base64-encoded in the `Authorization` header) whenever a client secret
    is configured. Make sure the Authentik provider's client authentication
    method is compatible with that.
-5. If you plan to enable **native app sign-in** (see below), also create a
-   **direct-grant (Resource Owner Password) authentication flow** in
-   Authentik and bind it to this provider. Without it, native sign-in will
-   fail even with the checkbox enabled.
+5. If you plan to enable **native app sign-in** (see below), there is nothing
+   to configure on the provider — but be aware of what Authentik will accept
+   as the password. Authentik does not implement the password grant as a
+   flow you can bind: it routes `grant_type=password` through the same
+   machinery as `client_credentials`, identifying the user by username and
+   authenticating them with an **app password token**. A user's ordinary
+   Authentik password will not work. Each user creates their own token under
+   *Settings → Tokens and App passwords*; no administrator action is needed.
+   See "Native app sign-in" below.
 6. Bind an application to the provider, using scopes that include at least
    `openid`. The plugin defaults to `openid profile email`.
 7. **Emit the group list in the ID token.** This plugin allows a sign-in only
@@ -412,17 +417,47 @@ a browser redirect) are authenticated by sending that password directly to
 Authentik's token endpoint as an OIDC direct grant (Resource Owner
 Password Credentials).
 
-Trade-offs to weigh before turning this on:
+### What Authentik accepts as the password
+
+**Not the user's Authentik password.** This is the single most important
+thing to know before enabling it, and it is not obvious from either
+project's documentation.
+
+Authentik does not implement the Resource Owner Password Credentials grant
+as its own flow. It routes `grant_type=password` through the same code path
+as `client_credentials`: the user is *identified* by username and
+*authenticated* by an **app password token**. Sending a real account
+password returns `invalid_grant`. There is no provider setting that changes
+this, and no flow to bind — an earlier version of this document said there
+was, and that was wrong.
+
+So each user needs a token of their own:
+
+1. Sign in to Authentik, open **Settings → Tokens and App passwords**.
+2. **Create** a token with the intent *App password*, and give it an expiry.
+3. Copy the value — Authentik shows it once.
+
+In the Emby app, the username is the Authentik username and the password is
+that token. Users can do this themselves; no administrator has to issue
+tokens or be involved.
+
+Other identity providers differ. Keycloak, for one, implements this grant
+against real credentials, and the plugin sends a standards-compliant
+request either way — this is an Authentik behaviour, not a plugin
+limitation.
+
+### Trade-offs to weigh before turning this on
 
 - **It cannot perform multi-factor authentication.** Any MFA policy
   Authentik enforces on its interactive login flow does not apply to a
   direct grant — the credentials are checked once, synchronously, with no
-  redirect and no second factor.
-- It requires **a direct-grant authentication flow bound to the provider**
-  in Authentik (see "Setting up Authentik" above); without that, enabling
-  the checkbox has no effect and sign-in will fail.
+  redirect and no second factor. App passwords are single-factor by design,
+  so this is doubly true here.
+- **It is a second, weaker credential per user.** An app password is a
+  bearer secret that grants library access if it leaks, and it does not
+  expire unless the user sets an expiry.
 - The OAuth 2.1 draft deprecates this grant type generally, for the same
-  reason: it requires the client to handle the user's raw password.
+  reason: it requires the client to handle a raw credential.
 
 Enable it only if you need TV/phone app access badly enough to accept the
 loss of MFA on that path. Browser sign-in never uses this grant and is
