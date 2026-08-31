@@ -155,6 +155,19 @@ namespace Emby.Sso.Protocol
             }
             catch (Exception ex)
             {
+                // A destination this plugin refused to send to is not an
+                // unreachable provider: nothing left this process, and what an
+                // operator needs to read is the rule that fired, not "the
+                // provider could not be reached". It also must not be marked
+                // unreachable, because that flag exempts a failure from the
+                // provisioning throttle and this refusal is free to produce.
+                var refused = OutboundRefusedException.Find(ex);
+
+                if (refused != null)
+                {
+                    throw new SsoException(SsoErrors.NotConfigured, refused.Message, ex);
+                }
+
                 // The typed exception, not the string: nothing was asked of the
                 // provider that it answered, so a failure here tested no
                 // credential. See SsoException.Unreachable.
@@ -217,6 +230,17 @@ namespace Emby.Sso.Protocol
                 }
                 catch (Exception ex)
                 {
+                    // Refused before anything was sent - the same distinction
+                    // GetConfigurationOrThrowAsync draws, and for the same two
+                    // reasons: the message names the rule, and the failure is
+                    // not exempted from the provisioning throttle.
+                    var refused = OutboundRefusedException.Find(ex);
+
+                    if (refused != null)
+                    {
+                        throw new SsoException(SsoErrors.NotConfigured, refused.Message, ex);
+                    }
+
                     // No response at all, so no verdict on the credential was ever
                     // learned - by this process or by anyone watching it.
                     throw SsoException.Unreachable("token endpoint request failed", ex);

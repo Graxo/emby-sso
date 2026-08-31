@@ -12,11 +12,40 @@ namespace Emby.Sso
     /// </summary>
     internal static class SsoRuntime
     {
-        private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        /// <summary>
+        /// The one HttpClient every outbound provider fetch goes through, built
+        /// around <see cref="OutboundGuardHandler"/> so that no fetch can reach
+        /// an address inside this server's own network unless an administrator
+        /// has said it may, and no redirect can carry one somewhere nobody
+        /// configured.
+        ///
+        /// AllowAutoRedirect is off because the guard follows the hops itself
+        /// and checks each one; leaving it on would let the transport follow a
+        /// redirect before the guard ever saw where it went.
+        ///
+        /// The allowance is read through a delegate rather than captured,
+        /// because this client is built once for the life of the process and
+        /// the setting can be changed at any time from the configuration page.
+        /// Protocol/ still reads no configuration of its own: the delegate is
+        /// supplied from here, which is the Emby-facing side of the boundary.
+        /// </summary>
+        private static readonly HttpClient Http = CreateHttpClient();
+
+        private static HttpClient CreateHttpClient()
+        {
+            var transport = new HttpClientHandler { AllowAutoRedirect = false };
+
+            return new HttpClient(new OutboundGuardHandler(
+                transport,
+                () => Configuration?.AllowPrivateNetworkProvider == true))
+            {
+                Timeout = TimeSpan.FromSeconds(20),
+            };
+        }
         private static readonly object ClientLock = new object();
 
         private static OidcClient _client;
-        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl, bool AllowInsecureHttp, string GroupsClaim, string RequiredGroup) _clientKey;
+        private static (string IssuerUrl, string ClientId, string ClientSecret, string Scopes, string UsernameClaim, string EmbyPublicBaseUrl, bool AllowInsecureHttp, string GroupsClaim, string RequiredGroup, bool AllowPrivateNetworkProvider) _clientKey;
 
         public static PendingLoginStore PendingLogins { get; } =
             new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
@@ -145,7 +174,15 @@ namespace Emby.Sso
                 configuration.EmbyPublicBaseUrl,
                 configuration.AllowInsecureHttp,
                 configuration.GroupsClaim,
-                configuration.RequiredGroup);
+                configuration.RequiredGroup,
+
+                // Not used to build the OidcClient - the outbound guard reads
+                // it live - but changing it must still discard the cached
+                // client, because IdentityModel's ConfigurationManager caches
+                // the discovery document for hours and an operator who has just
+                // permitted their private-network provider should not have to
+                // wait that out.
+                configuration.AllowPrivateNetworkProvider);
 
             lock (ClientLock)
             {

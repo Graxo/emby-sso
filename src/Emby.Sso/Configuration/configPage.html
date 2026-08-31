@@ -103,6 +103,27 @@
         </label>
       </div>
 
+      <div class="checkboxContainer">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="allowPrivateNetworkProvider" />
+          <span>Allow an identity provider on a private or loopback address</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          By default this server will not fetch the discovery document, the
+          signing keys or the token endpoint from a loopback (127.0.0.0/8,
+          ::1), private (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7)
+          or carrier-grade NAT (100.64.0.0/10) address, and it refuses a
+          redirect that leaves the issuer URL's own scheme, host and port.
+          Those fetches run inside this server with its full network reach, so
+          an issuer URL that turned out to point somewhere on your LAN could
+          otherwise be used to reach things there. Tick this if your identity
+          provider genuinely lives on such an address &mdash; a home lab
+          normally does. Link-local addresses (169.254.0.0/16), which carry the
+          cloud metadata service, stay refused either way. When a fetch is
+          refused, the server log names the exact address and rule.
+        </div>
+      </div>
+
       <br />
 
       <div class="inputContainer">
