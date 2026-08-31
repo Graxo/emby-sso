@@ -409,10 +409,22 @@ rather than starting half-configured.
 
 ### The hostname, and reconciling it with the plugin
 
-**The plugin currently compiles in `https://licence.koper.cloud` as its default
-service base.** That is a placeholder derived from the repository's own
-hostname, not a decision — *the operator must set the real one before release*,
-and the two halves have to agree:
+**The plugin currently compiles in `https://license.koper.cloud` as its default
+service base** (`ActivationEndpoint.DefaultServiceBase`). That is a placeholder
+derived from the repository's own hostname, not a decision — *the operator must
+set the real one before release*.
+
+**Note the spelling.** Everything else in this project says *licence*; that
+constant says *license*. `licence.koper.cloud` and `license.koper.cloud` are
+different hostnames and only one of them will have a certificate. Whichever is
+chosen, check the constant character by character rather than reading it, and
+make DNS, the TLS certificate and `LICENCE_PUBLIC_BASE_URL` all say the same
+thing.
+
+The paths do match: the plugin builds `{base}/v1/activate` and
+`{base}/buy?serverId=<id>`, which are the two this service serves.
+
+The two halves have to agree on:
 
 - whatever the plugin ships with **is** the hostname this service must answer
   on, over HTTPS with a certificate a plugin on someone else's server will
