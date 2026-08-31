@@ -1,0 +1,12 @@
+# The service's runtime state. None of it belongs in a repository, and all of
+# it lives on a mounted volume in production - these names are here as the
+# second line of defence, exactly as the signing key's names are in the root
+# .gitignore.
+#
+# codes-outbox.jsonl is the worst of the three to leak: it holds redemption
+# codes in readable form until the vendor has sent them.
+licences.db
+licences.db-wal
+licences.db-shm
+codes-outbox.jsonl
+data/

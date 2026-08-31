@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The vendor's licence and purchase service. It is NOT part of the plugin
+       and must never become part of it: nothing in src/ references this, and it
+       is deliberately not in Emby.Sso.sln, so `dotnet build` at the repository
+       root - which is what CI runs - does not build or ship any of it. It has
+       its own solution, service/Emby.Sso.Service.sln. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>Emby.Sso.LicenceService</RootNamespace>
+    <AssemblyName>Emby.Sso.LicenceService</AssemblyName>
+    <!-- The test project drives the endpoints in-process through
+         WebApplicationFactory, which needs the entry point to be visible. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Emby.Sso.Licensing/Emby.Sso.Licensing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The whole store. See README.md, "Why SQLite". -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Emby.Sso.LicenceService.Tests" />
+  </ItemGroup>
+
+</Project>
