@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The licence-minting half of tools/Emby.Sso.LicenceTool, extracted so the
+       vendor's offline tool and the online service cannot drift apart.
+
+       READ tools/Emby.Sso.LicenceTool/Program.cs BEFORE CHANGING ANYTHING HERE.
+       Every constant, claim name and ledger field in this project is a copy of
+       one there, and a licence minted by this library must be byte-for-byte the
+       same shape as one minted by the tool - the plugin verifies both with the
+       same TokenValidationParameters and cannot tell them apart. See
+       LicenceToolCompatibilityTests, which fails if the tool's source stops
+       agreeing with this project.
+
+       The tool has NOT yet been changed to reference this project: the task
+       that produced this directory was forbidden from touching tools/. Doing so
+       is a one-line ProjectReference plus a deletion, and until it happens there
+       really are two copies. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same library, at the same version, that the tool signs with and the
+         plugin verifies with. -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
+  </ItemGroup>
+
+</Project>
