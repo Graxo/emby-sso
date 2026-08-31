@@ -43,6 +43,20 @@ namespace Emby.Sso.LicenceService.Storage
         private readonly string _connectionString;
 
         public LicenceStore(string databasePath)
+            : this(databasePath, StoreAccess.CreateIfMissing)
+        {
+        }
+
+        /// <summary>
+        /// <paramref name="access"/> is how the management commands keep their
+        /// promise not to invent a database. SQLite's default is to create the
+        /// file, which is exactly wrong for `list-codes` against a mistyped
+        /// LICENCE_DATA_DIR: the operator would get an empty table that reads as
+        /// "no customers" and a stray licences.db in whatever directory they
+        /// meant to look in. <see cref="StoreAccess.ReadOnly"/> also makes it
+        /// impossible for a read command to write, rather than merely unlikely.
+        /// </summary>
+        public LicenceStore(string databasePath, StoreAccess access)
         {
             if (string.IsNullOrWhiteSpace(databasePath))
             {
@@ -50,11 +64,17 @@ namespace Emby.Sso.LicenceService.Storage
             }
 
             Path = System.IO.Path.GetFullPath(databasePath);
+            Access = access;
 
             _connectionString = new SqliteConnectionStringBuilder
             {
                 DataSource = Path,
-                Mode = SqliteOpenMode.ReadWriteCreate,
+                Mode = access switch
+                {
+                    StoreAccess.ReadOnly => SqliteOpenMode.ReadOnly,
+                    StoreAccess.ExistingOnly => SqliteOpenMode.ReadWrite,
+                    _ => SqliteOpenMode.ReadWriteCreate,
+                },
 
                 // Every write path below takes the same IMMEDIATE transaction, so
                 // writers queue rather than fail; five seconds is far more than a
@@ -67,6 +87,15 @@ namespace Emby.Sso.LicenceService.Storage
         }
 
         public string Path { get; }
+
+        public StoreAccess Access { get; }
+
+        /// <summary>Whether there is a store at all. Asked before opening one, so that a
+        /// missing file is reported as a missing file rather than as an empty database.</summary>
+        public static bool Exists(string databasePath)
+        {
+            return !string.IsNullOrWhiteSpace(databasePath) && File.Exists(System.IO.Path.GetFullPath(databasePath));
+        }
 
         /// <summary>
         /// Creates the schema if it is not there. Safe to call on every start;
@@ -143,6 +172,13 @@ CREATE TABLE IF NOT EXISTS codes (
             // column has to be added explicitly or an upgraded container fails on
             // the first sale rather than at startup.
             AddColumnIfMissing(connection, "codes", "origin_server_id", "TEXT");
+
+            // When a code was voided and why. Written by both void paths - the
+            // refund webhook and the `void-code` command - so that `show-code`
+            // can answer "why does this customer's code not work?" with the
+            // reason somebody actually gave, months later.
+            AddColumnIfMissing(connection, "codes", "voided_utc", "TEXT");
+            AddColumnIfMissing(connection, "codes", "void_reason", "TEXT");
 
             // The second replay guard, and the one that survives PayPal sending
             // two different event ids for one payment: a capture can buy exactly
@@ -417,19 +453,82 @@ CREATE TABLE IF NOT EXISTS webhook_events (
         /// </summary>
         public bool VoidCodeForCapture(string captureId, DateTimeOffset now)
         {
+            return VoidBy("paypal_capture_id", captureId, "PayPal reversed capture " + captureId, now) == VoidOutcome.Voided;
+        }
+
+        /// <summary>
+        /// The `void-code` command's void, by the hash of the code the operator
+        /// was given. Exactly the same statement the refund path takes - see
+        /// <see cref="VoidBy"/> - so there is one definition of what voided
+        /// means, and a change to it cannot apply to refunds but not to the
+        /// command or the other way round.
+        ///
+        /// It reports which of the three things happened, because the command
+        /// has to distinguish "there is no such code" from "it was already
+        /// void", and the second of those is a success.
+        /// </summary>
+        public VoidOutcome VoidCodeByHash(string codeHash, string reason, DateTimeOffset now)
+        {
+            return VoidBy("code_hash", codeHash, reason, now);
+        }
+
+        /// <summary>
+        /// The one place a code becomes void.
+        ///
+        /// <paramref name="column"/> is never operator input: it is one of two
+        /// literals passed by the two methods above, which is why it can be
+        /// concatenated into the statement while every value stays a parameter.
+        ///
+        /// This does NOT revoke licences already minted from the code: the
+        /// plugin verifies offline against an embedded public key and never
+        /// calls home, so nothing here or anywhere can. A voided code stops the
+        /// next activation; the servers already activated keep working until the
+        /// licence expires. Both callers say so in their own output.
+        /// </summary>
+        private VoidOutcome VoidBy(string column, object value, string reason, DateTimeOffset now)
+        {
             using var connection = Open();
             using var transaction = connection.BeginTransaction(deferred: false);
 
-            var changed = Update(
+            string status;
+
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT status FROM codes WHERE " + column + " = $v;";
+                read.Parameters.AddWithValue("$v", value);
+
+                var found = read.ExecuteScalar();
+
+                status = found == null || found == DBNull.Value ? null : Convert.ToString(found, CultureInfo.InvariantCulture);
+            }
+
+            if (status == null)
+            {
+                transaction.Commit();
+
+                return VoidOutcome.NoSuchCode;
+            }
+
+            if (string.Equals(status, CodeStatus.Void, StringComparison.Ordinal))
+            {
+                transaction.Commit();
+
+                return VoidOutcome.AlreadyVoid;
+            }
+
+            Update(
                 connection,
                 transaction,
-                "UPDATE codes SET status = $v WHERE paypal_capture_id = $c AND status <> $v;",
-                ("$v", CodeStatus.Void),
-                ("$c", captureId));
+                "UPDATE codes SET status = $s, voided_utc = $t, void_reason = $r WHERE " + column + " = $v;",
+                ("$s", CodeStatus.Void),
+                ("$t", LicenceFormat.Iso(now)),
+                ("$r", (object)reason ?? DBNull.Value),
+                ("$v", value));
 
             transaction.Commit();
 
-            return changed > 0;
+            return VoidOutcome.Voided;
         }
 
         /// <summary>
@@ -507,6 +606,98 @@ CREATE TABLE IF NOT EXISTS webhook_events (
                     reader.GetInt32(3),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+
+            return rows;
+        }
+
+        /// <summary>
+        /// Every code, with its activation count, for `list-codes`. One query
+        /// and a correlated count rather than a row per activation: the vendor's
+        /// whole customer list is a few hundred rows at most, and reading it in
+        /// one go means the table cannot show two codes as of different moments.
+        /// </summary>
+        public IReadOnlyList<CodeSummary> ListCodes()
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            command.CommandText = CodeSummarySelect + " ORDER BY c.created_utc, c.id;";
+
+            return ReadSummaries(command);
+        }
+
+        /// <summary>Everything about one code, found by the hash of the code the customer typed.</summary>
+        public CodeSummary FindCodeByHash(string codeHash)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            command.CommandText = CodeSummarySelect + " WHERE c.code_hash = $h;";
+            command.Parameters.AddWithValue("$h", codeHash);
+
+            var rows = ReadSummaries(command);
+
+            return rows.Count == 1 ? rows[0] : null;
+        }
+
+        /// <summary>
+        /// Codes whose hash starts with <paramref name="prefix"/> - how the log
+        /// tag in `code=9f2a1c3e5b7d` is turned back into a code. A list rather
+        /// than one row because a short enough prefix can match more than one,
+        /// and the caller must say so rather than picking one.
+        /// </summary>
+        public IReadOnlyList<CodeSummary> FindCodesByHashPrefix(string prefix)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            // ESCAPE, because a prefix is operator input and LIKE would
+            // otherwise read % and _ in it as wildcards.
+            command.CommandText = CodeSummarySelect
+                + " WHERE c.code_hash LIKE $p ESCAPE '\\' ORDER BY c.created_utc, c.id;";
+            command.Parameters.AddWithValue(
+                "$p",
+                prefix.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+
+            return ReadSummaries(command);
+        }
+
+        private const string CodeSummarySelect = @"
+SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_allowed, c.licence_days,
+       c.expires_utc, c.first_activated_utc, c.source, c.paypal_event_id, c.paypal_capture_id,
+       c.buyer_email, c.origin_server_id, c.voided_utc, c.void_reason,
+       (SELECT COUNT(*) FROM activations a WHERE a.code_id = c.id) AS activations_used
+  FROM codes c";
+
+        private static IReadOnlyList<CodeSummary> ReadSummaries(SqliteCommand command)
+        {
+            var rows = new List<CodeSummary>();
+
+            using var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                rows.Add(new CodeSummary
+                {
+                    Id = reader.GetInt64(0),
+                    CodeHash = reader.GetString(1),
+                    CreatedUtc = ParseIso(reader.GetString(2)),
+                    Status = reader.GetString(3),
+                    Licensee = reader.GetString(4),
+                    ActivationsAllowed = reader.GetInt32(5),
+                    LicenceDays = reader.GetInt32(6),
+                    ExpiresUtc = reader.IsDBNull(7) ? (DateTimeOffset?)null : ParseIso(reader.GetString(7)),
+                    FirstActivatedUtc = reader.IsDBNull(8) ? (DateTimeOffset?)null : ParseIso(reader.GetString(8)),
+                    Source = reader.GetString(9),
+                    PayPalEventId = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    PayPalCaptureId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    BuyerEmailOrNote = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    OriginServerId = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    VoidedUtc = reader.IsDBNull(14) ? (DateTimeOffset?)null : ParseIso(reader.GetString(14)),
+                    VoidReason = reader.IsDBNull(15) ? null : reader.GetString(15),
+                    ActivationsUsed = reader.GetInt32(16),
+                });
             }
 
             return rows;
@@ -689,6 +880,86 @@ CREATE TABLE IF NOT EXISTS webhook_events (
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
         }
+    }
+
+    /// <summary>How a <see cref="LicenceStore"/> may touch the file it points at.</summary>
+    public enum StoreAccess
+    {
+        /// <summary>The service and `issue-code`: create the database and the schema if they are not there.</summary>
+        CreateIfMissing,
+
+        /// <summary>`void-code`: writes, but will not bring a store into existence.</summary>
+        ExistingOnly,
+
+        /// <summary>`list-codes`, `show-code`, `list-outbox`: cannot create and cannot write.</summary>
+        ReadOnly,
+    }
+
+    public enum VoidOutcome
+    {
+        /// <summary>Nothing in this store has that hash.</summary>
+        NoSuchCode,
+
+        /// <summary>It was already void. Voiding again changes nothing, and that is not a failure.</summary>
+        AlreadyVoid,
+
+        /// <summary>It was usable and now is not.</summary>
+        Voided,
+    }
+
+    /// <summary>
+    /// One code as the management commands see it: every column of the row plus
+    /// the number of servers it has been activated onto.
+    ///
+    /// It carries the code's HASH and never the code. There is no field here for
+    /// one and there cannot be: the store has never held it.
+    /// </summary>
+    public sealed class CodeSummary
+    {
+        public long Id { get; set; }
+
+        public string CodeHash { get; set; }
+
+        public DateTimeOffset CreatedUtc { get; set; }
+
+        public string Status { get; set; }
+
+        public string Licensee { get; set; }
+
+        public int ActivationsAllowed { get; set; }
+
+        public int ActivationsUsed { get; set; }
+
+        public int LicenceDays { get; set; }
+
+        public DateTimeOffset? ExpiresUtc { get; set; }
+
+        public DateTimeOffset? FirstActivatedUtc { get; set; }
+
+        public string Source { get; set; }
+
+        public string PayPalEventId { get; set; }
+
+        public string PayPalCaptureId { get; set; }
+
+        /// <summary>
+        /// The buyer's address for a PayPal code - and, for a code from
+        /// `issue-code`, the `--note`, because that command has always written
+        /// its note into this column. Rendered under the right heading for each
+        /// source rather than being labelled "buyer email" for a comp that has
+        /// no buyer.
+        /// </summary>
+        public string BuyerEmailOrNote { get; set; }
+
+        public string OriginServerId { get; set; }
+
+        public DateTimeOffset? VoidedUtc { get; set; }
+
+        public string VoidReason { get; set; }
+
+        public bool IsManual => string.Equals(Source, "manual", StringComparison.Ordinal);
+
+        public string Tag => RedemptionCode.LogTag(CodeHash);
     }
 
     public static class CodeStatus

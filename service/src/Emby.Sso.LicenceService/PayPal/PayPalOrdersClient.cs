@@ -180,8 +180,22 @@ namespace Emby.Sso.LicenceService.PayPal
 
             if (!response.IsSuccessStatusCode)
             {
+                // A 401 here is nearly always one thing, and it is not a typo.
+                // PayPal's sandbox and live systems have entirely separate
+                // credentials, and each rejects the other's with exactly this
+                // status - so a working set of live keys against PAYPAL_ENV
+                // =sandbox looks identical to a set that was mistyped. Say so,
+                // because the difference is invisible from the response and
+                // costs an hour to find otherwise.
+                var hint = response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    ? " PAYPAL_ENV is '" + _options.Environment + "', so these were sent to " + _options.ApiBase
+                      + ". Sandbox and live credentials are separate and each refuses the other's:"
+                      + " check the credentials came from the '" + _options.Environment
+                      + "' side of the PayPal developer dashboard, not the other one."
+                    : string.Empty;
+
                 throw new PayPalApiException(
-                    "PayPal refused the API credentials (" + (int)response.StatusCode + ").");
+                    "PayPal refused the API credentials (" + (int)response.StatusCode + ")." + hint);
             }
 
             using var document = JsonDocument.Parse(text);

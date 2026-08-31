@@ -12,6 +12,7 @@ using Emby.Sso.LicenceService.Activation;
 using Emby.Sso.LicenceService.Configuration;
 using Emby.Sso.LicenceService.Delivery;
 using Emby.Sso.LicenceService.Http;
+using Emby.Sso.LicenceService.Management;
 using Emby.Sso.LicenceService.PayPal;
 using Emby.Sso.LicenceService.RateLimiting;
 using Emby.Sso.LicenceService.Storage;
@@ -25,11 +26,18 @@ using Microsoft.Extensions.Logging;
 namespace Emby.Sso.LicenceService
 {
     /// <summary>
-    /// The host, the routes, and the two commands that are not routes.
+    /// The host, the routes, and the commands that are not routes.
     ///
     /// Everything a route does is one call into a class that can be tested
     /// without a socket. What is left here is HTTP: reading a capped body,
     /// working out who the caller is, and turning a reply into a status code.
+    ///
+    /// The commands are the other half of running this: `issue-code` mints a
+    /// code no payment bought, `healthcheck` is what the container asks itself,
+    /// and `list-codes`, `show-code`, `void-code` and `list-outbox` are how a
+    /// vendor manages what they have sold. All of them are dispatched here and
+    /// implemented in ManagementCommands, which explains why none of them is an
+    /// HTTP endpoint.
     /// </summary>
     public static class Program
     {
@@ -45,21 +53,51 @@ namespace Emby.Sso.LicenceService
 
         public static int Main(string[] args)
         {
-            if (args.Length > 0 && string.Equals(args[0], "issue-code", StringComparison.Ordinal))
+            if (args.Length > 0)
             {
-                return IssueCode(args);
-            }
+                // The management commands. All of them need a shell on this box,
+                // which is the only authentication story this service can
+                // honestly offer for reading a customer list or stopping a code
+                // working - see ManagementCommands. None of them is an HTTP
+                // route and none should become one.
+                switch (args[0])
+                {
+                    case "issue-code":
+                        return IssueCode(args);
 
-            if (args.Length > 0 && string.Equals(args[0], "healthcheck", StringComparison.Ordinal))
-            {
-                return HealthCheck(args);
-            }
+                    case "healthcheck":
+                        return HealthCheck(args);
 
-            if (args.Length > 0 && (args[0] == "--help" || args[0] == "help"))
-            {
-                Console.WriteLine(Usage);
+                    case "list-codes":
+                        return Manage(args, ManagementCommands.ListCodes);
 
-                return 0;
+                    case "show-code":
+                        return Manage(args, ManagementCommands.ShowCode);
+
+                    case "void-code":
+                        return Manage(args, ManagementCommands.VoidCode);
+
+                    case "list-outbox":
+                        return Manage(args, ManagementCommands.ListOutbox);
+
+                    case "--help":
+                    case "help":
+                        Console.WriteLine(Usage);
+
+                        return 0;
+
+                    default:
+                        if (args[0].StartsWith("-", StringComparison.Ordinal))
+                        {
+                            break;
+                        }
+
+                        Console.Error.WriteLine("There is no `" + args[0] + "` command.");
+                        Console.Error.WriteLine();
+                        Console.Error.WriteLine(Usage);
+
+                        return 1;
+                }
             }
 
             var options = ServiceOptions.FromEnvironment(Environment.GetEnvironmentVariable);
@@ -723,6 +761,25 @@ namespace Emby.Sso.LicenceService
         }
 
         /// <summary>
+        /// The one place the management commands meet the process: the
+        /// environment, the parsed flags, the two streams and the clock. They
+        /// take those rather than reaching for Console or DateTimeOffset.UtcNow
+        /// themselves, so every one of them can be run in a test against a
+        /// temporary directory and have its output read back.
+        /// </summary>
+        private static int Manage(
+            string[] args,
+            Func<IDictionary<string, string>, ServiceOptions, TextWriter, TextWriter, DateTimeOffset, int> command)
+        {
+            return command(
+                ParseArguments(args),
+                ServiceOptions.FromEnvironment(Environment.GetEnvironmentVariable),
+                Console.Out,
+                Console.Error,
+                DateTimeOffset.UtcNow);
+        }
+
+        /// <summary>
         /// `healthcheck` - what the container's HEALTHCHECK runs.
         ///
         /// It is a command in this binary rather than a curl in the image
@@ -803,7 +860,31 @@ namespace Emby.Sso.LicenceService
       and stores only its hash. For testers, comps, and recovering a sale
       whose code could not be delivered.
 
+  list-codes [--needs-attention] [--for <text>] [--soon <days>]
+      Every code: state, when it was created, paid or comped, activations used
+      of allowed, the licence length and expiry, and whether delivery is still
+      outstanding. Sorted so what needs attention is at the top. --for matches
+      a licensee, a buyer address or a tag. NO CODE IS PRINTED: the store holds
+      only hashes.
+
+  show-code (--code <as the customer typed it> | --tag <hash prefix>)
+      Everything about one code, plus every server it has been activated onto.
+      The support command. --code takes any case, with or without separators.
+      It confirms a code it is given; it cannot reveal one.
+
+  void-code (--code <...> | --tag <...>) [--reason <text>]
+      Stops a code activating again - a refund, a mistake, a leak. Says in its
+      own output what it CANNOT do, which is recall a licence already issued.
+      Voiding twice is not an error.
+
+  list-outbox [--all] [--reveal]
+      Sales whose code has not reached the buyer. --reveal prints the codes
+      themselves, which are in the outbox file in the clear.
+
   healthcheck [--url <url>]
-      Exits 0 if /healthz answers 200. What the container HEALTHCHECK runs.";
+      Exits 0 if /healthz answers 200. What the container HEALTHCHECK runs.
+
+Exit codes: 0 done, 1 no such code or bad usage, 66 there is no store at
+LICENCE_DATA_DIR, 78 the configuration is wrong.";
     }
 }
