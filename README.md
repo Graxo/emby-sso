@@ -12,8 +12,74 @@ path that creates an account — for a user who holds a required Authentik
 group, cloned from a template user you nominate. See **Group-gated automatic
 account creation** below before you turn it on.
 
+**This is licensed software, not open source.** See `LICENSE`. A licence key
+issued for your specific Emby server has to be pasted into the plugin
+configuration; without a valid one the plugin refuses new sign-ons. Read
+**Licensing** below for exactly what that does and does not stop.
+
 Read the whole of this document — especially the next two sections — before
 you install anything.
+
+---
+
+## Licensing
+
+The plugin checks a signed licence key issued for one Emby server. Paste it
+into Dashboard → Plugins → Authentik SSO → **Licence key**.
+
+A licence names your server's id — the `ServerId` Emby writes to its log at
+startup — so it is valid on that server and no other. The check is entirely
+offline: nothing is sent anywhere, there is no licence server, and an Emby
+server with no internet access validates its licence exactly as well as one
+with it.
+
+### What an invalid or missing licence actually does
+
+It refuses **new** single sign-ons and automatic account creation. That is all.
+Specifically:
+
+- people who are already signed in **stay** signed in. Emby never consults
+  this plugin about an access token it has already issued, so existing
+  sessions on phones, TVs and browsers keep working until they are signed out;
+- **your own Emby accounts are unaffected.** A local Emby account is
+  authenticated by Emby's own provider, not by this plugin, so you can always
+  still reach your dashboard. You cannot be locked out of your media server by
+  a licensing problem;
+- nothing is disabled, deleted or reconfigured. Fix the licence and the next
+  sign-in works.
+
+The refusal is deliberately explicit — the user is told there is a licensing
+problem rather than being given the plugin's usual vague "this account is not
+set up on this server". Every other refusal here is vague on purpose, because
+being specific would leak whether an account exists; this one is nobody's
+secret and only ever gets fixed by whoever reads it.
+
+The server log records the exact reason (`Missing`, `Expired`, `WrongServer`,
+`BadSignature`, `NotYetValid`, `Malformed`) at Error, and for the last three
+weeks before a valid licence expires it logs a warning — at most one every six
+hours — telling you how many days are left. That warning is the point of
+keeping existing sessions alive: it is what gives you time to renew.
+
+### What this is worth, honestly
+
+The licence is an RS256 JWT signed with a private key that never leaves the
+vendor, verified against a public key compiled into the assembly. Nobody can
+mint a licence without that private key, and a licence for one server does not
+work on another.
+
+But **the plugin ships as a .NET assembly, and a .NET assembly can be
+decompiled and the check removed.** This project spent a day decompiling Emby's
+own binaries to build the plugin in the first place. There is no obfuscation
+here and none is planned, because obfuscation would raise the effort a little
+and change nothing about the outcome.
+
+So this raises the cost of casual copying between servers. It is not DRM and it
+is not described as DRM anywhere in this repository. The enforceable part is
+`LICENSE`, not the code.
+
+If you are the vendor rather than an operator: `tools/Emby.Sso.LicenceTool/`
+generates the signing keypair and mints licences, and its README covers where
+the private key must live.
 
 ---
 
@@ -315,6 +381,7 @@ Open Dashboard → Plugins → **Authentik SSO** and fill in:
 | Groups claim | which claim the group list is read from; defaults to `groups`. Authentik must actually emit it, on the direct-grant flow too if native sign-in is on. |
 | Template user | the existing Emby user a newly created account is cloned from. Only used when automatic account creation is on. |
 | Automatically create accounts for group holders | off by default. The setting that lets this plugin create Emby users at all. |
+| Licence key | the licence issued for **this** server. Without a valid one, new sign-ons and account creation are refused — see **Licensing** above. |
 
 After saving, the page displays the exact **redirect URI** to put in
 Authentik and the **sign-in URL** to give your users — both computed from
@@ -674,7 +741,7 @@ dotnet build -c Release -p:Version=1.4.0
 
 That is all CI does — with the version taken from the tag.
 
-Run the protocol test suite (203 tests, no Emby server or network required —
+Run the protocol test suite (412 tests, no Emby server or network required —
 they run against a fake identity provider built from a locally generated
 RSA key). Note what it does and does not cover: the suite compiles the
 plugin's `Protocol/` layer only, so every decision — the group gate, the
@@ -698,6 +765,14 @@ git tag -a v1.4.0 -m "What changed in this release."
 git push origin v1.4.0
 ```
 
+Before the **first** release, and only once: generate the licence signing
+keypair and paste its public half into
+`src/Emby.Sso/Protocol/LicencePublicKey.cs`. See
+`tools/Emby.Sso.LicenceTool/README.md`. A build whose `LicencePublicKey.Jwk`
+is still empty refuses every single sign-on and says so in the server log —
+deliberately, because a build with no key cannot verify a licence and so
+cannot honestly accept one.
+
 The tag pipeline in `.gitlab-ci.yml` then, in order:
 
 1. runs the test suite. Every later job hangs off it through `needs:`, so a
@@ -706,22 +781,28 @@ The tag pipeline in `.gitlab-ci.yml` then, in order:
    `ci/version.sh`. A tag that is not `vMAJOR.MINOR.PATCH` — optionally with a
    `-rc.1`-style suffix — fails the build instead of quietly shipping
    something;
-3. checks the artifact with `ci/verify-artifact.sh` before it leaves the job.
+3. checks that `THIRD-PARTY-NOTICES` still names every assembly ILRepack
+   merges (`ci/verify-notices.sh`), so a new dependency cannot quietly turn a
+   release into a licence violation;
+4. checks the artifact with `ci/verify-artifact.sh` before it leaves the job.
    The file must be over a megabyte, because the merged DLL is ~1.8 MB and the
    unmerged one one directory away is ~108 KB, and it must carry
    `1.4.0+<commit>` as its assembly informational version, which shows both
    that the tag's version reached the assembly and that this file came from
    this build;
-4. uploads the DLL and its `.sha256` to the project's generic package registry
-   under `emby-sso/1.4.0/`, which is what gives them a permanent download URL;
-5. creates the GitLab Release for the tag, linking both files as assets and
+5. uploads the DLL, its `.sha256`, `LICENSE` and `THIRD-PARTY-NOTICES` to the
+   project's generic package registry under `emby-sso/1.4.0/`, which is what
+   gives them a permanent download URL. The last two are not optional: the
+   merged DLL physically contains a dozen MIT- and Apache-licensed libraries
+   and their notices have to travel with it;
+6. creates the GitLab Release for the tag, linking all four files as assets and
    describing it with notes generated from the tag's own message and the
    checksum.
 
 Write the annotated tag's message for the operator who will read it on the
 release page: it becomes the release notes' "What changed" section.
 
-An untagged push runs steps 1–3 only, and versions the build
+An untagged push runs steps 1–4 only, and versions the build
 `0.0.0-dev.<short sha>`.
 
 ---
@@ -775,6 +856,36 @@ key or shape. Either way, sign-in through the plugin still completes on
 the server side — the account is not locked out — it's only the automatic
 hand-off into the already-signed-in home screen that would need a second
 look.
+
+### The licence check has not run inside Emby
+
+The decision itself is under test — 21 tests covering a licence signed by the
+wrong key, one for another server, an expired one, one with no expiry, one
+dated in the future, one edited after signing, `alg: none`, an HMAC-signed
+token keyed on the embedded public key, and an algorithm the build does not
+accept. Each guard was confirmed to have a test that fails when that guard is
+removed. A licence produced by the issuing tool was validated end-to-end
+against the plugin's own checker.
+
+What has **not** been observed:
+
+- **the configuration page still rendering and saving with the new Licence key
+  field.** Emby 4.9's plugin page is fragile — it strips script tags and needs
+  an exact `emby-scroller` + `data-controller` structure — so the new field's
+  markup is a byte-for-byte copy of an existing text field's and nothing
+  structural was touched. It still has to be looked at on a real server before
+  release;
+- **`IApplicationHost` being injectable into the plugin's constructor.** It is
+  registered as a single instance in `ApplicationHost.RegisterResources`, which
+  runs before `FindParts` builds plugins through the same container (both read
+  off a decompiled 4.9.5.0 server), and plugins are constructed by
+  `Container.GetInstance`, which auto-wires. If that were ever wrong the plugin
+  would fail to construct and Emby would log "Error creating Emby.Sso.Plugin" —
+  a loud failure, not a silent weakening;
+- **what `SystemId` looks like on the operator's own server.** It is read from
+  `IApplicationHost.SystemId`, which is the `ServerId` Emby logs at startup, but
+  the value on any particular server has not been read here. Take it from the
+  log, not from a guess.
 
 ### The release pipeline has not published a release yet
 
