@@ -99,6 +99,7 @@ namespace Emby.Sso.Tests
         {
             return new SsoCredentialValidator(
                 new HandoffSecretStore(() => Now, TimeSpan.FromSeconds(30)),
+                new SignInPinStore(() => Now, SignInPinStore.DefaultTtl),
                 () => new OidcClient(new HttpClient(_idp), new OidcOptions
                 {
                     IssuerUrl = FakeIdentityProvider.Issuer,
@@ -108,7 +109,8 @@ namespace Emby.Sso.Tests
                     RedirectUri = "https://emby.test/emby/Sso/Callback",
                     UsernameClaim = "preferred_username",
                 }),
-                () => true);
+                () => true,
+                () => false);
         }
 
         /// <summary>

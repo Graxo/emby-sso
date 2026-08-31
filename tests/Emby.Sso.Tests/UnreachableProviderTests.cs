@@ -58,7 +58,12 @@ namespace Emby.Sso.Tests
         }
 
         private Task<SsoCredentialResult> Validate(string username = "alice", string password = "correct horse") =>
-            new SsoCredentialValidator(_handoff, Client, () => _directGrantEnabled)
+            new SsoCredentialValidator(
+                    _handoff,
+                    new SignInPinStore(() => DateTimeOffset.UtcNow, SignInPinStore.DefaultTtl),
+                    Client,
+                    () => _directGrantEnabled,
+                    () => false)
                 .ValidateAsync(username, password, CancellationToken.None);
 
         /// <summary>The provider's own verdict: this password is wrong.</summary>

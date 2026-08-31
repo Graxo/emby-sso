@@ -53,11 +53,25 @@ namespace Emby.Sso
         public static HandoffSecretStore HandoffSecrets { get; } =
             new HandoffSecretStore(() => DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30));
 
+        /// <summary>
+        /// The one-time PINs a television sign-in is completed with. In memory,
+        /// like the handoff secrets beside it - a PIN that does not survive a
+        /// restart is correct, because the person holding one can get another
+        /// in the time it takes to reload a page.
+        ///
+        /// One store per process, because two would each hold their own view of
+        /// which PINs are live and the single-use rule would stop being one.
+        /// </summary>
+        public static SignInPinStore SignInPins { get; } =
+            new SignInPinStore(() => DateTimeOffset.UtcNow, SignInPinStore.DefaultTtl);
+
         public static SsoCredentialValidator Validator { get; } =
             new SsoCredentialValidator(
                 HandoffSecrets,
+                SignInPins,
                 GetClient,
-                DirectGrantPermitted);
+                DirectGrantPermitted,
+                PinSignInPermitted);
 
         public static PluginConfiguration Configuration => Plugin.Instance?.Configuration;
 
@@ -146,6 +160,32 @@ namespace Emby.Sso
             return configuration != null
                 && configuration.EnableDirectGrant
                 && !configuration.AllowInsecureHttp;
+        }
+
+        /// <summary>
+        /// Whether a one-time PIN may be redeemed at all.
+        ///
+        /// Read live, on every attempt, and NOT tied to
+        /// <see cref="PluginConfiguration.EnableDirectGrant"/>: they are
+        /// different bargains and must be switched separately. A direct grant
+        /// hands this process a person's real identity-provider credential and
+        /// re-transmits it, and cannot do MFA; a PIN is a value this server
+        /// itself issued, minutes long, single use, bound to one account, and
+        /// issued only at the end of a full browser sign-in that DID do MFA. An
+        /// operator who refuses the first has every reason to want the second.
+        ///
+        /// Deliberately NOT refused by "Allow plain HTTP", which does refuse a
+        /// direct grant. The reason that setting kills the direct grant is that
+        /// it would put the user's real password on the wire in cleartext, and
+        /// there is no such password here. A PIN is the same kind of thing as
+        /// the browser handoff secret, which plain HTTP has always been allowed
+        /// to carry: server-issued, single-use, and worthless the moment it is
+        /// used - an eavesdropper who sees a PIN sees it inside the request
+        /// that is spending it.
+        /// </summary>
+        private static bool PinSignInPermitted()
+        {
+            return Configuration?.EnablePinSignIn == true;
         }
 
         /// <summary>The callback URL registered with the identity provider.</summary>

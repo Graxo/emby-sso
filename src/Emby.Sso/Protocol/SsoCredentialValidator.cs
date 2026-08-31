@@ -9,6 +9,14 @@ namespace Emby.Sso.Protocol
         Rejected = 0,
         HandoffAccepted = 1,
         DirectGrantAccepted = 2,
+
+        /// <summary>
+        /// A one-time sign-in PIN, issued at the end of a completed browser
+        /// sign-in and typed into a native app's ordinary password field. Like
+        /// <see cref="HandoffAccepted"/> it carries no identity: the browser
+        /// flow verified one and applied every gate before the PIN existed.
+        /// </summary>
+        PinAccepted = 3,
     }
 
     internal sealed class SsoCredentialResult
@@ -73,6 +81,17 @@ namespace Emby.Sso.Protocol
         public static SsoCredentialResult Handoff(string displayName) =>
             new SsoCredentialResult(SsoCredentialOutcome.HandoffAccepted, displayName, null, null, false);
 
+        /// <summary>
+        /// A redeemed one-time PIN. Carries no identity for the same reason a
+        /// handoff does not - see <see cref="Identity"/> - and the same
+        /// consequence follows: the caller must not expect to re-run the group
+        /// gate or the subject binding on this path, because the browser flow
+        /// that issued the PIN already did, and there is nothing here to run
+        /// them against.
+        /// </summary>
+        public static SsoCredentialResult Pin(string displayName) =>
+            new SsoCredentialResult(SsoCredentialOutcome.PinAccepted, displayName, null, null, false);
+
         public static SsoCredentialResult DirectGrant(OidcIdentity identity) =>
             new SsoCredentialResult(SsoCredentialOutcome.DirectGrantAccepted, identity.DisplayName, null, identity, false);
 
@@ -104,8 +123,15 @@ namespace Emby.Sso.Protocol
 
     /// <summary>
     /// The single decision an Emby sign-in funnels into: is this password a live
-    /// browser handoff secret, or a real password the identity provider should
-    /// check?
+    /// browser handoff secret, a live one-time PIN, or a real password the
+    /// identity provider should check?
+    ///
+    /// Three shapes of credential now arrive in that one field: a browser
+    /// handoff secret, a one-time sign-in PIN, and a real password. They are
+    /// tried in that order, each miss falling silently through to the next, and
+    /// every refusal is one of the same fixed sentences a refusal has always
+    /// been - so which shape a caller was attempting is never observable from
+    /// the outcome.
     ///
     /// This class does NOT and CANNOT verify that the Emby account exists. It
     /// stays free of <c>MediaBrowser.*</c> types by design, so it has no way to
@@ -115,24 +141,31 @@ namespace Emby.Sso.Protocol
     /// auto-creates the account. The caller - the Emby-facing authentication
     /// provider - MUST check Emby's resolved user itself and refuse the sign-in
     /// when it is null, before ever consulting this validator's result. Do not
-    /// treat a <see cref="SsoCredentialOutcome.HandoffAccepted"/> or
+    /// treat a <see cref="SsoCredentialOutcome.HandoffAccepted"/>,
+    /// <see cref="SsoCredentialOutcome.PinAccepted"/> or
     /// <see cref="SsoCredentialOutcome.DirectGrantAccepted"/> result from
     /// <see cref="ValidateAsync"/> as proof the account already exists.
     /// </summary>
     internal sealed class SsoCredentialValidator
     {
         private readonly HandoffSecretStore _handoff;
+        private readonly SignInPinStore _pins;
         private readonly Func<OidcClient> _clientFactory;
         private readonly Func<bool> _directGrantEnabled;
+        private readonly Func<bool> _pinSignInEnabled;
 
         public SsoCredentialValidator(
             HandoffSecretStore handoff,
+            SignInPinStore pins,
             Func<OidcClient> clientFactory,
-            Func<bool> directGrantEnabled)
+            Func<bool> directGrantEnabled,
+            Func<bool> pinSignInEnabled)
         {
             _handoff = handoff ?? throw new ArgumentNullException(nameof(handoff));
+            _pins = pins ?? throw new ArgumentNullException(nameof(pins));
             _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
             _directGrantEnabled = directGrantEnabled ?? throw new ArgumentNullException(nameof(directGrantEnabled));
+            _pinSignInEnabled = pinSignInEnabled ?? throw new ArgumentNullException(nameof(pinSignInEnabled));
         }
 
         public async Task<SsoCredentialResult> ValidateAsync(string embyUsername, string password, CancellationToken cancellationToken)
@@ -145,6 +178,31 @@ namespace Emby.Sso.Protocol
             if (_handoff.TryConsume(embyUsername, password))
             {
                 return SsoCredentialResult.Handoff(embyUsername);
+            }
+
+            // The second of the three shapes this one field now carries. The
+            // order between the two stores does not matter for correctness -
+            // they cannot collide, a handoff secret being 43 base64url
+            // characters and a PIN eight from an alphabet of thirty - but both
+            // must stay ABOVE the direct grant, because both are answered from
+            // memory and the direct grant is a round trip to the identity
+            // provider.
+            //
+            // Asked only while the operator has PIN sign-in switched on, and
+            // asked afresh on every call: turning the setting off must stop
+            // PINs issued while it was on from being redeemed, not merely stop
+            // new ones being issued. That is the fail-closed direction and it
+            // is why this is a delegate rather than a captured bool.
+            //
+            // A miss here is silent and falls through, exactly as a miss on the
+            // handoff store above does. Nothing downstream can tell which shape
+            // was tried: all three failures end at the same refusals, with the
+            // same sentences. What a PIN-SHAPED miss does do is spend that
+            // account's PIN - see SignInPinStore, where that rule and its cost
+            // are set out.
+            if (_pinSignInEnabled() && _pins.TryConsume(embyUsername, password))
+            {
+                return SsoCredentialResult.Pin(embyUsername);
             }
 
             var client = _clientFactory();

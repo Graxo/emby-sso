@@ -12,9 +12,11 @@ using Newtonsoft.Json;
 namespace Emby.Sso.Auth
 {
     /// <summary>
-    /// The single point Emby calls for both sign-in paths. A password is either
-    /// a live browser handoff secret or a real password for the identity
-    /// provider to check; SsoCredentialValidator decides which.
+    /// The single point Emby calls for both sign-in paths. A password is one of
+    /// three things - a live browser handoff secret, a live one-time sign-in
+    /// PIN, or a real password for the identity provider to check;
+    /// SsoCredentialValidator decides which, and the three are indistinguishable
+    /// in every refusal.
     ///
     /// Emby only ever invokes the three-argument (<see cref="IRequiresResolvedUser"/>)
     /// overload in practice, but both must apply the same guards: when Emby cannot
@@ -238,6 +240,7 @@ namespace Emby.Sso.Auth
             // by whoever adds the enum member rather than by anyone reading
             // here. Behaviour for the three outcomes that exist is unchanged.
             if (result.Outcome != SsoCredentialOutcome.HandoffAccepted
+                && result.Outcome != SsoCredentialOutcome.PinAccepted
                 && result.Outcome != SsoCredentialOutcome.DirectGrantAccepted)
             {
                 var reason = result.Reason ?? SsoErrors.UnknownUser;
@@ -271,6 +274,20 @@ namespace Emby.Sso.Auth
             // A handoff result deliberately carries none, because the browser
             // flow verified the identity and applied this same gate before it
             // issued the secret; re-checking here is impossible, not redundant.
+            //
+            // A one-time PIN is the same case, with one difference worth
+            // stating rather than glossing: the browser flow applied the gate
+            // and the subject binding before the PIN existed, exactly as it did
+            // for a handoff secret, but a PIN is good for five minutes where a
+            // handoff secret is good for thirty seconds. So somebody who loses
+            // the required group in the identity provider during those five
+            // minutes can still redeem a PIN issued while they held it. That is
+            // the same class of window the handoff secret has always had, ten
+            // times as wide, and it is bounded by the same things: the PIN
+            // works once, only for the account it was issued to, and every
+            // check that does not need the identity - the licence, the required
+            // group being configured at all, the provider stamp above - still
+            // runs here on redemption.
             if (result.Identity != null)
             {
                 // The same snapshot the early refusal above used. A null
@@ -475,10 +492,16 @@ namespace Emby.Sso.Auth
             if (result.Outcome != SsoCredentialOutcome.DirectGrantAccepted)
             {
                 // Reason is null on an accepting outcome, and the only accepting
-                // outcome that is not a direct grant is a handoff secret for a
-                // username with no Emby account - which the browser path does not
-                // produce, since it provisions before it issues one. Treat it as
-                // an unknown user rather than throwing a null message.
+                // outcomes that are not a direct grant are a handoff secret or a
+                // one-time PIN for a username with no Emby account - which the
+                // browser path does not produce, since it provisions the account
+                // before it issues either. Treat it as an unknown user rather
+                // than throwing a null message.
+                //
+                // Note what this branch therefore refuses, and must go on
+                // refusing: a PIN can never create an account. It is issued for
+                // an account that already exists, so on the branch where none
+                // does it can only be a value somebody made up.
                 var reason = result.Reason ?? SsoErrors.UnknownUser;
                 _logger.Info("Rejecting sign-in for unresolved '{0}': {1}", ForLog(username), reason);
 

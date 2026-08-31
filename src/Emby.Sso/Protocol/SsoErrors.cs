@@ -45,6 +45,22 @@ namespace Emby.Sso.Protocol
             + "Please contact the server administrator.";
 
         public const string DirectGrantDisabled = "Password sign-in is disabled for this account.";
+
+        /// <summary>
+        /// PIN sign-in has not been switched on by the administrator.
+        ///
+        /// DELIBERATELY NOT identical to <see cref="UnknownUser"/>, on the same
+        /// grounds as <see cref="LicenceInvalid"/>: it reveals nothing about
+        /// any account - it is decided from the plugin's own configuration
+        /// before anybody is identified at all - and the only way it gets fixed
+        /// is if the person reading it can tell it apart from a refusal that is
+        /// about them. It is shown only on the PIN page's own endpoint, never
+        /// as the outcome of a native sign-in attempt, where a PIN that cannot
+        /// be redeemed is refused with the ordinary indistinguishable sentence
+        /// like anything else.
+        /// </summary>
+        public const string PinSignInDisabled =
+            "PIN sign-in is not enabled on this server. Please contact the server administrator.";
         public const string EmptyCredential = "A username and password are required.";
     }
 

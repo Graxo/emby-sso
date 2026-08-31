@@ -28,6 +28,26 @@ namespace Emby.Sso.Configuration
         /// </summary>
         public bool AllowPrivateNetworkProvider { get; set; } = false;
 
+        /// <summary>
+        /// Whether a user may ask for a one-time sign-in PIN, and whether one
+        /// may be redeemed.
+        ///
+        /// Off by default, and its OWN setting - deliberately not governed by
+        /// <see cref="EnableDirectGrant"/>. The two look similar from the
+        /// outside (both end with a native app signing in from its ordinary
+        /// password field) and are not the same bargain at all: a direct grant
+        /// hands this server a person's real identity-provider credential to
+        /// re-transmit and cannot carry MFA, while a PIN is issued by this
+        /// server at the end of a full browser sign-in that did carry MFA, is
+        /// bound to one account, lives five minutes and works once. An operator
+        /// who has quite reasonably refused the first should not have to accept
+        /// it to get the second.
+        ///
+        /// See <see cref="Protocol.SignInPinStore"/> for what a PIN is worth
+        /// and what defends it.
+        /// </summary>
+        public bool EnablePinSignIn { get; set; } = false;
+
         public bool EnableAutoCreate { get; set; } = false;
         public string RequiredGroup { get; set; } = string.Empty;
         public string TemplateUserName { get; set; } = string.Empty;
