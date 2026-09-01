@@ -20,19 +20,34 @@ services:
     # token scoped to read_registry and `docker login registry.koper.cloud`
     # once; service/docs/first-run.md, section 5, has the exact steps.
     #
-    # PIN IT. `:latest` is the newest *released* version and moves when a
-    # vX.Y.Z tag is pushed; a specific `1.4.0` never moves and is what a
+    # THERE IS NO `latest` UNTIL THE FIRST RELEASE IS TAGGED, and a pull before
+    # then fails with exactly this, which reads like a broken registry and is
+    # not one:
+    #
+    #   manifest for .../licence-service:latest not found: manifest unknown
+    #
+    # `latest` is written only by a full `vX.Y.Z` tag. Pushes to main publish
+    # `main-<short sha>` and `main`; a PRERELEASE tag (v0.1.0-rc.1) publishes
+    # only itself and deliberately never moves `latest`, so that the tag people
+    # pull blind is never a release candidate. See ci/image-tags.sh, which is
+    # the only thing that decides this.
+    #
+    # SO, BEFORE THE FIRST RELEASE, name the commit you want:
+    #
+    #   LICENCE_IMAGE=registry.koper.local:5050/graxo/emby-sso/licence-service:main
+    #
+    # AND AFTER IT, PIN IT. A specific `1.4.0` never moves and is what a
     # production host should name, so that a deploy is a decision rather than
-    # whatever happened to be latest at restart time. `main-<short sha>` is
-    # also published, for testing a commit before it is tagged; `main` moves
-    # with every push to the default branch and is not for this file.
+    # whatever happened to be latest at restart time. `main` moves with every
+    # push to the default branch and is not for this file.
     #
-    #   LICENCE_IMAGE=registry.koper.cloud/graxo/emby-sso/licence-service:1.4.0
+    #   LICENCE_IMAGE=registry.koper.local:5050/graxo/emby-sso/licence-service:1.4.0
     #
-    # UNVERIFIED: no image has been pushed yet, so this exact reference has
-    # never been pulled. The service-image job prints the base it pushed to -
-    # take it from there rather than trusting this line.
-    image: ${LICENCE_IMAGE:-registry.koper.cloud/graxo/emby-sso/licence-service:latest}
+    # The host part is registry.koper.local:5050 - the address the runners push
+    # to, which is what CI_REGISTRY_IMAGE resolves to on this instance. The
+    # service-image job prints the exact base it pushed to; take it from there
+    # rather than trusting this line.
+    image: ${LICENCE_IMAGE:-registry.koper.local:5050/graxo/emby-sso/licence-service:latest}
 
     # THE ALTERNATIVE: build here from a source tree on this host. Only needed
     # if the registry is unreachable or you are testing an uncommitted change -

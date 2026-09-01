@@ -182,10 +182,11 @@ ss -tln | grep ':8080 ' && echo "8080 is taken, pick another"
 
 ### Log in to the registry, once
 
-CI builds the image and pushes it to `registry.koper.cloud`, so this host never
-needs a copy of the source. The project is **private**, so the pull needs
-credentials of its own — the host must not be given a personal access token or
-anything that can write.
+CI builds the image and pushes it to **`registry.koper.local:5050`** — that is
+what `CI_REGISTRY` is on this GitLab instance, and the `service-image` job
+prints the exact base it pushed to. So this host never needs a copy of the
+source. The project is **private**, so the pull needs credentials of its own —
+the host must not be given a personal access token or anything that can write.
 
 Create a **deploy token** in GitLab: *Settings → Repository → Deploy tokens*,
 on the `Graxo/emby-sso` project. Name it after this host, tick **`read_registry`
@@ -193,7 +194,7 @@ and nothing else**, and leave the expiry set — a token with no expiry is a
 credential nobody ever revokes. GitLab shows the password **once**.
 
 ```
-docker login registry.koper.cloud -u <token-username> --password-stdin
+docker login registry.koper.local:5050 -u <token-username> --password-stdin
 ```
 
 Paste the token password and press Ctrl-D. Treat it as a credential: it is a

@@ -610,7 +610,7 @@ registry, so the deployment host pulls an image instead of being handed a copy
 of the source:
 
 ```
-registry.koper.cloud/graxo/emby-sso/licence-service
+registry.koper.local:5050/graxo/emby-sso/licence-service
 ```
 
 The `service-image` job prints the exact base it pushed to — trust that over
@@ -659,8 +659,15 @@ does today, and what an unverified push costs is spelled out in the job's
 comments.
 
 **Pulling needs credentials**, because the project is private: a deploy token
-scoped to `read_registry`, and `docker login registry.koper.cloud`.
+scoped to `read_registry`, and `docker login registry.koper.local:5050`.
 `docs/first-run.md`, section 5, has the steps and says how to treat the token.
+
+**There is no `:latest` until a `vX.Y.Z` tag is built.** `ci/image-tags.sh` is
+the only thing that decides tags: main publishes `main-<short sha>` and `main`,
+a full release publishes `X.Y.Z` and `latest`, and a *prerelease* tag publishes
+only itself — so that the tag people pull blind is never a release candidate.
+Before the first release, pull `main`. A pull of `latest` before then fails with
+`manifest unknown`, which reads like a broken registry and is not one.
 
 **UNVERIFIED — all three halves of this.** No pipeline has run, no image has
 been built by anything, and no host has pulled one. Each is one command to
@@ -676,8 +683,8 @@ confirm, in order, and each tells you which half failed:
 
 # 2. Did the registry accept it? On any machine that can reach the
 #    registry, with a read_registry deploy token:
-docker login registry.koper.cloud -u <token-username> --password-stdin
-docker manifest inspect registry.koper.cloud/graxo/emby-sso/licence-service:main | head
+docker login registry.koper.local:5050 -u <token-username> --password-stdin
+docker manifest inspect registry.koper.local:5050/graxo/emby-sso/licence-service:main | head
 
 # 3. Can the deployment host pull and run it?
 docker compose pull licence && docker compose up -d licence
@@ -1377,11 +1384,13 @@ and **nothing here has ever simulated a success and called it working.**
   *accepted*, which needs PayPal's real certificate.
 - **The Docker image, and everything CI does with it.** Never built — not by
   hand, not by a runner. Docker was not available where any of this was
-  written, and no pipeline has run since the `service-image` job was added, so
-  three separate things are unproven: that the runner can build an image at
-  all without a privileged executor, that `registry.koper.cloud` accepts the
-  push, and that the deployment host can pull it. *The image CI builds*, above,
-  has the command that settles each one.
+  written. Two of the three unknowns are now settled: a runner has built the
+  image and `registry.koper.local:5050` has accepted the push (pipeline #2036,
+  tags `main` and `main-5150d9b1`). What is still unproven is that the
+  deployment host can pull and run it — and the first attempt failed on
+  `manifest unknown` for `:latest`, which is not a registry fault: no `vX.Y.Z`
+  tag has ever been built, and `latest` comes only from one of those. *The image
+  CI builds*, above, has the command that settles the rest.
 - **The management commands inside the container.** `list-codes`, `show-code`,
   `void-code` and `list-outbox` were run against a real store on disk and are
   covered by tests, but never through `docker compose exec` — the same reason:
