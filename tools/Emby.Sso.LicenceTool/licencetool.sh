@@ -69,6 +69,13 @@ exec "$CONTAINER" run --rm -i \
     --env NUGET_PACKAGES=/tmp/nuget \
     --env DOTNET_NOLOGO=1 \
     --env DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    `# The SDK image prints "An issue was encountered verifying workloads" on` \
+    `# a first run in a fresh container, because the workload manifests it` \
+    `# wants to check live in a HOME that does not persist. It is noise - this` \
+    `# tool uses no workloads - but it is noise printed immediately above the` \
+    `# tool's own output, where somebody signing licences will read it as the` \
+    `# reason nothing happened.` \
+    --env DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK=1 \
     --volume "$REPO":/src \
     --volume "$KEYS":/keys \
     --volume "$PWD":/work \
