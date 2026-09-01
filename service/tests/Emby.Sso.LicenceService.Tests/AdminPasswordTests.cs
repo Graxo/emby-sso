@@ -15,6 +15,44 @@ namespace Emby.Sso.LicenceService.Tests
     /// </summary>
     public class AdminPasswordTests
     {
+
+        [Fact]
+        public void An_encoded_hash_contains_no_dollar_sign()
+        {
+            // THE POINT OF THE FORMAT. Docker Compose reads `$210000` and
+            // `$V0apXhAquLxP` inside a value as variable names, substitutes the
+            // empty string for each, and hands the service a hash with holes in
+            // it. The operator then sees "not in the form ..." about a value
+            // they pasted exactly as printed. A hash that cannot contain the
+            // character cannot be mangled that way.
+            var encoded = AdminPassword.Encode("a-long-enough-admin-password");
+
+            Assert.DoesNotContain("$", encoded, StringComparison.Ordinal);
+            Assert.StartsWith("pbkdf2-sha256.", encoded, StringComparison.Ordinal);
+            Assert.Equal(4, encoded.Split('.').Length);
+        }
+
+        [Fact]
+        public void A_hash_in_the_old_dollar_form_still_verifies()
+        {
+            // Somebody who worked around the Compose collision - by escaping the
+            // dollars, or by not using Compose - must not be broken by the fix.
+            var modern = AdminPassword.Encode("a-long-enough-admin-password");
+            var legacy = modern.Replace('.', '$');
+
+            Assert.True(AdminPassword.TryParse(legacy, out var password, out var problem), problem);
+            Assert.True(password.Verify("a-long-enough-admin-password"));
+            Assert.False(password.Verify("something-else-entirely-here"));
+        }
+
+        [Fact]
+        public void A_hash_compose_has_eaten_is_refused_and_says_why()
+        {
+            // What actually reached the service: pbkdf2-sha256$$$ with the
+            // iterations, salt and hash substituted away.
+            Assert.False(AdminPassword.TryParse("pbkdf2-sha256$$$", out _, out var problem));
+            Assert.Contains("Docker Compose", problem, StringComparison.Ordinal);
+        }
         private const string Good = "correct-horse-battery-staple-9142";
 
         [Fact]
@@ -56,7 +94,7 @@ namespace Emby.Sso.LicenceService.Tests
             var encoded = AdminPassword.Encode(Good);
 
             Assert.DoesNotContain(Good, encoded, StringComparison.OrdinalIgnoreCase);
-            Assert.StartsWith(AdminPassword.Algorithm + "$" + AdminPassword.DefaultIterations, encoded, StringComparison.Ordinal);
+            Assert.StartsWith(AdminPassword.Algorithm + "." + AdminPassword.DefaultIterations, encoded, StringComparison.Ordinal);
         }
 
         [Fact]

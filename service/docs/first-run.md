@@ -84,12 +84,12 @@ volumes:
 > Either use `${...}` as above, or add `env_file: .env` to the service and drop
 > the lines entirely. Not neither.
 
+Single quotes around the JWK — it contains `"` and `:`.
+
 That is the minimum that runs. `service/docker-compose.yml` has the same thing
 with the hardening on it — read-only root filesystem, dropped capabilities,
 memory and process limits — and comments explaining each. Take that one for a
 real deployment.
-
-Single quotes around the JWK — it contains `"` and `:`.
 
 > **Why a named volume.** A bind mount arrives owned by whoever owns it on the
 > host — root, unless somebody remembered `chown -R 5678:5678`. Nothing in the
@@ -141,11 +141,18 @@ unset ADMIN
 history. It prints one line:
 
 ```
-ADMIN_PASSWORD_HASH=pbkdf2-sha256$210000$Bgx...==$DV3...=
+ADMIN_PASSWORD_HASH=pbkdf2-sha256.210000.Bgx...==.DV3...=
 ```
 
 Put that line in `.env` — and make sure the compose file names it, per the note
 in step 2, or nothing reads it.
+
+The fields are separated by `.` rather than the `$` that crypt-style hashes
+usually use, deliberately: **Docker Compose reads `$210000` inside a value as a
+variable name**, substitutes the empty string, and hands the service a hash with
+holes in it. A hash that cannot contain `$` cannot be mangled that way. If you
+have an older `$`-separated one it still works — it just could not survive being
+pasted into a compose file.
 
 Interactively instead of piped: `docker compose run --rm licence hash-password`,
 then type the password, press enter, then **Ctrl-D**. It reads to end-of-input,
@@ -153,37 +160,6 @@ so enter alone looks like it has hung.
 
 Use a long random password from your password manager. Sixteen characters is the
 floor the service accepts, not advice.
-
-Then `docker compose up -d licence` and check the log:
-
-```
-admin page: on at /admin, ADMIN_PASSWORD_HASH, idle timeout 30m, absolute 480m
-```
-
-### Reaching it
-
-**`https://<your LICENCE_PUBLIC_BASE_URL>/admin`** — for example
-`https://license.koper.cloud/admin`.
-
-- **It must be HTTPS.** The session cookie is `Secure`, so over plain `http://`
-  the browser discards it and you bounce back to the login form having
-  apparently typed the password wrong. (`http://localhost` is the one exception
-  most browsers make, which is what makes the SSH tunnel below work.)
-- **The container listens on 127.0.0.1 only**, so the reverse proxy that already
-  serves your public base URL has to forward `/admin` too. No proxy? Reach it
-  over a tunnel instead: `ssh -L 8080:127.0.0.1:8080 you@host`, then
-  `http://localhost:8080/admin`.
-- **A 404 means the password is not set.** `/admin` answers exactly what
-  `/nonsense` answers when `ADMIN_PASSWORD_HASH` is unset — there is no route,
-  no login form and no hint that there could be. The startup log says which:
-  `admin page: on at /admin, ...` or `off (no ADMIN_PASSWORD_HASH)`.
-- **Behind a proxy, set `LICENCE_TRUSTED_PROXY_HOPS: 1`.** Otherwise every
-  request looks like it came from the proxy, which throttles all callers
-  together and fills the audit trail with one address.
-
-Once in, the navigation is Codes, Issue a code, Signing, Outbox, Audit and
-Backup. The number beside **Signing** is how many people are waiting for a
-licence.
 
 ```
 docker compose pull licence
@@ -214,6 +190,31 @@ It is misconfigured, and lists every problem at once:
 | `unable to open database file` | The message names the uid it is running as and whether the directory is writable. Easiest fix is a named volume (step 2); with a bind mount, `chown -R <that uid>` the **host** directory |
 | `PAYPAL_WEBHOOK_ID` / `PAYPAL_PRICE` missing | Step 2 |
 | `LICENCE_BACKUP_PASSPHRASE is shorter than 16` | Generate a real one |
+
+### Reaching it
+
+**`https://<your LICENCE_PUBLIC_BASE_URL>/admin`** — for example
+`https://license.koper.cloud/admin`.
+
+- **It must be HTTPS.** The session cookie is `Secure`, so over plain `http://`
+  the browser discards it and you bounce back to the login form having
+  apparently typed the password wrong. (`http://localhost` is the one exception
+  most browsers make, which is what makes the SSH tunnel below work.)
+- **The container listens on 127.0.0.1 only**, so the reverse proxy that already
+  serves your public base URL has to forward `/admin` too. No proxy? Reach it
+  over a tunnel instead: `ssh -L 8080:127.0.0.1:8080 you@host`, then
+  `http://localhost:8080/admin`.
+- **A 404 means the password is not set.** `/admin` answers exactly what
+  `/nonsense` answers when `ADMIN_PASSWORD_HASH` is unset — there is no route,
+  no login form and no hint that there could be. The startup log says which:
+  `admin page: on at /admin, ...` or `off (no ADMIN_PASSWORD_HASH)`.
+- **Behind a proxy, set `LICENCE_TRUSTED_PROXY_HOPS: 1`.** Otherwise every
+  request looks like it came from the proxy, which throttles all callers
+  together and fills the audit trail with one address.
+
+Once in, the navigation is Codes, Issue a code, Signing, Outbox, Audit and
+Backup. The number beside **Signing** is how many people are waiting for a
+licence.
 
 ---
 

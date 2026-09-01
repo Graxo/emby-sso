@@ -67,6 +67,36 @@ namespace Emby.Sso.LicenceService.Admin
         /// </summary>
         public const int MinimumLength = 16;
 
+        /// <summary>
+        /// What separates the four fields.
+        ///
+        /// NOT '$', and this is the whole reason the format changed. The PHC
+        /// convention every crypt-style hash follows is
+        /// <c>$algorithm$iterations$salt$hash</c>, and it was copied here
+        /// without thinking about where this value has to live: a Docker Compose
+        /// environment block, or an env file Compose interpolates. Compose reads
+        /// <c>$210000</c> and <c>$V0apXhAquLxP</c> as VARIABLE NAMES, substitutes
+        /// the empty string for each, and hands the service a hash with holes in
+        /// it - after printing a warning about an unset variable, which reads as
+        /// unrelated noise.
+        ///
+        /// An operator then sees "ADMIN_PASSWORD_HASH is not in the form ..."
+        /// about a value they pasted exactly as it was printed, which is a
+        /// miserable place to be at three in the morning. A '.' costs nothing:
+        /// it is outside the base64 alphabet, so it stays unambiguous, and it is
+        /// special to no shell, no YAML parser and no interpolator.
+        /// </summary>
+        private const char Separator = '.';
+
+        /// <summary>
+        /// The separator this service used to emit. Still accepted, so that a
+        /// hash already sitting in somebody's environment does not stop working
+        /// on upgrade - it was only ever unusable in the one place Compose
+        /// interpolates, and somebody who worked around that deserves not to be
+        /// broken for it.
+        /// </summary>
+        private const char LegacySeparator = '$';
+
         private readonly byte[] _salt;
         private readonly byte[] _expected;
 
@@ -95,9 +125,9 @@ namespace Emby.Sso.LicenceService.Admin
             var hash = Derive(password, salt, iterations);
 
             return Algorithm
-                + "$" + iterations.ToString(CultureInfo.InvariantCulture)
-                + "$" + Convert.ToBase64String(salt)
-                + "$" + Convert.ToBase64String(hash);
+                + Separator + iterations.ToString(CultureInfo.InvariantCulture)
+                + Separator + Convert.ToBase64String(salt)
+                + Separator + Convert.ToBase64String(hash);
         }
 
         /// <summary>
@@ -117,12 +147,34 @@ namespace Emby.Sso.LicenceService.Admin
                 return false;
             }
 
-            var parts = encoded.Trim().Split('$');
+            // Compose does not remove the '$' when it substitutes - it removes
+            // what FOLLOWS it - so a mangled hash still contains the character
+            // and still splits into four fields, just empty ones. The hint
+            // therefore cannot hang off the field count; it hangs off the
+            // presence of the character, and is appended to whichever check
+            // actually fails.
+            var composeHint = encoded.IndexOf(LegacySeparator) >= 0
+                ? " That value contains '" + LegacySeparator + "', and Docker Compose reads it as the start of a "
+                  + "variable name - so a hash pasted into a compose file, or into an env file Compose "
+                  + "interpolates, arrives with pieces substituted away. Generate a fresh one: this build no "
+                  + "longer produces a hash containing that character."
+                : string.Empty;
+
+            // Both separators, because a `$`-separated hash was what this
+            // service emitted before that collision was understood, and one that
+            // is already in an operator's environment must keep working.
+            var parts = encoded.Trim().Split(Separator);
+
+            if (parts.Length != 4)
+            {
+                parts = encoded.Trim().Split(LegacySeparator);
+            }
 
             if (parts.Length != 4)
             {
                 problem = "ADMIN_PASSWORD_HASH is not in the form "
-                    + Algorithm + "$<iterations>$<salt>$<hash>. Generate one with `hash-password`.";
+                    + Algorithm + Separator + "<iterations>" + Separator + "<salt>" + Separator
+                    + "<hash>. Generate one with `hash-password`." + composeHint;
 
                 return false;
             }
@@ -137,7 +189,7 @@ namespace Emby.Sso.LicenceService.Admin
 
             if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var iterations))
             {
-                problem = "ADMIN_PASSWORD_HASH does not name a number of iterations.";
+                problem = "ADMIN_PASSWORD_HASH does not name a number of iterations." + composeHint;
 
                 return false;
             }
@@ -163,14 +215,15 @@ namespace Emby.Sso.LicenceService.Admin
             catch (FormatException)
             {
                 problem = "ADMIN_PASSWORD_HASH has a salt or a hash that is not base64. If it was pasted through "
-                    + "something that wrapped the line, generate a fresh one with `hash-password`.";
+                    + "something that wrapped the line, generate a fresh one with `hash-password`." + composeHint;
 
                 return false;
             }
 
             if (salt.Length < SaltBytes || hash.Length != HashBytes)
             {
-                problem = "ADMIN_PASSWORD_HASH has a salt or a hash that is too short to be one this service made.";
+                problem = "ADMIN_PASSWORD_HASH has a salt or a hash that is too short to be one this service made."
+                    + composeHint;
 
                 return false;
             }

@@ -1004,7 +1004,7 @@ your shell history and in the process list of everybody on the box — and print
 one line:
 
 ```
-ADMIN_PASSWORD_HASH=pbkdf2-sha256$210000$Xy...==$q7...=
+ADMIN_PASSWORD_HASH=pbkdf2-sha256.210000.Xy...==.q7...=
 ```
 
 Put that in `.env` and restart. Keep the password itself in your password
