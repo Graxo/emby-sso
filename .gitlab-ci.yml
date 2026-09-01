@@ -303,22 +303,32 @@ service-image:
     # followed by nginx's "400 The plain HTTP request was sent to HTTPS port" -
     # which is kaniko retrying in cleartext, and is NOT a second fault.
     #
-    # TWO MODES, chosen by one variable:
+    # THREE OUTCOMES, and skipping verification is never the default:
     #
-    #   REGISTRY_CA_PEM set   The certificate is verified against it. This is
-    #                         the mode to be in. On the runner host Ansible
-    #                         places that CA at
-    #                         /usr/local/share/ca-certificates/ca.crt.
+    #   REGISTRY_CA_PEM set                 The certificate is verified against
+    #                                       it. This is the mode to be in. On
+    #                                       the runner host Ansible places that
+    #                                       CA at
+    #                                       /usr/local/share/ca-certificates/ca.crt.
     #
-    #   not set               TLS is still used and the certificate is NOT
-    #                         verified, for this ONE registry. Say plainly what
-    #                         that costs: the image this job pushes is what the
-    #                         production host later pulls, so anyone able to
-    #                         intercept traffic to that address on the internal
-    #                         network could substitute it. It is the same trade
-    #                         the client-portal pipeline already makes with
-    #                         `--insecure-registry`, and it is one variable away
-    #                         from not being made.
+    #   REGISTRY_ALLOW_UNVERIFIED_TLS=1     TLS is still used and the
+    #                                       certificate is NOT verified, for
+    #                                       this ONE registry.
+    #
+    #   neither                             The job FAILS, naming both.
+    #
+    # The fallback needs its own variable rather than being what happens when
+    # the CA is absent, and the difference matters more than it looks. This job
+    # pushes the image the production host later pulls; without verification,
+    # anyone able to intercept traffic to that address on the internal network
+    # can substitute it. That is the same supply chain the licence signing key
+    # was moved off a server to protect, so it is not a thing to end up in by
+    # forgetting to set something.
+    #
+    # It is the idiom SECURITY_SCAN_SOFT already uses in the client-portal
+    # pipeline, for the same reason and with the same warning: it is a decision
+    # with a date on it, not a setting. Both variables cost one paste; prefer
+    # the CA, which ends the problem instead of noting it.
     #
     # --skip-tls-verify-registry rather than --insecure-registry: it keeps HTTPS
     # and drops only the verification, where the docker flag also permits a
@@ -341,20 +351,36 @@ service-image:
       if [ -n "${REGISTRY_CA_PEM:-}" ]; then
         printf '%s\n' "$REGISTRY_CA_PEM" >> "$BUNDLE"
         echo "service-image: verifying $CI_REGISTRY against REGISTRY_CA_PEM"
-      else
+      elif [ "${REGISTRY_ALLOW_UNVERIFIED_TLS:-}" = "1" ]; then
         REGISTRY_TLS="--skip-tls-verify-registry=$CI_REGISTRY"
 
-        echo "service-image: WARNING - pushing to $CI_REGISTRY WITHOUT verifying its" >&2
-        echo "  certificate. The connection is still TLS; nothing checks who is on the" >&2
-        echo "  other end of it, so whoever can intercept that traffic can replace the" >&2
-        echo "  image the production host pulls." >&2
+        echo "service-image: WARNING - REGISTRY_ALLOW_UNVERIFIED_TLS=1, so this pushes to" >&2
+        echo "  $CI_REGISTRY WITHOUT verifying its certificate. The connection is still" >&2
+        echo "  TLS; nothing checks who is on the other end of it, so whoever can" >&2
+        echo "  intercept that traffic can replace the image production pulls." >&2
+        echo "  Set REGISTRY_CA_PEM and remove this variable." >&2
+      else
+        echo "service-image: REFUSING TO PUSH. $CI_REGISTRY presents a certificate this" >&2
+        echo "  job cannot verify, and pushing anyway is not the default." >&2
         echo "" >&2
-        echo "  TO FIX IT, on the runner host:" >&2
-        echo "    cat /usr/local/share/ca-certificates/ca.crt" >&2
-        echo "  and put that PEM in a CI/CD variable named REGISTRY_CA_PEM (Settings ->" >&2
-        echo "  CI/CD -> Variables; protected yes, masked NO - a CA certificate is public," >&2
-        echo "  and masking mangles the line breaks). This job then verifies instead," >&2
-        echo "  with no other change." >&2
+        echo "  The image this job pushes is what the production host later pulls. Without" >&2
+        echo "  verification, anyone able to intercept traffic to that address can" >&2
+        echo "  substitute it - which is the supply chain the licence signing key was" >&2
+        echo "  moved off a server to protect." >&2
+        echo "" >&2
+        echo "  SET ONE OF THESE:" >&2
+        echo "" >&2
+        echo "  REGISTRY_CA_PEM  - the fix. On the runner host:" >&2
+        echo "      cat /usr/local/share/ca-certificates/ca.crt" >&2
+        echo "    and paste that PEM into a CI/CD variable of that name (Settings ->" >&2
+        echo "    CI/CD -> Variables; protected yes, masked NO - a CA certificate is" >&2
+        echo "    public, and masking mangles the line breaks)." >&2
+        echo "" >&2
+        echo "  REGISTRY_ALLOW_UNVERIFIED_TLS=1 - the escape hatch, for the day the CA" >&2
+        echo "    is not to hand and a release has to go out. It is a decision with a" >&2
+        echo "    date on it, not a setting; unset it once the CA is in place." >&2
+
+        exit 1
       fi
 
       # Free when the runner has one, and harmless when it is for something
