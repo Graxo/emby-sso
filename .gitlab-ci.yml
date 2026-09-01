@@ -357,6 +357,12 @@ service-image:
         DESTINATIONS="$DESTINATIONS --destination $IMAGE:$tag"
       done
       # Intentionally unquoted: one --destination pair per tag.
+      #
+      # The `||` block exists because kaniko's TLS failure names the symptom and
+      # not the cause, twice over: "certificate signed by unknown authority"
+      # followed by nginx's "400 The plain HTTP request was sent to HTTPS port",
+      # which is kaniko retrying in cleartext and is NOT a separate problem. An
+      # hour was spent on that pair once; it should not be spent again.
       /kaniko/executor \
         --context "$CI_PROJECT_DIR/service" \
         --dockerfile "$CI_PROJECT_DIR/service/Dockerfile" \
@@ -364,7 +370,31 @@ service-image:
         --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
         --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
         --label "org.opencontainers.image.version=$PRIMARY_TAG" \
-        $DESTINATIONS
+        $DESTINATIONS \
+      || {
+        status=$?
+
+        echo "" >&2
+        echo "service-image: kaniko failed (exit $status)." >&2
+
+        if [ -s "$BUNDLE" ]; then
+          echo "  A CA bundle WAS supplied, so if the error above says 'certificate signed by" >&2
+          echo "  unknown authority', the certificate in it is not the one that issued" >&2
+          echo "  $CI_REGISTRY's. Adding the wrong CA looks exactly like adding none." >&2
+          echo "" >&2
+          echo "  What is in the bundle this job used:" >&2
+          awk "/BEGIN CERT/{c++} END{print \"    \" c+0 \" certificate(s)\"}" "$BUNDLE" >&2
+          echo "" >&2
+          echo "  What the registry actually presents, from a host that can reach it:" >&2
+          echo "    openssl s_client -showcerts -connect $CI_REGISTRY </dev/null 2>/dev/null \\" >&2
+          echo "      | openssl x509 -noout -subject -issuer" >&2
+          echo "" >&2
+          echo "  Put the certificate named by that ISSUER line - the CA, not the server" >&2
+          echo "  certificate - in the REGISTRY_CA_PEM CI/CD variable." >&2
+        fi
+
+        exit "$status"
+      }
     - |
       echo "service-image: pushed. The host pulls it with:"
       echo "  docker pull $IMAGE:$PRIMARY_TAG"
