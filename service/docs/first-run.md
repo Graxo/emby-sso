@@ -58,18 +58,31 @@ services:
       LICENCE_DATA_DIR: /data
       LICENCE_PUBLIC_KEYS: '<the public JWK from step 1>'
       LICENCE_PUBLIC_BASE_URL: https://license.koper.cloud
-      LICENCE_BACKUP_PASSPHRASE: <openssl rand -base64 32>
-      ADMIN_PASSWORD_HASH: <from step 3>
       PAYPAL_ENV: sandbox
-      PAYPAL_WEBHOOK_ID: <from the PayPal dashboard>
-      PAYPAL_CLIENT_ID: <...>
-      PAYPAL_CLIENT_SECRET: <...>
       PAYPAL_CURRENCY: GBP
       PAYPAL_PRICE: "19.00"
+
+      # Secrets. The VALUES live in .env beside this file, never in here -
+      # this is the file most likely to end up in a repository.
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      LICENCE_BACKUP_PASSPHRASE: ${LICENCE_BACKUP_PASSPHRASE}
+      PAYPAL_WEBHOOK_ID: ${PAYPAL_WEBHOOK_ID}
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
 
 volumes:
   licence-data:
 ```
+
+> **`.env` only reaches the container through `${...}`.** A `.env` file beside
+> the compose file feeds *variable substitution*, not the container's
+> environment — so a value sitting in `.env` with no `${...}` naming it in the
+> compose file is read by nobody, and the service starts as if you never set it.
+> That is how `ADMIN_PASSWORD_HASH` ends up in `.env` while the log still says
+> `admin page: off`.
+>
+> Either use `${...}` as above, or add `env_file: .env` to the service and drop
+> the lines entirely. Not neither.
 
 That is the minimum that runs. `service/docker-compose.yml` has the same thing
 with the hardening on it — read-only root filesystem, dropped capabilities,
@@ -119,15 +132,33 @@ Use `main`.
 The admin page is where signing happens, so set a password first:
 
 ```
-docker compose run --rm licence hash-password
+read -rs ADMIN
+printf '%s' "$ADMIN" | docker compose run --rm -T licence hash-password
+unset ADMIN
 ```
 
-Type the password, press enter, then **Ctrl-D**. It reads to end-of-input, so
-enter alone looks like it has hung.
+`read -rs` does not echo what you type and does not put it in your shell
+history. It prints one line:
 
-Put the printed `ADMIN_PASSWORD_HASH=...` line in your `.env`. Use a long random
-password from your password manager — 16 characters is the floor it accepts, not
-advice.
+```
+ADMIN_PASSWORD_HASH=pbkdf2-sha256$210000$Bgx...==$DV3...=
+```
+
+Put that line in `.env` — and make sure the compose file names it, per the note
+in step 2, or nothing reads it.
+
+Interactively instead of piped: `docker compose run --rm licence hash-password`,
+then type the password, press enter, then **Ctrl-D**. It reads to end-of-input,
+so enter alone looks like it has hung.
+
+Use a long random password from your password manager. Sixteen characters is the
+floor the service accepts, not advice.
+
+Then `docker compose up -d licence` and check the log:
+
+```
+admin page: on at /admin, ADMIN_PASSWORD_HASH, idle timeout 30m, absolute 480m
+```
 
 ### Reaching it
 
