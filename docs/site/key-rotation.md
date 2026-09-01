@@ -25,8 +25,12 @@ Do this before you have to, not after.
 1. **Generate the new key**, on the machine that will sign with it:
 
    ```
-   dotnet run --project tools/Emby.Sso.LicenceTool -- keygen --out ~/emby-sso-licence-2
+   LICENCE_KEY_DIR=~/emby-sso-licence-2 \
+     tools/Emby.Sso.LicenceTool/licencetool.sh keygen --out /keys
    ```
+
+   No .NET SDK needed - `licencetool.sh` runs it in a container. See
+   [the tool's README](https://gitlab.koper.cloud/Graxo/emby-sso/-/blob/main/tools/Emby.Sso.LicenceTool/README.md).
 
    It prints the public JWK and its key id.
 

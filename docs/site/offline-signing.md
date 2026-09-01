@@ -54,6 +54,22 @@ Nothing else. It holds no redemption code and nothing that names a buyer.
 
 ### 2. Sign it, where the key is
 
+**You do not need the .NET SDK on that machine.** `licencetool.sh` runs the tool
+in a container; Docker is the only requirement. Inside it, `/keys` is your key
+directory and `/work` is whatever directory you are standing in.
+
+```
+cd ~/Downloads
+tools/Emby.Sso.LicenceTool/licencetool.sh sign \
+  --requests /work/emby-sso-signing-requests.json \
+  --key /keys/licence-signing-key.private.json
+```
+
+That is deliberate rather than a convenience. The key belongs on a machine that
+answers no requests, and requiring that machine to also carry a development
+toolchain works against it — the fewer things installed where the key lives, the
+better. With the SDK already there, it is:
+
 ```
 dotnet run --project tools/Emby.Sso.LicenceTool -- sign \
   --requests ~/Downloads/emby-sso-signing-requests.json \

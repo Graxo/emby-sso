@@ -12,6 +12,42 @@ Run this on a machine that answers no requests. That is the entire security
 argument, and it is why the service refuses to start if a key is still mounted
 on it.
 
+## You do not need the .NET SDK
+
+`licencetool.sh` runs the tool in a container, so the machine that holds the key
+needs only Docker (or podman — set `CONTAINER=podman`). That is deliberate: the
+fewer things installed where the key lives the better, and *"I have to install
+an SDK on my laptop to sell a licence"* is how a key ends up back on a server,
+because that is where the SDK already was.
+
+```
+git clone <this repository>
+cd emby-sso
+
+tools/Emby.Sso.LicenceTool/licencetool.sh keygen --out /keys
+```
+
+**Two paths exist inside the container, and only two:**
+
+| | |
+|---|---|
+| `/keys` | the key directory — `$HOME/emby-sso-licence`, or `LICENCE_KEY_DIR`. The private key and the ledger live here. |
+| `/work` | the directory you are standing in. Where a downloaded signing-requests file is, and where the signed one is written. |
+
+Use those paths in the arguments. Signing a batch from the admin page:
+
+```
+cd ~/Downloads
+tools/.../licencetool.sh sign \
+  --requests /work/emby-sso-signing-requests.json \
+  --key /keys/licence-signing-key.private.json
+```
+
+Everything else — the repository copy, the SDK, the package cache — is inside
+the container and gone when it exits. It runs as your own user, so the key it
+writes belongs to you and not to root; a root-owned key would fail the tool's
+own owner-only check on the next run, in a way that looks like corruption.
+
 Mints the licences `Emby.Sso` checks. **The vendor runs this. It is not shipped
 to anyone.** No code in this directory reaches the plugin DLL: this project holds
 no reference to `src/Emby.Sso`, nothing in the plugin references it, and ILRepack

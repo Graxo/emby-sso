@@ -43,6 +43,16 @@ activations are immediate.
 
 On your own machine, **not on this server**:
 
+No .NET SDK required — `licencetool.sh` runs the tool in a container, and Docker
+is the only thing that machine needs. Inside it, `/keys` is the key directory.
+
+```
+git clone <this repository> && cd emby-sso
+tools/Emby.Sso.LicenceTool/licencetool.sh keygen --out /keys
+```
+
+With the SDK already installed, the direct form works too:
+
 ```
 export DOTNET_ROOT=$HOME/.dotnet
 dotnet run --project tools/Emby.Sso.LicenceTool -- keygen --out ~/emby-sso-licence
