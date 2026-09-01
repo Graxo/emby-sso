@@ -129,6 +129,31 @@ Put the printed `ADMIN_PASSWORD_HASH=...` line in your `.env`. Use a long random
 password from your password manager — 16 characters is the floor it accepts, not
 advice.
 
+### Reaching it
+
+**`https://<your LICENCE_PUBLIC_BASE_URL>/admin`** — for example
+`https://license.koper.cloud/admin`.
+
+- **It must be HTTPS.** The session cookie is `Secure`, so over plain `http://`
+  the browser discards it and you bounce back to the login form having
+  apparently typed the password wrong. (`http://localhost` is the one exception
+  most browsers make, which is what makes the SSH tunnel below work.)
+- **The container listens on 127.0.0.1 only**, so the reverse proxy that already
+  serves your public base URL has to forward `/admin` too. No proxy? Reach it
+  over a tunnel instead: `ssh -L 8080:127.0.0.1:8080 you@host`, then
+  `http://localhost:8080/admin`.
+- **A 404 means the password is not set.** `/admin` answers exactly what
+  `/nonsense` answers when `ADMIN_PASSWORD_HASH` is unset — there is no route,
+  no login form and no hint that there could be. The startup log says which:
+  `admin page: on at /admin, ...` or `off (no ADMIN_PASSWORD_HASH)`.
+- **Behind a proxy, set `LICENCE_TRUSTED_PROXY_HOPS: 1`.** Otherwise every
+  request looks like it came from the proxy, which throttles all callers
+  together and fills the audit trail with one address.
+
+Once in, the navigation is Codes, Issue a code, Signing, Outbox, Audit and
+Backup. The number beside **Signing** is how many people are waiting for a
+licence.
+
 ```
 docker compose pull licence
 docker compose up -d licence
