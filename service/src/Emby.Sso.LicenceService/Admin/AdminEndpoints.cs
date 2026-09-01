@@ -61,6 +61,7 @@ namespace Emby.Sso.LicenceService.Admin
         {
             var sessions = app.Services.GetRequiredService<AdminSessions>();
             var throttle = app.Services.GetRequiredService<AdminLoginThrottle>();
+            var verificationGate = app.Services.GetRequiredService<PasswordVerificationGate>();
             var audit = app.Services.GetRequiredService<AdminAudit>();
             var store = app.Services.GetRequiredService<LicenceStore>();
             var clock = app.Services.GetRequiredService<TimeProvider>();
@@ -115,7 +116,39 @@ namespace Emby.Sso.LicenceService.Admin
                 var form = await ReadFormAsync(context).ConfigureAwait(false);
                 var submitted = form == null ? null : form["password"].ToString();
 
-                if (submitted == null || !password.Verify(submitted))
+                // Bound how many PBKDF2 verifications run at once. throttle.Check
+                // above is deliberately non-consuming, so a burst of requests all
+                // pass it before any of them fails and advances the counter; this
+                // is what stops that burst turning into parallel PBKDF2 on the
+                // signing-key host. A real operator takes one slot and never
+                // notices. See PasswordVerificationGate.
+                if (!verificationGate.TryEnter())
+                {
+                    audit.Record(AdminAudit.LoginThrottled, client, (AdminSession)null, "verification slots full");
+
+                    context.Response.Headers.RetryAfter = "1";
+
+                    return Html(
+                        AdminPages.Login(new LoginModel
+                        {
+                            Message = "Too many attempts at once. Wait a moment and try again. "
+                                + "Nothing is locked.",
+                        }),
+                        429);
+                }
+
+                bool verified;
+
+                try
+                {
+                    verified = submitted != null && password.Verify(submitted);
+                }
+                finally
+                {
+                    verificationGate.Exit();
+                }
+
+                if (!verified)
                 {
                     throttle.Failed(client);
 

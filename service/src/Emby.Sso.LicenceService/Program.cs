@@ -274,6 +274,7 @@ namespace Emby.Sso.LicenceService
                 builder.Services.AddSingleton(adminPassword);
                 builder.Services.AddSingleton<AdminSessions>();
                 builder.Services.AddSingleton<AdminLoginThrottle>();
+                builder.Services.AddSingleton<PasswordVerificationGate>();
                 builder.Services.AddSingleton(provider => new AdminAudit(
                     options.AdminAuditPath,
                     provider.GetRequiredService<ILoggerFactory>().CreateLogger("admin")));
