@@ -32,20 +32,32 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
-        public void A_signing_key_still_mounted_refuses_to_start()
+        public void A_signing_key_path_turns_on_self_service_signing()
         {
-            // The point of the whole offline-signing change: the private key
-            // must not be on this host. If the variable is still set, the
-            // operator believes it signs things and the key is still sitting on
-            // an internet-facing box waiting to be stolen. Refuse, loudly,
-            // rather than ignoring the variable and leaving it there.
+            // LICENCE_SIGNING_KEY_PATH is the switch between the two ways this
+            // service can work, and it is not a misconfiguration either way.
+            //
+            //   set    it signs licences itself, so a customer who activates
+            //          gets one immediately - and the private key is loaded by
+            //          the process that answers the internet.
+            //   unset  it cannot sign; an operator signs elsewhere and uploads
+            //          at /admin/signing. Safer, and not instant.
+            //
+            // Signing.SigningDaemon carries the reasoning. What matters here is
+            // that neither is refused, because a refusal would make one of them
+            // unreachable.
             var environment = Complete();
+
+            Assert.False(Read(environment).SignsItsOwnLicences);
+            Assert.Empty(Read(environment).Problems());
 
             environment["LICENCE_SIGNING_KEY_PATH"] = "/run/secrets/licence-signing-key.private.json";
 
-            Assert.Contains(
-                Read(environment).Problems(),
-                p => p.Contains("LICENCE_SIGNING_KEY_PATH", StringComparison.Ordinal));
+            var options = Read(environment);
+
+            Assert.True(options.SignsItsOwnLicences);
+            Assert.Equal("/run/secrets/licence-signing-key.private.json", options.SigningKeyPath);
+            Assert.Empty(options.Problems());
         }
 
         [Fact]

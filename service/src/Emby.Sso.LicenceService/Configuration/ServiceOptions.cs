@@ -21,17 +21,25 @@ namespace Emby.Sso.LicenceService.Configuration
         public const string DefaultDataDirectory = "/data";
 
         /// <summary>
-        /// LICENCE_SIGNING_KEY_PATH, kept ONLY so that a host still mounting a
-        /// private key is refused rather than ignored.
+        /// LICENCE_SIGNING_KEY_PATH - the switch that makes activation
+        /// self-service.
         ///
-        /// This service used to load a private key here and mint licences with
-        /// it. It does not any more: see Signing.SigningDesk. If the variable is
-        /// still set, the operator believes this host signs things, and the key
-        /// is still sitting on a machine with a port open to the internet where
-        /// it does nothing but wait to be stolen. That is worth refusing to
-        /// start over.
+        /// SET: this service signs licences itself, the moment a customer
+        /// activates, and they get one immediately. The private key is loaded by
+        /// the process that answers the internet, which is what that costs - see
+        /// Signing.SigningDaemon, which says it plainly and says what the
+        /// alternative is.
+        ///
+        /// UNSET: nothing here can sign. Activations queue, and an operator
+        /// signs them from /admin/signing with `licencetool sign` on a machine
+        /// that answers no requests. Safer, and not instant.
+        ///
+        /// Both are supported and neither is deprecated. The default is unset.
         /// </summary>
-        public string RetiredSigningKeyPath { get; set; }
+        public string SigningKeyPath { get; set; }
+
+        /// <summary>Whether this deployment signs licences itself.</summary>
+        public bool SignsItsOwnLicences => !string.IsNullOrWhiteSpace(SigningKeyPath);
 
         /// <summary>
         /// LICENCE_PUBLIC_KEYS - one JWK or a JSON array of them. The PUBLIC
@@ -138,7 +146,7 @@ namespace Emby.Sso.LicenceService.Configuration
 
             var options = new ServiceOptions
             {
-                RetiredSigningKeyPath = Text(read, "LICENCE_SIGNING_KEY_PATH"),
+                SigningKeyPath = Text(read, "LICENCE_SIGNING_KEY_PATH"),
                 PublicKeys = Text(read, "LICENCE_PUBLIC_KEYS"),
                 DataDirectory = Text(read, "LICENCE_DATA_DIR") ?? DefaultDataDirectory,
                 ActivationsAllowed = Number(read, "LICENCE_ACTIVATIONS_ALLOWED", 3),
@@ -244,16 +252,6 @@ namespace Emby.Sso.LicenceService.Configuration
         public IReadOnlyList<string> Problems()
         {
             var problems = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(RetiredSigningKeyPath))
-            {
-                problems.Add(
-                    "LICENCE_SIGNING_KEY_PATH is set, and this service does not sign anything any more. The private "
-                    + "licence key mints a licence for any Emby server, forever, and there is no revocation - so it "
-                    + "does not belong on a host that answers requests from the internet. Remove the variable AND "
-                    + "the volume that mounts the key, and delete the key from this machine: signing now happens "
-                    + "with `licencetool sign` on a machine of your choosing. See service/docs/first-run.md.");
-            }
 
             if (string.IsNullOrWhiteSpace(PublicKeys))
             {

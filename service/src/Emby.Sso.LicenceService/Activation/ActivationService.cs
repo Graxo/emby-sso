@@ -1,4 +1,7 @@
 using System;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Emby.Sso.LicenceService.Configuration;
 using Emby.Sso.LicenceService.RateLimiting;
 using Emby.Sso.LicenceService.Storage;
@@ -47,6 +50,31 @@ namespace Emby.Sso.LicenceService.Activation
         /// </summary>
         public static readonly TimeSpan PendingRetryAfter = TimeSpan.FromMinutes(5);
 
+        /// <summary>
+        /// How long an activation waits for a signature before giving up and
+        /// telling the customer to try again.
+        ///
+        /// This is what makes one press of Activate enough when this deployment
+        /// signs its own licences: the signer works in seconds, so the request
+        /// simply waits for it rather than answering "come back later" to
+        /// somebody who has just paid. Fifteen seconds is long enough for a
+        /// signing pass and short enough that a browser, a reverse proxy and a
+        /// plugin all sit well inside their own timeouts.
+        ///
+        /// With no signer configured this changes nothing: the first poll finds
+        /// nothing signed, and the answer is the same pending reply as before.
+        /// </summary>
+        public static readonly TimeSpan DefaultSignatureWait = TimeSpan.FromSeconds(15);
+
+        /// <summary>
+        /// Settable so the suite can shorten it. Production never changes it;
+        /// a test that had to sit through fifteen real seconds per pending
+        /// activation would be a test somebody deletes.
+        /// </summary>
+        public TimeSpan SignatureWait { get; set; } = DefaultSignatureWait;
+
+        private static readonly TimeSpan SignaturePoll = TimeSpan.FromMilliseconds(400);
+
         private readonly LicenceStore _store;
         private readonly ActivationRateLimiter _limiter;
         private readonly ServiceOptions _options;
@@ -65,6 +93,81 @@ namespace Emby.Sso.LicenceService.Activation
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _time = time ?? throw new ArgumentNullException(nameof(time));
             _log = log ?? throw new ArgumentNullException(nameof(log));
+        }
+
+        /// <summary>
+        /// <see cref="Activate"/>, and then - if the answer was "being signed" -
+        /// a short wait for the signature to appear before answering.
+        ///
+        /// The wait polls the STORE rather than calling Activate again, so it
+        /// costs the caller nothing: no second rate-limiter token, no second
+        /// pass over the activation cap. Whoever signs is somebody else's
+        /// problem; this only watches for the row to fill in, which is true
+        /// whether the signer is a background service in this process or a
+        /// person with a laptop.
+        /// </summary>
+        public async Task<ActivationReply> ActivateAsync(
+            ActivationRequest request,
+            string clientKey,
+            CancellationToken cancellationToken = default)
+        {
+            var reply = Activate(request, clientKey);
+
+            if (reply.IsSuccess || !string.Equals(reply.Error, ActivationError.PendingSignature, StringComparison.Ordinal))
+            {
+                return reply;
+            }
+
+            // A MONOTONIC measure, not the injected clock. A timeout asks "how
+            // long have I been here", and a wall clock answers "what time is
+            // it" - which is a different question the moment NTP steps the
+            // clock, and which never moves at all under a test clock, so the
+            // loop would spin until something else stopped it.
+            var started = Stopwatch.StartNew();
+
+            while (started.Elapsed < SignatureWait && !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(SignaturePoll, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return reply;
+                }
+
+                SigningRequestRow row;
+
+                try
+                {
+                    row = _store.FindSigningRequest(reply.RequestId);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "activate: waiting for a signature failed for request={Request}", reply.RequestId);
+
+                    return reply;
+                }
+
+                if (row?.Licence == null)
+                {
+                    continue;
+                }
+
+                _log.LogInformation(
+                    "activate SIGNED WHILE WAITING request={Request} server={Server} key={Key}",
+                    row.RequestId,
+                    row.ServerId,
+                    row.KeyId);
+
+                return ActivationReply.Success(
+                    row.Licence,
+                    reply.ExpiresUtc,
+                    reply.ActivationsUsed,
+                    reply.ActivationsAllowed);
+            }
+
+            return reply;
         }
 
         public ActivationReply Activate(ActivationRequest request, string clientKey)
@@ -208,11 +311,14 @@ namespace Emby.Sso.LicenceService.Activation
                         outcome.Request.Expires,
                         pluginVersion ?? "(not sent)");
 
-                    return ActivationReply.Failure(
-                        ActivationError.PendingSignature,
+                    return ActivationReply.Pending(
                         "Your licence has been requested and is being signed. This is not an error and your code "
                         + "has not been used up. Press Activate again shortly.",
-                        PendingRetryAfter);
+                        PendingRetryAfter,
+                        outcome.Request.RequestId,
+                        outcome.ExpiresUtc ?? default,
+                        outcome.ActivationsUsed,
+                        outcome.ActivationsAllowed);
 
                 default:
                     break;
@@ -357,6 +463,9 @@ namespace Emby.Sso.LicenceService.Activation
 
         public TimeSpan RetryAfter { get; }
 
+        /// <summary>Set only on a pending reply, for the caller that waits.</summary>
+        public string RequestId { get; private set; }
+
         public static ActivationReply Success(string licence, DateTimeOffset expires, int used, int allowed)
         {
             return new ActivationReply(true, licence, expires, used, allowed, null, null, TimeSpan.Zero);
@@ -365,6 +474,33 @@ namespace Emby.Sso.LicenceService.Activation
         public static ActivationReply Failure(string error, string message, TimeSpan retryAfter)
         {
             return new ActivationReply(false, null, default, 0, 0, error, message, retryAfter);
+        }
+
+        /// <summary>
+        /// Recorded, allowed, and waiting on a signature. Carries the request id
+        /// and the terms so that a caller which waits for the signature can
+        /// answer without repeating the decision.
+        /// </summary>
+        public static ActivationReply Pending(
+            string message,
+            TimeSpan retryAfter,
+            string requestId,
+            DateTimeOffset expires,
+            int used,
+            int allowed)
+        {
+            return new ActivationReply(
+                false,
+                null,
+                expires,
+                used,
+                allowed,
+                ActivationError.PendingSignature,
+                message,
+                retryAfter)
+            {
+                RequestId = requestId,
+            };
         }
     }
 }

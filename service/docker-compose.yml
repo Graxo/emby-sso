@@ -9,8 +9,9 @@
 # The vendor runs this. It is a snippet to paste into whatever compose file the
 # host already has, rather than a file to run as-is.
 #
-# THE SIGNING KEY IS NOT HERE and must not be added - the service refuses to
-# start if it is. See the volumes block.
+# THE SIGNING KEY IS MOUNTED HERE, which is what makes activation instant and
+# is the one deliberate security trade in this file. The volumes block says
+# exactly what it costs and what the alternative is.
 
 services:
   licence:
@@ -100,22 +101,30 @@ services:
     user: "5678:5678"
 
     volumes:
-      # THERE IS NO SIGNING KEY HERE ANY MORE, and this comment is the tripwire
-      # for putting one back.
+      # THE SIGNING KEY. Mount it, and this service signs licences itself the
+      # moment a customer activates - one press of Activate and they have a
+      # licence. That is what self-service costs, and it is worth being precise
+      # about the cost:
       #
-      # This service used to mount the private licence key read-only and mint
-      # licences with it during an activation. That put the one secret the whole
-      # scheme rests on - the thing that mints a valid licence for ANY Emby
-      # server, forever, with no revocation because the plugin checks offline -
-      # on a host with a port open to the internet. Every other control here was
-      # a wall around that one asset, and any single failure of any one of them
-      # lost it completely and silently.
+      #   the private key is loaded by the process that answers the internet. It
+      #   mints a valid licence for ANY Emby server, forever, and there is no
+      #   revocation - the plugin verifies offline and never calls home. So a
+      #   remote-code-execution bug here, a dependency compromise, or a stolen
+      #   admin session hands over the whole scheme, silently and permanently.
       #
-      # Signing now happens with `licencetool sign` on a machine of your
-      # choosing, from a file this service hands you at /admin/signing. The
-      # service refuses to start if LICENCE_SIGNING_KEY_PATH is still set - it
-      # does not ignore it - because a key that is still mounted is still
-      # stealable whether or not anything reads it. Delete it from this host.
+      # THE ALTERNATIVE IS STILL THERE AND STILL SUPPORTED: leave this mount and
+      # LICENCE_SIGNING_KEY_PATH out entirely, and licences are signed with
+      # `licencetool sign` on a machine that answers no requests, from a file
+      # /admin/signing hands you. Safer. Not instant.
+      #
+      # Mounted READ-ONLY and as a FILE rather than a directory, so nothing else
+      # beside it - a ledger, a backup, an editor's swap file - is inside the
+      # container at all. On the host it must be `chmod 600` and owned by uid
+      # 5678; the service refuses to start if any bit beyond the owner's is set:
+      #
+      #   sudo install -o 5678 -g 5678 -m 600 \
+      #     licence-signing-key.private.json /srv/emby-sso/secrets/
+      - /srv/emby-sso/secrets/licence-signing-key.private.json:/run/secrets/licence-signing-key.private.json:ro
 
       # The state: SQLite store, the ledger in the offline tool's format, and
       # the outbox of codes waiting to be sent.
@@ -155,6 +164,10 @@ services:
     environment:
       # --- required ---------------------------------------------------------
       LICENCE_DATA_DIR: /data
+
+      # Turns on self-service signing. Remove this line AND the key mount above
+      # to go back to signing offline; the service does not need it to run.
+      LICENCE_SIGNING_KEY_PATH: /run/secrets/licence-signing-key.private.json
 
       # The PUBLIC key or keys the plugin build trusts - one JWK, or a JSON
       # array of them. NOT a secret: it is the same value that is compiled into

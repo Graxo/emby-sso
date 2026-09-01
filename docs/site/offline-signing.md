@@ -2,7 +2,23 @@
 
 *This page is for the vendor, not for an operator installing the plugin.*
 
-## What changed, and why
+!!! info "This is the optional arrangement, not the default"
+
+    By default the licence service signs licences itself, the moment a customer
+    activates, so activation is self-service and takes one press of a button.
+    That requires the private key to be mounted into the service - and therefore
+    loaded by the process that answers the internet.
+
+    Everything on this page describes the alternative: **leave the key off the
+    server entirely**, and sign by hand somewhere that accepts no connections.
+    It is fully supported, it is what happens whenever
+    `LICENCE_SIGNING_KEY_PATH` is unset, and it is strictly safer. It is not
+    instant, which is why it is not the default.
+
+    Both use the same checks and the same file formats. Turning one into the
+    other is one environment variable and one volume.
+
+## Why it exists
 
 The licence service used to hold the private signing key and mint a licence
 during an activation. That put the one secret the whole scheme rests on — the

@@ -2,13 +2,20 @@
 
 Four steps: make a key, configure, start, sign a licence.
 
-**Two machines.** Keeping them apart is the point:
+**Activation is self-service.** A customer pastes their code, presses Activate
+once, and has a licence — because the service signs it for them. That means the
+signing key is mounted into the service, which is a deliberate trade:
 
-- **your machine** — holds the signing key, signs licences, accepts no connections
-- **the server** — runs the service. **No signing key on it.** It refuses to start if you give it one.
+> The private key mints a licence for **any** Emby server, forever, and there is
+> no revocation. On this host it is in the process that answers the internet, so
+> a break-in there takes the whole scheme with it, silently.
+>
+> The alternative is still supported and is one line of config away: leave the
+> key off the server, and sign at `/admin/signing` with `licencetool sign` on a
+> machine that answers no requests. Safer, not instant. See
+> [Signing licences offline](../../docs/site/offline-signing.md).
 
-Why: [Signing licences offline](../../docs/site/offline-signing.md). You do not
-need it to follow this page.
+You still generate the key on your own machine — step 1 — and copy it up.
 
 ---
 
@@ -104,26 +111,43 @@ real deployment.
 > Either way, backups come from `/admin/backup`, which does not care which you
 > picked.
 
-**And remove any signing key.** The service will not start while one is
-configured:
+**And copy the key up**, so the service can sign. From the machine that holds
+it:
 
 ```
-grep -rn LICENCE_SIGNING_KEY_PATH .          # compose file AND .env
+scp ~/emby-sso-licence/licence-signing-key.private.json you@server:/tmp/key.json
 ```
 
-Delete the variable, delete the volume line that mounts
-`licence-signing-key.private.json`, then delete the file:
+Then on the server, in one step so it is never briefly world-readable:
 
 ```
-rmdir licence-signing-key.private.json 2>/dev/null \
-  || shred -u licence-signing-key.private.json
+sudo mkdir -p /srv/emby-sso/secrets && sudo chmod 700 /srv/emby-sso/secrets
+sudo install -o 5678 -g 5678 -m 600 /tmp/key.json \
+  /srv/emby-sso/secrets/licence-signing-key.private.json
+shred -u /tmp/key.json
 ```
 
-(Docker creates a *directory* at a bind-mount source that does not exist, so
-after deleting the key you may find a stray directory with that name.)
+Add to the compose service:
 
-There is no `:latest` yet — it only exists once a `vX.Y.Z` release is tagged.
-Use `main`.
+```yaml
+    volumes:
+      - /srv/emby-sso/secrets/licence-signing-key.private.json:/run/secrets/licence-signing-key.private.json:ro
+      - licence-data:/data
+    environment:
+      LICENCE_SIGNING_KEY_PATH: /run/secrets/licence-signing-key.private.json
+```
+
+**The service refuses to start if any permission bit beyond the owner's is
+set.** That is deliberate and not fixed for you: a key that has been
+group-readable on a shared machine should be treated as leaked, not chmod-ed
+quietly.
+
+*Prefer to keep the key off the server?* Leave both of those out. Everything
+else works; activation queues instead of completing, and you sign at
+`/admin/signing`.
+
+There is no `:latest` until a `vX.Y.Z` release is tagged — use `main` before
+your first release.
 
 ---
 
@@ -170,10 +194,15 @@ docker compose logs -f licence
 **Working looks like:**
 
 ```
-THIS SERVICE CANNOT SIGN - no private key is loaded, by design.
+signing: AUTOMATIC with key <your key id> - the private key is loaded by this process
+signer: ON. Licences are signed automatically with key <your key id>, every 2s.
 Trusted licence keys: <your key id>
 admin page: on at /admin, ...
 ```
+
+Without the key mounted the first line reads `signing: off - this service cannot
+sign; licences are signed elsewhere and uploaded at /admin/signing`, which is
+the other supported arrangement and not an error.
 
 Check it: `curl -s https://<your host>/healthz` → `"trustedKeys":"<your key id>"`.
 That must be the key id from step 1.
@@ -184,7 +213,8 @@ It is misconfigured, and lists every problem at once:
 
 | It says | Fix |
 |---|---|
-| `LICENCE_SIGNING_KEY_PATH is set` | Step 2 — grep the `.env` too, not just the compose file |
+| `the signing key at ... is readable or writable by accounts other than its owner` | `sudo install -o 5678 -g 5678 -m 600` it, per step 2. Treat a key that was group-readable on a shared box as leaked |
+| `No signing key at ...` | The mount names a path that is not there. It must name the FILE, not the directory |
 | `LICENCE_PUBLIC_KEYS is not set` | Step 2 — the public JWK from step 1 |
 | `...carries PRIVATE key material` | You pasted the key *file*; it wants the printed public JWK |
 | `unable to open database file` | The message names the uid it is running as and whether the directory is writable. Easiest fix is a named volume (step 2); with a bind mount, `chown -R <that uid>` the **host** directory |
@@ -218,9 +248,9 @@ licence.
 
 ---
 
-## 4. Sign a licence
+## 4. Prove it end to end
 
-Do this once now on a test code, so the first time is not while somebody waits.
+Do this once now, so the first activation is not a customer's.
 
 **a. Make a code** — no payment involved. It prints once; copy it.
 
@@ -231,33 +261,20 @@ docker compose exec licence dotnet Emby.Sso.LicenceService.dll \
 
 **b. Redeem it** in Emby: plugin configuration → paste the code → **Activate**.
 
-You get *"Your licence has been requested and is being issued."* That is
-correct, not an error, and the code is not used up.
+It should say **Activated** within a few seconds. The service signs the licence
+as the request waits, so one press is enough.
 
-**c. Download it** — `/admin` → **Signing** → **Download**. The number beside
-*Signing* is how many people are waiting.
+**c. Check the licence area** now reads `Active until <date>` with the
+activation count beside it.
 
-**d. Sign it, on your machine:**
+### If it says "being issued" instead
 
-```
-cd ~/Downloads
-tools/Emby.Sso.LicenceTool/licencetool.sh sign \
-  --requests /work/emby-sso-signing-requests.json \
-  --key /keys/licence-signing-key.private.json
-```
+The request was recorded and the signer did not answer in time. Either it is not
+running — the startup log says `signing: off` — or it failed, and the log says
+so. Press Activate again; the code is not used up, and nothing is lost.
 
-**e. Upload** the `-signed.json` file on the same Signing page.
-
-**f. Press Activate again** in Emby → *Activated.*
-
-Then delete the signed file. Until it is uploaded it is the only copy of those
-licences; afterwards it is somebody else's credentials in your downloads.
-
-**If the upload is refused** with *"signed by a key this service does not
-trust"*: `LICENCE_PUBLIC_KEYS` on the server and the key you signed with are
-different. Compare `/healthz` with what `sign` printed.
-
----
+You can also sign by hand at any time, whether or not the signer is on:
+`/admin` → **Signing** → Download → `licencetool sign` → Upload.
 
 ## After that
 
@@ -267,7 +284,7 @@ different. Compare `/healthz` with what `sign` printed.
 | Look up one customer | `/admin` → find |
 | Stop a code working | `/admin` → Void. **It cannot recall a licence already issued** |
 | Give somebody a free licence | `issue-code`, then step 4 |
-| Sign what is waiting | Step 4, c–f |
+| Sign what is waiting | Nothing, if the signer is on. Otherwise `/admin` → Signing |
 | Take a backup | `/admin` → Backup. Keep it somewhere that is not this machine |
 | Read a backup back | `restore --in <file> --out <empty dir>` with the passphrase in force **when it was taken** |
 

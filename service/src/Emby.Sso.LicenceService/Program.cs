@@ -138,6 +138,15 @@ namespace Emby.Sso.LicenceService
 
                 return ConfigurationError;
             }
+            catch (SigningKeyFile.SigningKeyException ex)
+            {
+                // The loudest failure this service has. An operator who has
+                // asked it to sign, and whose key cannot be loaded, must not get
+                // a service that starts and quietly queues every activation.
+                Console.Error.WriteLine("REFUSING TO START. " + ex.Message);
+
+                return ConfigurationError;
+            }
 
             app.Run();
 
@@ -153,11 +162,21 @@ namespace Emby.Sso.LicenceService
             ServiceOptions options,
             Action<WebApplicationBuilder> configure)
         {
-            // THERE IS NO PRIVATE KEY HERE, and Problems() has already refused
-            // to start if the environment still names one. What this service
-            // holds is the PUBLIC half, used to check a licence somebody with the
-            // key signed elsewhere before it is stored. See Signing.SigningDesk.
+            // The PUBLIC keys, always: they are what checks a signed licence
+            // before it is stored, whoever signed it.
             var trusted = TrustedKeys.Parse(options.PublicKeys);
+
+            // The PRIVATE key, only when the operator has asked this service to
+            // sign for itself. That makes activation self-service and puts the
+            // key in the process that answers the internet; both halves of that
+            // are spelled out in Signing.SigningDaemon. With it unset, nothing
+            // here can sign and /admin/signing is how licences are made.
+            SigningKeyFile.SigningKey signingKey = null;
+
+            if (options.SignsItsOwnLicences)
+            {
+                signingKey = SigningKeyFile.Load(options.SigningKeyPath);
+            }
 
             var builder = WebApplication.CreateBuilder(Array.Empty<string>());
 
@@ -184,6 +203,14 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(options.RateLimit);
             builder.Services.AddSingleton(store);
             builder.Services.AddSingleton(trusted);
+
+            if (signingKey != null)
+            {
+                builder.Services.AddSingleton(signingKey);
+                builder.Services.AddSingleton<Signing.SigningDaemon>();
+                builder.Services.AddHostedService(provider => provider.GetRequiredService<Signing.SigningDaemon>());
+            }
+
             builder.Services.AddSingleton(new LicenceLedger(options.LedgerPath));
             builder.Services.AddSingleton<Signing.SigningDesk>();
             builder.Services.AddSingleton<Backup.BackupService>();
@@ -280,9 +307,12 @@ namespace Emby.Sso.LicenceService
             var log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Emby.Sso.LicenceService");
 
             log.LogInformation(
-                "THIS SERVICE CANNOT SIGN - no private key is loaded, by design. Trusted licence keys: {Keys}. "
+                "signing: {Signing}. Trusted licence keys: {Keys}. "
                 + "store {Store}; ledger {Ledger}; paypal {Env}; "
                 + "{Allowed} activations per code; {Days} day licences",
+                signingKey != null
+                    ? "AUTOMATIC with key " + signingKey.Thumbprint + " - the private key is loaded by this process"
+                    : "off - this service cannot sign; licences are signed elsewhere and uploaded at /admin/signing",
                 trusted.Describe(),
                 store.Path,
                 options.LedgerPath,
@@ -373,7 +403,9 @@ namespace Emby.Sso.LicenceService
                     return Error(context, ActivationError.MalformedRequest, "The request body is not JSON.", 400, TimeSpan.Zero);
                 }
 
-                var reply = activations.Activate(request, client);
+                var reply = await activations
+                    .ActivateAsync(request, client, context.RequestAborted)
+                    .ConfigureAwait(false);
 
                 if (reply.IsSuccess)
                 {
