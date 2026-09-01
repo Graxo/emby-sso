@@ -94,6 +94,15 @@ namespace Emby.Sso.Api
         /// outright, so the date is worth the line it costs.
         /// </summary>
         public string ExpiresUtc { get; set; }
+
+        /// <summary>
+        /// The activation allowance recorded at the last redemption. Both zero
+        /// when this licence was pasted in by hand rather than redeemed, and the
+        /// page then shows nothing rather than "0 of 0".
+        /// </summary>
+        public int ActivationsUsed { get; set; }
+
+        public int ActivationsAllowed { get; set; }
     }
 
     /// <summary>The answer to an Activate press.</summary>

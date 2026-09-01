@@ -72,6 +72,27 @@ namespace Emby.Sso.Configuration
         public string LicenceKey { get; set; } = string.Empty;
 
         /// <summary>
+        /// How many of the code's activations were used, and how many it allows,
+        /// as the licensing service reported them at the last successful
+        /// activation.
+        ///
+        /// STORED RATHER THAN ASKED FOR, because asking would mean a network
+        /// call to render a settings page - and the one thing this feature must
+        /// not do is put the vendor's service on any path but the Activate
+        /// button. See Api.ActivationService. It is therefore a snapshot: it is
+        /// right at the moment of activation and does not move afterwards, which
+        /// is exactly what an operator wants to know ("did this code have room
+        /// for this server?") and is not a live count of anything.
+        ///
+        /// Zero means no activation has been performed by this build - a licence
+        /// pasted in by hand carries no such numbers, because it never went
+        /// through a redemption.
+        /// </summary>
+        public int ActivationsUsed { get; set; }
+
+        public int ActivationsAllowed { get; set; }
+
+        /// <summary>
         /// An override for the vendor's activation service, for testing a
         /// service before it is live. Empty - the normal state - means
         /// <see cref="Protocol.ActivationEndpoint.DefaultServiceBase"/>, the

@@ -5,9 +5,9 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
 
     function showUrls(page, baseUrl) {
         var base = (baseUrl || '').replace(/[\/]+$/, '');
-        page.querySelector('#redirectUri').textContent = base + '/sso/callback';
-        page.querySelector('#startUrl').textContent = base + '/sso/start';
-        page.querySelector('#pinUrl').textContent = base + '/sso/pin';
+        page.querySelector('#redirectUri').value = base + '/sso/callback';
+        page.querySelector('#startUrl').value = base + '/sso/start';
+        page.querySelector('#pinUrl').value = base + '/sso/pin';
     }
 
     // Admin-only endpoint on this plugin's own service.
@@ -25,34 +25,43 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         var active = page.querySelector('#licenceActive');
         var inactive = page.querySelector('#licenceInactive');
 
-        function show(licensed, status, expires, serverId, buyUrl) {
+        function show(info) {
+            var licensed = info.Licensed === true;
+
             active.style.display = licensed ? '' : 'none';
             inactive.style.display = licensed ? 'none' : '';
 
-            page.querySelector('#licenceStatus').textContent = licensed
-                ? (expires ? status + ' until ' + expires : status)
-                : '';
+            var status = info.Status || 'Not activated';
+
+            page.querySelector('#licenceStatus').textContent = licensed && info.ExpiresUtc
+                ? status + ' until ' + info.ExpiresUtc
+                : status;
 
             page.querySelector('#licenceProblem').textContent = licensed ? '' : status;
-            page.querySelector('#serverId').textContent = serverId;
+            page.querySelector('#serverId').value = info.ServerId || '';
+
+            // The stored licence, shown read-only. Read from the hidden field
+            // rather than from the response: that field is what Save writes, so
+            // showing anything else would let the two disagree.
+            page.querySelector('#licenceKeyShown').value = page.querySelector('#licenceKey').value;
+
+            // Both zero means this licence was pasted in by hand rather than
+            // redeemed, so there is no allowance to report. "0 of 0" would look
+            // like an exhausted code, which is the opposite of the truth.
+            var allowed = info.ActivationsAllowed || 0;
+
+            page.querySelector('#activationsContainer').style.display = allowed > 0 ? '' : 'none';
+            page.querySelector('#activationsUsed').textContent =
+                (info.ActivationsUsed || 0) + ' / ' + allowed;
 
             // No buy button when there is no address to send anybody to - a
             // button that goes nowhere is worse than no button.
-            var buy = page.querySelector('#buyButton');
-
-            buy.dataset.url = buyUrl;
-            page.querySelector('#buyContainer').style.display = buyUrl ? '' : 'none';
+            page.querySelector('#buyButton').dataset.url = info.BuyUrl || '';
+            page.querySelector('#buyContainer').style.display = info.BuyUrl ? '' : 'none';
         }
 
-        ApiClient.getJSON(ApiClient.getUrl('sso/activation')).then(function (info) {
-            show(
-                info.Licensed === true,
-                info.Status || 'Not activated',
-                info.ExpiresUtc || '',
-                info.ServerId || '',
-                info.BuyUrl || '');
-        }, function () {
-            show(false, 'Not activated', '', '', '');
+        ApiClient.getJSON(ApiClient.getUrl('sso/activation')).then(show, function () {
+            show({});
         });
     }
 
@@ -112,7 +121,6 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#usernameClaim').value = config.UsernameClaim || 'preferred_username';
         page.querySelector('#enableDirectGrant').checked = config.EnableDirectGrant === true;
         page.querySelector('#enablePinSignIn').checked = config.EnablePinSignIn === true;
-        page.querySelector('#enableButtonInjection').checked = config.EnableButtonInjection === true;
         page.querySelector('#allowInsecureHttp').checked = config.AllowInsecureHttp === true;
         page.querySelector('#allowPrivateNetworkProvider').checked = config.AllowPrivateNetworkProvider === true;
         page.querySelector('#requiredGroup').value = config.RequiredGroup || '';
@@ -152,7 +160,12 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             config.UsernameClaim = form.querySelector('#usernameClaim').value.trim();
             config.EnableDirectGrant = form.querySelector('#enableDirectGrant').checked;
             config.EnablePinSignIn = form.querySelector('#enablePinSignIn').checked;
-            config.EnableButtonInjection = form.querySelector('#enableButtonInjection').checked;
+            // The sign-in button was a placeholder for something Emby's web
+            // client cannot render, so the checkbox is gone from the page.
+            // Written as false rather than left alone: a setting that can no
+            // longer be turned off must not stay on because somebody once
+            // ticked it.
+            config.EnableButtonInjection = false;
             config.AllowInsecureHttp = form.querySelector('#allowInsecureHttp').checked;
             config.AllowPrivateNetworkProvider = form.querySelector('#allowPrivateNetworkProvider').checked;
             config.RequiredGroup = form.querySelector('#requiredGroup').value.trim();
@@ -186,6 +199,53 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         // spend a moment pointing at nothing. noopener on the opened window: the
         // shop is another origin and has no business reaching back into the
         // dashboard through window.opener.
+        // One handler for all three copy buttons. navigator.clipboard needs a
+        // secure context, which the Emby dashboard over https is; the textarea
+        // fallback covers a dashboard reached over plain http, where the modern
+        // API is simply absent rather than failing.
+        Array.prototype.forEach.call(view.querySelectorAll('.copyButton'), function (button) {
+            button.addEventListener('click', function () {
+                var field = view.querySelector('#' + button.dataset.copy);
+                var result = view.querySelector('#copyResult');
+
+                function done(ok) {
+                    result.textContent = ok ? 'Copied.' : 'Could not copy - select the text instead.';
+                }
+
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(field.value).then(function () {
+                        done(true);
+                    }, function () {
+                        done(false);
+                    });
+
+                    return;
+                }
+
+                // A disabled input cannot be selected, so copy through a
+                // throwaway one rather than enabling the real field.
+                var scratch = document.createElement('textarea');
+
+                scratch.value = field.value;
+                scratch.setAttribute('readonly', '');
+                scratch.style.position = 'absolute';
+                scratch.style.left = '-9999px';
+                document.body.appendChild(scratch);
+                scratch.select();
+
+                var ok = false;
+
+                try {
+                    ok = document.execCommand('copy');
+                } catch (e) {
+                    ok = false;
+                }
+
+                document.body.removeChild(scratch);
+                done(ok);
+            });
+        });
+
         view.querySelector('#buyButton').addEventListener('click', function () {
             var url = this.dataset.url;
 

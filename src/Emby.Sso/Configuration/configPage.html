@@ -3,6 +3,120 @@
 
     <form class="auto-center" id="authentikSsoConfigForm">
 
+      <!-- ================================================ SERVER INFORMATION -->
+
+      <h2>Server information</h2>
+
+      <div class="inputContainer">
+        <label for="serverId">Server id</label>
+        <input is="emby-input" type="text" id="serverId" disabled />
+        <div class="fieldDescription">
+          A licence is issued for this id. Not secret.
+        </div>
+      </div>
+
+      <!-- =============================================== LICENCE INFORMATION -->
+
+      <h2>Licence information</h2>
+
+      <!-- NOT LICENSED. Everything needed to become licensed, and nothing else.
+           The buy button is here because a redemption code has to come from
+           somewhere; it hides itself when no shop address can be built. -->
+      <div id="licenceInactive" style="display: none;">
+        <div class="inputContainer">
+          <label>Licence</label>
+          <p id="licenceProblem" style="font-weight: 600;"></p>
+          <div class="fieldDescription">
+            Without a valid licence, new sign-ins are refused.
+          </div>
+        </div>
+
+        <div class="inputContainer" id="buyContainer">
+          <button is="emby-button" type="button" id="buyButton" class="raised block">
+            <span>Buy a licence</span>
+          </button>
+        </div>
+
+        <div class="inputContainer">
+          <label for="redemptionCode">Redemption code</label>
+          <input is="emby-input" type="text" id="redemptionCode" />
+          <div class="fieldDescription">
+            Paste your code, then press Activate.
+          </div>
+        </div>
+
+        <div class="inputContainer">
+          <button is="emby-button" type="button" id="activateButton" class="raised block">
+            <span>Activate</span>
+          </button>
+          <div class="fieldDescription" id="activationResult"></div>
+        </div>
+      </div>
+
+      <!-- LICENSED. The key is shown because an operator occasionally has to
+           hand it back to support, and disabled because editing it here is not
+           a thing anybody should do by accident. -->
+      <div id="licenceActive" style="display: none;">
+        <div class="inputContainer">
+          <label>Licence</label>
+          <p id="licenceStatus" style="font-weight: 600;"></p>
+        </div>
+
+        <div class="inputContainer">
+          <label for="licenceKeyShown">Licence key</label>
+          <input is="emby-input" type="text" id="licenceKeyShown" disabled />
+        </div>
+
+        <div class="inputContainer" id="activationsContainer">
+          <label>Activations used</label>
+          <p id="activationsUsed" style="font-family: monospace;"></p>
+          <div class="fieldDescription">
+            As reported when this server was activated.
+          </div>
+        </div>
+      </div>
+
+      <!-- THE REAL LICENCE FIELD, and it is never removed from the page - only
+           hidden. Save reads its value into the configuration, so a page that
+           dropped it would blank the licence of anybody who pressed Save. The
+           disabled field above is a display of the same value; a disabled input
+           is not submitted and cannot be relied on to carry it. -->
+      <input type="hidden" id="licenceKey" />
+
+      <!-- =================================================== URL INFORMATION -->
+
+      <h2>URLs</h2>
+
+      <div class="inputContainer">
+        <label for="redirectUri">Redirect URI to configure in Authentik</label>
+        <input is="emby-input" type="text" id="redirectUri" disabled />
+        <button is="emby-button" type="button" class="raised copyButton" data-copy="redirectUri">
+          <span>Copy</span>
+        </button>
+      </div>
+
+      <div class="inputContainer">
+        <label for="startUrl">Sign-in URL for users to bookmark</label>
+        <input is="emby-input" type="text" id="startUrl" disabled />
+        <button is="emby-button" type="button" class="raised copyButton" data-copy="startUrl">
+          <span>Copy</span>
+        </button>
+      </div>
+
+      <div class="inputContainer">
+        <label for="pinUrl">PIN URL for users to open on a phone or laptop</label>
+        <input is="emby-input" type="text" id="pinUrl" disabled />
+        <button is="emby-button" type="button" class="raised copyButton" data-copy="pinUrl">
+          <span>Copy</span>
+        </button>
+      </div>
+
+      <div class="fieldDescription" id="copyResult"></div>
+
+      <!-- ========================================================= SETTINGS -->
+
+      <h2>Settings</h2>
+
       <div class="inputContainer">
         <label for="issuerUrl">Issuer URL</label>
         <input is="emby-input" type="url" id="issuerUrl" required />
@@ -30,7 +144,7 @@
       </div>
 
       <div class="inputContainer">
-        <label for="embyPublicBaseUrl">Emby public base URL</label>
+        <label for="embyPublicBaseUrl">Emby public URL</label>
         <input is="emby-input" type="url" id="embyPublicBaseUrl" required />
         <div class="fieldDescription">
           The address your users reach this server on.
@@ -44,55 +158,6 @@
           Must be immutable and unique. preferred_username is safest.
         </div>
       </div>
-
-      <div class="checkboxContainer checkboxContainer-withDescription">
-        <label>
-          <input is="emby-checkbox" type="checkbox" id="enableDirectGrant" />
-          <span>Allow native apps to sign in with a password</span>
-        </label>
-        <div class="fieldDescription checkboxFieldDescription">
-          No multi-factor. Refused while plain HTTP is allowed.
-        </div>
-      </div>
-
-      <div class="checkboxContainer checkboxContainer-withDescription">
-        <label>
-          <input is="emby-checkbox" type="checkbox" id="enablePinSignIn" />
-          <span>Allow native apps to sign in with a one-time PIN</span>
-        </label>
-        <div class="fieldDescription checkboxFieldDescription">
-          Sign in on a TV using a browser-issued PIN.
-        </div>
-      </div>
-
-      <div class="checkboxContainer checkboxContainer-withDescription">
-        <label>
-          <input is="emby-checkbox" type="checkbox" id="enableButtonInjection" />
-          <span>Reserve a sign-in button on the login page (not yet supported by Emby's web client)</span>
-        </label>
-        <div class="fieldDescription checkboxFieldDescription">
-          Reserved. Emby&#39;s web client cannot render it yet.
-        </div>
-      </div>
-
-      <div class="checkboxContainer">
-        <label>
-          <input is="emby-checkbox" type="checkbox" id="allowInsecureHttp" />
-          <span>Allow plain HTTP (testing only) &mdash; this disables native password sign-in entirely</span>
-        </label>
-      </div>
-
-      <div class="checkboxContainer">
-        <label>
-          <input is="emby-checkbox" type="checkbox" id="allowPrivateNetworkProvider" />
-          <span>Allow an identity provider on a private or loopback address</span>
-        </label>
-        <div class="fieldDescription checkboxFieldDescription">
-          Only if your provider is on a private address.
-        </div>
-      </div>
-
-      <br />
 
       <div class="inputContainer">
         <label for="requiredGroup">Required group</label>
@@ -128,85 +193,41 @@
         </div>
       </div>
 
-      <br />
-
-      <!-- LICENSED: one line, and nothing else. An operator whose licence is
-           fine has nothing to do here, and should not have to read a screen of
-           fields to establish that. -->
-      <div class="inputContainer" id="licenceActive" style="display: none;">
-        <label>Licence</label>
-        <p id="licenceStatus" style="font-weight: 600;"></p>
+      <div class="checkboxContainer checkboxContainer-withDescription">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="enableDirectGrant" />
+          <span>Allow native apps to sign in with a password</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          No multi-factor. Refused while plain HTTP is allowed.
+        </div>
       </div>
 
-      <!-- NOT LICENSED: buy one, or redeem the code you were given. The licence
-           key field lives at the bottom, collapsed - it is the fallback for a
-           licence delivered by hand, not the normal path.
-
-           THAT FIELD IS NEVER REMOVED FROM THE PAGE, only hidden. Save reads
-           its value into the configuration, so a page that dropped it would
-           blank the licence of anybody who pressed Save while licensed. -->
-      <div id="licenceInactive" style="display: none;">
-        <div class="inputContainer">
-          <label>Licence</label>
-          <p id="licenceProblem" style="font-weight: 600;"></p>
-          <div class="fieldDescription">
-            Without a valid licence, new sign-ins are refused.
-          </div>
+      <div class="checkboxContainer checkboxContainer-withDescription">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="enablePinSignIn" />
+          <span>Allow native apps to sign in with a one-time PIN</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          Sign in on a TV using a browser-issued PIN.
         </div>
-
-        <div class="inputContainer" id="buyContainer">
-          <button is="emby-button" type="button" id="buyButton" class="raised block">
-            <span>Buy a licence</span>
-          </button>
-        </div>
-
-        <div class="inputContainer">
-          <label for="redemptionCode">Redemption code</label>
-          <input is="emby-input" type="text" id="redemptionCode" />
-          <div class="fieldDescription">
-            Paste your code, then press Activate.
-          </div>
-        </div>
-
-        <div class="inputContainer">
-          <button is="emby-button" type="button" id="activateButton" class="raised block">
-            <span>Activate</span>
-          </button>
-          <div class="fieldDescription" id="activationResult"></div>
-        </div>
-
-        <details style="margin-top: 1em;">
-          <summary>I already have a licence key</summary>
-
-          <div class="inputContainer">
-            <label for="licenceKey">Licence key</label>
-            <input is="emby-input" type="text" id="licenceKey" />
-          </div>
-
-          <div class="inputContainer">
-            <label>This server's id</label>
-            <p id="serverId" style="user-select: all; font-family: monospace;"></p>
-            <div class="fieldDescription">
-              A licence is issued for this id. Not secret.
-            </div>
-          </div>
-        </details>
       </div>
 
-
-      <div class="inputContainer">
-        <label>Redirect URI to configure in Authentik</label>
-        <p id="redirectUri" style="user-select: all; font-family: monospace;"></p>
+      <div class="checkboxContainer">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="allowInsecureHttp" />
+          <span>Allow plain HTTP (testing only) &mdash; this disables native password sign-in entirely</span>
+        </label>
       </div>
 
-      <div class="inputContainer">
-        <label>Sign-in URL for users to bookmark</label>
-        <p id="startUrl" style="user-select: all; font-family: monospace;"></p>
-      </div>
-
-      <div class="inputContainer">
-        <label>PIN URL for users to open on a phone or laptop</label>
-        <p id="pinUrl" style="user-select: all; font-family: monospace;"></p>
+      <div class="checkboxContainer checkboxContainer-withDescription">
+        <label>
+          <input is="emby-checkbox" type="checkbox" id="allowPrivateNetworkProvider" />
+          <span>Allow an identity provider on a private network</span>
+        </label>
+        <div class="fieldDescription checkboxFieldDescription">
+          Only if your provider is on a private address.
+        </div>
       </div>
 
       <div>

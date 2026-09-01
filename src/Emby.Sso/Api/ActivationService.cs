@@ -63,6 +63,8 @@ namespace Emby.Sso.Api
                 BuyUrl = SsoRuntime.BuyUrl() ?? string.Empty,
                 Licensed = licensed,
                 Status = Describe(status.Outcome),
+                ActivationsUsed = configuration?.ActivationsUsed ?? 0,
+                ActivationsAllowed = configuration?.ActivationsAllowed ?? 0,
                 ExpiresUtc = licensed && status.ExpiresAt.HasValue
                     ? status.ExpiresAt.Value.UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
                     : string.Empty,
@@ -158,7 +160,7 @@ namespace Emby.Sso.Api
             // Only here, past ActivationResult.Succeeded - which is only ever
             // true for a licence ActivationClient already verified against this
             // build's embedded public key and this server's own id.
-            var stored = Store(result.Licence);
+            var stored = Store(result.Licence, result.ActivationsUsed, result.ActivationsAllowed);
 
             if (!stored)
             {
@@ -210,7 +212,7 @@ namespace Emby.Sso.Api
         /// 4.9.5.0). False when it threw - the licence is then NOT stored and
         /// the caller must not claim it was.
         /// </summary>
-        private bool Store(string licence)
+        private bool Store(string licence, int? used, int? allowed)
         {
             var plugin = Plugin.Instance;
 
@@ -224,6 +226,16 @@ namespace Emby.Sso.Api
             try
             {
                 plugin.Configuration.LicenceKey = licence;
+
+                // Only when the service actually said. A null here means it did
+                // not report them, and overwriting a previous, real pair with
+                // zeroes would turn "2 of 3" into "0 of 0" for no reason.
+                if (used.HasValue && allowed.HasValue)
+                {
+                    plugin.Configuration.ActivationsUsed = used.Value;
+                    plugin.Configuration.ActivationsAllowed = allowed.Value;
+                }
+
                 plugin.SaveConfiguration();
 
                 return true;
