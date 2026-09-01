@@ -294,46 +294,73 @@ service-image:
       for tag in $TAGS; do
         echo "service-image: will push $IMAGE:$tag"
       done
-    # THE REGISTRY'S CA. Kaniko runs in its own scratch image and trusts only
-    # the public roots baked into it, so a registry whose certificate comes from
-    # an internal CA - which is what registry.koper.local is - fails the push
-    # with "certificate signed by unknown authority". It then retries over plain
-    # HTTP and gets nginx's "400 The plain HTTP request was sent to HTTPS port",
-    # which is the confusing half of that error and not the cause.
+    # THE REGISTRY'S CA, and the one deliberate compromise in this file.
     #
-    # The fix is to give kaniko the CA, NOT to turn verification off. There is a
-    # --skip-tls-verify flag; using it would mean this job pushes the licence
-    # service image to whatever answers on that address, which is not a trade
-    # worth making to save one CI variable.
+    # registry.koper.local:5050 presents a single certificate, CN=*.koper.local,
+    # issued by a private "Homelab Root CA" and sent with no chain at all.
+    # Kaniko runs in a scratch image trusting only the public roots baked into
+    # it, so the push fails with "certificate signed by unknown authority",
+    # followed by nginx's "400 The plain HTTP request was sent to HTTPS port" -
+    # which is kaniko retrying in cleartext, and is NOT a second fault.
     #
-    # Two sources, either or both:
-    #   REGISTRY_CA_PEM       a CI/CD variable holding the PEM. Set this one.
-    #   CI_SERVER_TLS_CA_FILE the runner's own CA, present when the runner was
-    #                         configured with tls-ca-file. Free when it exists.
+    # TWO MODES, chosen by one variable:
+    #
+    #   REGISTRY_CA_PEM set   The certificate is verified against it. This is
+    #                         the mode to be in. On the runner host Ansible
+    #                         places that CA at
+    #                         /usr/local/share/ca-certificates/ca.crt.
+    #
+    #   not set               TLS is still used and the certificate is NOT
+    #                         verified, for this ONE registry. Say plainly what
+    #                         that costs: the image this job pushes is what the
+    #                         production host later pulls, so anyone able to
+    #                         intercept traffic to that address on the internal
+    #                         network could substitute it. It is the same trade
+    #                         the client-portal pipeline already makes with
+    #                         `--insecure-registry`, and it is one variable away
+    #                         from not being made.
+    #
+    # --skip-tls-verify-registry rather than --insecure-registry: it keeps HTTPS
+    # and drops only the verification, where the docker flag also permits a
+    # fallback to plain HTTP. And it names ONE registry, so nothing else this
+    # job talks to - including wherever the base images come from - loses
+    # verification along with it.
+    #
+    # THE SWITCH IS NOT "is the bundle non-empty". A run with the runner's own
+    # CI_SERVER_TLS_CA_FILE in the bundle failed exactly like a run with nothing
+    # in it, because that is the CA for gitlab.koper.cloud and not the one that
+    # issued the registry's certificate. Supplying the WRONG CA looks identical
+    # to supplying none, so the mode hangs on the operator's explicit variable
+    # and not on a guess about what happened to be lying around.
     - |
       BUNDLE=/kaniko/ssl/certs/additional-ca-cert-bundle.crt
       mkdir -p "$(dirname "$BUNDLE")"
       : > "$BUNDLE"
+      REGISTRY_TLS=""
 
       if [ -n "${REGISTRY_CA_PEM:-}" ]; then
         printf '%s\n' "$REGISTRY_CA_PEM" >> "$BUNDLE"
-        echo "service-image: added REGISTRY_CA_PEM to kaniko's trust store"
+        echo "service-image: verifying $CI_REGISTRY against REGISTRY_CA_PEM"
+      else
+        REGISTRY_TLS="--skip-tls-verify-registry=$CI_REGISTRY"
+
+        echo "service-image: WARNING - pushing to $CI_REGISTRY WITHOUT verifying its" >&2
+        echo "  certificate. The connection is still TLS; nothing checks who is on the" >&2
+        echo "  other end of it, so whoever can intercept that traffic can replace the" >&2
+        echo "  image the production host pulls." >&2
+        echo "" >&2
+        echo "  TO FIX IT, on the runner host:" >&2
+        echo "    cat /usr/local/share/ca-certificates/ca.crt" >&2
+        echo "  and put that PEM in a CI/CD variable named REGISTRY_CA_PEM (Settings ->" >&2
+        echo "  CI/CD -> Variables; protected yes, masked NO - a CA certificate is public," >&2
+        echo "  and masking mangles the line breaks). This job then verifies instead," >&2
+        echo "  with no other change." >&2
       fi
 
+      # Free when the runner has one, and harmless when it is for something
+      # else: it goes into the trust store, but it does not decide the mode.
       if [ -n "${CI_SERVER_TLS_CA_FILE:-}" ] && [ -s "${CI_SERVER_TLS_CA_FILE}" ]; then
         cat "$CI_SERVER_TLS_CA_FILE" >> "$BUNDLE"
-        echo "service-image: added the runner's CI_SERVER_TLS_CA_FILE to kaniko's trust store"
-      fi
-
-      if [ ! -s "$BUNDLE" ]; then
-        echo "service-image: no extra CA was supplied. If $CI_REGISTRY uses an internal" >&2
-        echo "  certificate authority, the push below will fail with 'certificate signed by" >&2
-        echo "  unknown authority' followed by a 400 from nginx." >&2
-        echo "  THE FIX: on the registry host, take the issuing CA certificate and add it as a" >&2
-        echo "  CI/CD variable named REGISTRY_CA_PEM (Settings -> CI/CD -> Variables; type" >&2
-        echo "  File is fine, protected yes, masked no - a CA certificate is not a secret)." >&2
-        echo "  It is the CA, not the server certificate: openssl s_client -showcerts" >&2
-        echo "  -connect ${CI_REGISTRY} </dev/null prints the chain it presents." >&2
       fi
     # CI_JOB_TOKEN can push to this project's own registry and expires with the
     # job. No long-lived credential is stored anywhere for the push side; the
@@ -370,6 +397,7 @@ service-image:
         --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
         --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
         --label "org.opencontainers.image.version=$PRIMARY_TAG" \
+        $REGISTRY_TLS \
         $DESTINATIONS \
       || {
         status=$?
@@ -377,20 +405,18 @@ service-image:
         echo "" >&2
         echo "service-image: kaniko failed (exit $status)." >&2
 
-        if [ -s "$BUNDLE" ]; then
-          echo "  A CA bundle WAS supplied, so if the error above says 'certificate signed by" >&2
+        if [ -n "${REGISTRY_CA_PEM:-}" ]; then
+          echo "  REGISTRY_CA_PEM is set, so if the error above says 'certificate signed by" >&2
           echo "  unknown authority', the certificate in it is not the one that issued" >&2
           echo "  $CI_REGISTRY's. Adding the wrong CA looks exactly like adding none." >&2
-          echo "" >&2
-          echo "  What is in the bundle this job used:" >&2
-          awk "/BEGIN CERT/{c++} END{print \"    \" c+0 \" certificate(s)\"}" "$BUNDLE" >&2
           echo "" >&2
           echo "  What the registry actually presents, from a host that can reach it:" >&2
           echo "    openssl s_client -showcerts -connect $CI_REGISTRY </dev/null 2>/dev/null \\" >&2
           echo "      | openssl x509 -noout -subject -issuer" >&2
           echo "" >&2
           echo "  Put the certificate named by that ISSUER line - the CA, not the server" >&2
-          echo "  certificate - in the REGISTRY_CA_PEM CI/CD variable." >&2
+          echo "  certificate - in REGISTRY_CA_PEM. Unsetting it falls back to pushing" >&2
+          echo "  without verification, which works but is not somewhere to stay." >&2
         fi
 
         exit "$status"
