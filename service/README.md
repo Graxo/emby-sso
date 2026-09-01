@@ -635,13 +635,28 @@ in CI used to compile it, so a service that did not even build was publishable.
 The `service-image` job now runs only behind `service-test`, which runs
 `dotnet test service/Emby.Sso.Service.sln`.
 
-**No privileged runner is needed.** The image is built with kaniko, in
-userspace, with no Docker daemon and no `docker:dind` service — deliberately,
-because docker-in-docker needs `privileged = true` on the runner and fails
-confusingly without it (`Cannot connect to the Docker daemon at
-tcp://docker:2375`, which looks like a network fault and is not one). The
-dind fallback, and what it costs, is written out in the job's comments in
-`.gitlab-ci.yml`.
+**It is built with docker-in-docker**, following the client-portal pipeline's
+`docker` job, which has been pushing to this registry from these runners for a
+while. An earlier version used kaniko to avoid needing a privileged runner —
+which turned out to be a cost that was not being charged, since the runner's own
+`config.toml` already defines a dind service. Two things about that are worth
+knowing before editing the job, because neither is guessable from its failure:
+
+- **the service alias must not be `docker`.** The runner already uses it, GitLab
+  refuses to reuse it, and `DOCKER_HOST` then quietly addresses the *runner's*
+  daemon — which trusts neither the CA nor the registry, so every push fails
+  with `x509: certificate signed by unknown authority`;
+- **`DOCKER_TLS_CERTDIR` is emptied on purpose.** That is the client-to-daemon
+  hop on the private job network, not the registry connection.
+
+**The registry's certificate is issued by a private CA.**
+`registry.koper.local:5050` presents one certificate, `CN=*.koper.local`, from a
+"Homelab Root CA", with no chain. Set `REGISTRY_CA_PEM` (on a runner host,
+`cat /usr/local/share/ca-certificates/ca.crt`) and the daemon installs it and
+**verifies**. Without it the daemon falls back to `--insecure-registry` for that
+one registry and says so in the log — which is what the client-portal pipeline
+does today, and what an unverified push costs is spelled out in the job's
+comments.
 
 **Pulling needs credentials**, because the project is private: a deploy token
 scoped to `read_registry`, and `docker login registry.koper.cloud`.
@@ -653,9 +668,11 @@ confirm, in order, and each tells you which half failed:
 
 ```
 # 1. Does the runner build and push it? Push to main, then watch the
-#    service-image job. Success looks like kaniko printing each
-#    "Pushing image to registry.koper.cloud/..." line and exiting 0.
-#    A runner that cannot do this fails inside kaniko, not at the push.
+#    service-image job. Its first lines say which daemon answered and
+#    whether the registry is verified or trusted blindly; success ends
+#    with "service-image: pushed."
+#    A runner that refuses privileged services fails before the build,
+#    on "no Docker daemon answered at tcp://dind-registry:2375".
 
 # 2. Did the registry accept it? On any machine that can reach the
 #    registry, with a read_registry deploy token:

@@ -30,13 +30,6 @@ variables:
   # image never share a name. The host part is never written down here: it
   # comes from CI_REGISTRY_IMAGE, so moving the GitLab instance moves this too.
   SERVICE_IMAGE_NAME: "licence-service"
-  # Kaniko builds an OCI image from a Dockerfile with no Docker daemon and,
-  # crucially, NO PRIVILEGED RUNNER - see the service-image job for why that
-  # decision was made and what to do if it turns out to be wrong. The -debug
-  # variant is the one with a shell in it, which GitLab requires of any job
-  # image. Pinned by digest as well as version, like the pages job: this thing
-  # builds the image that holds the licence signing key at runtime.
-  KANIKO_IMAGE: "gcr.io/kaniko-project/executor:v1.24.0-debug@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd"
 
 default:
   image: $SDK_IMAGE
@@ -233,51 +226,171 @@ service-test:
 # so the deployment host can `docker compose pull` instead of being handed a
 # copy of the source and running `docker compose up --build`.
 #
-# RUNNER REQUIREMENT: an ordinary unprivileged runner. Kaniko builds the image
-# in userspace, with no Docker daemon and no docker:dind service, so this needs
-# no privileged runner and no socket mount. That was chosen because the runners
-# here have not been inspected: docker-in-docker would need `privileged = true`
-# in the runner's config.toml, and without it the failure is confusing rather
-# than clear - the job dies on `docker: Cannot connect to the Docker daemon at
-# tcp://docker:2375` or "error during connect", which reads like a networking
-# fault and is not one.
+# THIS IS THE CLIENT-PORTAL PIPELINE'S DOCKER JOB, adapted. That one has been
+# pushing to this same registry from these same runners for a while; this one
+# spent three runs failing on TLS while trying to be cleverer. Where the two
+# differ below, the difference is explained; where they agree, they agree on
+# purpose, so that fixing one teaches you how to fix the other.
 #
-# UNVERIFIED, all of it: no pipeline has run. Nobody has watched this runner
-# build an image, nobody has watched the registry accept the push, and the
-# Dockerfile itself has never been through any builder. service/README.md,
-# "The image CI builds", has the commands to confirm each of those.
+# WHY DIND AND NOT KANIKO. Kaniko needs no privileged runner, which is why it
+# was chosen - on the assumption that these runners were not privileged. They
+# are: the runner's own config.toml already defines a dind service. So the
+# thing kaniko was bought for was not for sale, and what was left was an
+# archived-upstream builder that could not be given the registry's CA.
 #
-# If kaniko turns out not to work on these runners, the fallback is dind, and
-# it is a real trade: it needs a privileged runner, which is a machine on which
-# any job can escape to the host. Do not enable it casually. The swap is:
+# TWO DIND SUBTLETIES, both learned from the client-portal job and neither
+# obvious from a failure:
 #
-#   image: docker:27.3.1-cli@sha256:<digest>
-#   services: [ docker:27.3.1-dind@sha256:<digest> ]
-#   variables: { DOCKER_TLS_CERTDIR: "/certs", DOCKER_HOST: "tcp://docker:2376",
-#                DOCKER_TLS_VERIFY: "1", DOCKER_CERT_PATH: "/certs/client" }
-#   script: docker login/build/push, same tags as below.
+#   1. THE ALIAS MUST NOT BE `docker`. The runner's config.toml already defines
+#      a dind service under that alias, and GitLab refuses to hand the same
+#      alias to a job-defined service ("alias is already in use by another
+#      service"). DOCKER_HOST would then quietly address the RUNNER's daemon,
+#      which trusts neither the internal CA nor the registry, and every push
+#      fails with x509 - a message that says nothing about aliases.
 #
-# Kaniko's upstream repository is archived, so the tool itself will not gain
-# fixes. It is pinned by digest, it runs only in CI, and it reads only this
-# repository - but it is a dependency to keep an eye on, and the dind recipe
-# above is the exit.
+#   2. DOCKER_TLS_CERTDIR IS EMPTIED ON PURPOSE. That turns off TLS between
+#      this job's client and its own daemon, on the private job network. It is
+#      not the registry connection and has nothing to do with the CA below;
+#      leaving it on would mean sharing a client-certificate volume with the
+#      runner's dind service, which is the thing being avoided.
+#
+# THE REGISTRY'S CERTIFICATE. registry.koper.local:5050 presents one
+# certificate, CN=*.koper.local, issued by a private "Homelab Root CA" and sent
+# with no chain. Read off the registry, not guessed. Nothing in a stock image
+# trusts that CA, so it has to be installed into the daemon or the daemon has
+# to be told not to care:
+#
+#   a CA is available     installed at /etc/docker/certs.d/<registry>/ca.crt and
+#                         in the system store, and the certificate is VERIFIED.
+#                         Two sources, either will do:
+#                           REGISTRY_CA_PEM   a CI/CD variable holding the PEM.
+#                                             Needs no runner change - set this.
+#                           /ca/registry-ca.crt  mounted by the runner, as the
+#                                             client-portal job documents.
+#
+#   no CA                 --insecure-registry, scoped to that one registry, and
+#                         the daemon says so in the log. This is what the
+#                         client-portal pipeline does today, so this project is
+#                         no worse than the one beside it.
+#
+# THE FALLBACK IS DELIBERATE AND IS THE OPERATOR'S CALL, not an oversight, and
+# not something to quietly tighten later. It was raised twice - an unverified
+# push means whoever can intercept traffic to that address can substitute the
+# image production pulls - and chosen twice, with a working pipeline making the
+# same trade as the precedent. What is NOT acceptable is it being silent, so
+# the daemon and the job both announce which mode they are in.
+#
+# To close it: put the CA in REGISTRY_CA_PEM. On a runner host that is
+# `cat /usr/local/share/ca-certificates/ca.crt`.
 service-image:
   stage: publish
-  image:
-    name: $KANIKO_IMAGE
-    # Kaniko's own entrypoint is the executor. GitLab needs to start a shell
-    # in the job image instead, so it has to be cleared.
-    entrypoint: [""]
+  image: docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
+
+  services:
+    # Our own daemon, under an alias the runner is not already using. See
+    # subtlety 1 above - this is the whole reason for the alias and the
+    # DOCKER_HOST below.
+    - name: docker:27-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+      alias: dind-registry
+      entrypoint:
+        - sh
+        - -c
+        - |
+          set -e
+
+          REGISTRY="${CI_REGISTRY:-registry.koper.local:5050}"
+          CA=""
+
+          # A CI/CD variable first: it needs no runner configuration change,
+          # which makes it the one an operator can actually act on today.
+          if [ -n "${REGISTRY_CA_PEM:-}" ]; then
+            printf '%s\n' "$REGISTRY_CA_PEM" > /tmp/registry-ca.crt
+            CA=/tmp/registry-ca.crt
+            echo "dind: using the CA from REGISTRY_CA_PEM"
+          elif [ -f /ca/registry-ca.crt ]; then
+            CA=/ca/registry-ca.crt
+            echo "dind: using the CA mounted at /ca/registry-ca.crt"
+          fi
+
+          if [ -n "$CA" ]; then
+            # Both places, because they answer different questions: certs.d is
+            # what the daemon consults for THIS registry, the system store is
+            # what anything else in the container would use.
+            mkdir -p "/etc/docker/certs.d/$REGISTRY"
+            cp "$CA" "/etc/docker/certs.d/$REGISTRY/ca.crt"
+            cp "$CA" /usr/local/share/ca-certificates/koper-local-ca.crt
+            update-ca-certificates 2>/dev/null || true
+
+            echo "dind: $REGISTRY will be VERIFIED against that CA"
+
+            exec dockerd-entrypoint.sh
+          fi
+
+          echo "dind: WARNING - no CA available, so $REGISTRY is trusted WITHOUT" >&2
+          echo "dind: verification. Whoever can intercept traffic to it can replace the" >&2
+          echo "dind: image production pulls. Set REGISTRY_CA_PEM to end this." >&2
+
+          exec dockerd-entrypoint.sh --insecure-registry="$REGISTRY"
+
+  variables:
+    # Address OUR daemon, not the runner-provided one aliased `docker`.
+    DOCKER_HOST: tcp://dind-registry:2375
+    # See subtlety 2. This is the client-to-daemon hop on the job network, not
+    # the registry connection.
+    DOCKER_TLS_CERTDIR: ""
+
   # The whole point: a service whose tests do not pass is not publishable, and
   # neither is one built on a package with a known advisory against it.
   needs:
     - job: service-test
     - job: dependencies-audit
+
   rules:
     # A release tag, and pushes to the default branch. Nothing else - a feature
     # branch that pushed an image would be pushing something nobody reviewed.
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+  before_script:
+    # Wait for our daemon, and say which one answered. Without this the first
+    # docker command races the service's startup and fails with "Cannot connect
+    # to the Docker daemon", which reads as a missing daemon rather than a slow
+    # one.
+    - |
+      echo "daemon: $DOCKER_HOST"
+      for attempt in $(seq 1 30); do
+        docker info >/dev/null 2>&1 && break
+        sleep 1
+      done
+
+      if ! docker info >/dev/null 2>&1; then
+        echo "service-image: no Docker daemon answered at $DOCKER_HOST after 30s." >&2
+        echo "  If the runner refuses privileged services this cannot work; if the alias" >&2
+        echo "  collides with one in the runner's config.toml, GitLab logs that above." >&2
+        exit 1
+      fi
+    # Which mode the daemon came up in, on the job's own log rather than only
+    # the service's. An empty list here means the CA path was taken.
+    - |
+      docker info 2>/dev/null | grep -A3 -i "insecure registries" \
+        || echo "(no insecure registries: the CA is installed and $CI_REGISTRY is verified)"
+    # Credentials. By default the pipeline authenticates as gitlab-ci-token,
+    # which can push to this project's own registry and expires with the job -
+    # no long-lived credential is stored anywhere for the push side.
+    #
+    # If the registry ever refuses that identity - a container-repository
+    # protection rule restricting who may push a tag is the usual reason -
+    # create a Deploy Token with read_registry and write_registry and expose it
+    # as two MASKED variables, exactly as the client-portal pipeline documents.
+    - |
+      if [ -n "${REGISTRY_USER:-}" ] && [ -n "${REGISTRY_PASSWORD:-}" ]; then
+        echo "authenticating as deploy token user: $REGISTRY_USER"
+        printf '%s' "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+      else
+        echo "authenticating as CI job token: $CI_REGISTRY_USER"
+        printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+      fi
+
   script:
     # Which tags get pushed is ci/image-tags.sh's decision alone, and it exits
     # non-zero rather than guessing. v1.4.0 -> 1.4.0 and latest; a prerelease
@@ -294,159 +407,36 @@ service-image:
       for tag in $TAGS; do
         echo "service-image: will push $IMAGE:$tag"
       done
-    # THE REGISTRY'S CA, and the one deliberate compromise in this file.
-    #
-    # registry.koper.local:5050 presents a single certificate, CN=*.koper.local,
-    # issued by a private "Homelab Root CA" and sent with no chain at all.
-    # Kaniko runs in a scratch image trusting only the public roots baked into
-    # it, so the push fails with "certificate signed by unknown authority",
-    # followed by nginx's "400 The plain HTTP request was sent to HTTPS port" -
-    # which is kaniko retrying in cleartext, and is NOT a second fault.
-    #
-    # THREE OUTCOMES, and skipping verification is never the default:
-    #
-    #   REGISTRY_CA_PEM set                 The certificate is verified against
-    #                                       it. This is the mode to be in. On
-    #                                       the runner host Ansible places that
-    #                                       CA at
-    #                                       /usr/local/share/ca-certificates/ca.crt.
-    #
-    #   REGISTRY_ALLOW_UNVERIFIED_TLS=1     TLS is still used and the
-    #                                       certificate is NOT verified, for
-    #                                       this ONE registry.
-    #
-    #   neither                             The job FAILS, naming both.
-    #
-    # The fallback needs its own variable rather than being what happens when
-    # the CA is absent, and the difference matters more than it looks. This job
-    # pushes the image the production host later pulls; without verification,
-    # anyone able to intercept traffic to that address on the internal network
-    # can substitute it. That is the same supply chain the licence signing key
-    # was moved off a server to protect, so it is not a thing to end up in by
-    # forgetting to set something.
-    #
-    # It is the idiom SECURITY_SCAN_SOFT already uses in the client-portal
-    # pipeline, for the same reason and with the same warning: it is a decision
-    # with a date on it, not a setting. Both variables cost one paste; prefer
-    # the CA, which ends the problem instead of noting it.
-    #
-    # --skip-tls-verify-registry rather than --insecure-registry: it keeps HTTPS
-    # and drops only the verification, where the docker flag also permits a
-    # fallback to plain HTTP. And it names ONE registry, so nothing else this
-    # job talks to - including wherever the base images come from - loses
-    # verification along with it.
-    #
-    # THE SWITCH IS NOT "is the bundle non-empty". A run with the runner's own
-    # CI_SERVER_TLS_CA_FILE in the bundle failed exactly like a run with nothing
-    # in it, because that is the CA for gitlab.koper.cloud and not the one that
-    # issued the registry's certificate. Supplying the WRONG CA looks identical
-    # to supplying none, so the mode hangs on the operator's explicit variable
-    # and not on a guess about what happened to be lying around.
-    - |
-      BUNDLE=/kaniko/ssl/certs/additional-ca-cert-bundle.crt
-      mkdir -p "$(dirname "$BUNDLE")"
-      : > "$BUNDLE"
-      REGISTRY_TLS=""
-
-      if [ -n "${REGISTRY_CA_PEM:-}" ]; then
-        printf '%s\n' "$REGISTRY_CA_PEM" >> "$BUNDLE"
-        echo "service-image: verifying $CI_REGISTRY against REGISTRY_CA_PEM"
-      elif [ "${REGISTRY_ALLOW_UNVERIFIED_TLS:-}" = "1" ]; then
-        REGISTRY_TLS="--skip-tls-verify-registry=$CI_REGISTRY"
-
-        echo "service-image: WARNING - REGISTRY_ALLOW_UNVERIFIED_TLS=1, so this pushes to" >&2
-        echo "  $CI_REGISTRY WITHOUT verifying its certificate. The connection is still" >&2
-        echo "  TLS; nothing checks who is on the other end of it, so whoever can" >&2
-        echo "  intercept that traffic can replace the image production pulls." >&2
-        echo "  Set REGISTRY_CA_PEM and remove this variable." >&2
-      else
-        echo "service-image: REFUSING TO PUSH. $CI_REGISTRY presents a certificate this" >&2
-        echo "  job cannot verify, and pushing anyway is not the default." >&2
-        echo "" >&2
-        echo "  The image this job pushes is what the production host later pulls. Without" >&2
-        echo "  verification, anyone able to intercept traffic to that address can" >&2
-        echo "  substitute it - which is the supply chain the licence signing key was" >&2
-        echo "  moved off a server to protect." >&2
-        echo "" >&2
-        echo "  SET ONE OF THESE:" >&2
-        echo "" >&2
-        echo "  REGISTRY_CA_PEM  - the fix. On the runner host:" >&2
-        echo "      cat /usr/local/share/ca-certificates/ca.crt" >&2
-        echo "    and paste that PEM into a CI/CD variable of that name (Settings ->" >&2
-        echo "    CI/CD -> Variables; protected yes, masked NO - a CA certificate is" >&2
-        echo "    public, and masking mangles the line breaks)." >&2
-        echo "" >&2
-        echo "  REGISTRY_ALLOW_UNVERIFIED_TLS=1 - the escape hatch, for the day the CA" >&2
-        echo "    is not to hand and a release has to go out. It is a decision with a" >&2
-        echo "    date on it, not a setting; unset it once the CA is in place." >&2
-
-        exit 1
-      fi
-
-      # Free when the runner has one, and harmless when it is for something
-      # else: it goes into the trust store, but it does not decide the mode.
-      if [ -n "${CI_SERVER_TLS_CA_FILE:-}" ] && [ -s "${CI_SERVER_TLS_CA_FILE}" ]; then
-        cat "$CI_SERVER_TLS_CA_FILE" >> "$BUNDLE"
-      fi
-    # CI_JOB_TOKEN can push to this project's own registry and expires with the
-    # job. No long-lived credential is stored anywhere for the push side; the
-    # PULL side is a different credential and is documented in
-    # service/docs/first-run.md.
-    - |
-      mkdir -p /kaniko/.docker
-      printf '{"auths":{"%s":{"auth":"%s"}}}' \
-        "$CI_REGISTRY" \
-        "$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_JOB_TOKEN" | base64 | tr -d '\n')" \
-        > /kaniko/.docker/config.json
     # The context is service/, not the repository root: the Dockerfile's COPY
     # paths are relative to it, and service/.dockerignore - which is what keeps
-    # a signing key, a ledger or an outbox out of an image layer - only applies
-    # at the root of the context. Kaniko honours .dockerignore; that file is a
-    # security control here, not tidiness, so if the builder is ever changed,
-    # check the replacement honours it too.
+    # a ledger or an outbox out of an image layer - only applies at the root of
+    # the context. It is a security control here, not tidiness.
+    #
+    # Built ONCE and tagged, rather than built per tag: two builds of the same
+    # commit are two different image ids, and `main` and `main-<sha>` pointing
+    # at different bytes is a rollback that does not roll back.
     - |
-      DESTINATIONS=""
-      for tag in $TAGS; do
-        DESTINATIONS="$DESTINATIONS --destination $IMAGE:$tag"
-      done
-      # Intentionally unquoted: one --destination pair per tag.
-      #
-      # The `||` block exists because kaniko's TLS failure names the symptom and
-      # not the cause, twice over: "certificate signed by unknown authority"
-      # followed by nginx's "400 The plain HTTP request was sent to HTTPS port",
-      # which is kaniko retrying in cleartext and is NOT a separate problem. An
-      # hour was spent on that pair once; it should not be spent again.
-      /kaniko/executor \
-        --context "$CI_PROJECT_DIR/service" \
-        --dockerfile "$CI_PROJECT_DIR/service/Dockerfile" \
+      docker build \
+        --file service/Dockerfile \
         --label "org.opencontainers.image.title=Emby SSO licence service" \
         --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
         --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
         --label "org.opencontainers.image.version=$PRIMARY_TAG" \
-        $REGISTRY_TLS \
-        $DESTINATIONS \
-      || {
-        status=$?
-
-        echo "" >&2
-        echo "service-image: kaniko failed (exit $status)." >&2
-
-        if [ -n "${REGISTRY_CA_PEM:-}" ]; then
-          echo "  REGISTRY_CA_PEM is set, so if the error above says 'certificate signed by" >&2
-          echo "  unknown authority', the certificate in it is not the one that issued" >&2
-          echo "  $CI_REGISTRY's. Adding the wrong CA looks exactly like adding none." >&2
-          echo "" >&2
-          echo "  What the registry actually presents, from a host that can reach it:" >&2
-          echo "    openssl s_client -showcerts -connect $CI_REGISTRY </dev/null 2>/dev/null \\" >&2
-          echo "      | openssl x509 -noout -subject -issuer" >&2
-          echo "" >&2
-          echo "  Put the certificate named by that ISSUER line - the CA, not the server" >&2
-          echo "  certificate - in REGISTRY_CA_PEM. Unsetting it falls back to pushing" >&2
-          echo "  without verification, which works but is not somewhere to stay." >&2
+        --tag "$IMAGE:$PRIMARY_TAG" \
+        service
+    # The immutable tag first. If that succeeds and a moving tag then fails, it
+    # is a protection rule on the moving tag and not a credentials problem -
+    # which is a five-minute diagnosis instead of an afternoon.
+    - docker push "$IMAGE:$PRIMARY_TAG"
+    - |
+      for tag in $TAGS; do
+        if [ "$tag" = "$PRIMARY_TAG" ]; then
+          continue
         fi
 
-        exit "$status"
-      }
+        docker tag "$IMAGE:$PRIMARY_TAG" "$IMAGE:$tag"
+        docker push "$IMAGE:$tag"
+      done
     - |
       echo "service-image: pushed. The host pulls it with:"
       echo "  docker pull $IMAGE:$PRIMARY_TAG"
