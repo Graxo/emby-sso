@@ -47,35 +47,83 @@ services:
     # Nothing else runs on this box, and this container needs almost nothing.
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777
+      # /tmp has to hold one VACUUM INTO snapshot of the database while an
+      # encrypted backup is being built - the whole store, uncompressed, for a
+      # few seconds. 128m is far more than a one-person vendor's sales will ever
+      # be; if a backup ever fails for space, this is the number, and mem_limit
+      # below is the next one, because the archive is also held in memory.
+      - /tmp:size=128m,mode=1777
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
 
+    # WHAT AN ATTACKER CAN COST YOU, bounded. None of these change what the
+    # service does; they cap the damage of a bug or a flood in the one process
+    # that answers the internet. Without them a request pattern that makes this
+    # container allocate takes the host down with it, and the host is where
+    # everything else lives.
+    #
+    # The numbers are generous for what this actually does - a handful of SQLite
+    # transactions and one RSA verification per upload - and are meant to be
+    # raised deliberately rather than tuned. If the service is being OOM-killed,
+    # find out why before raising them: this workload has no reason to grow.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 2048
+
+    # Explicit, rather than relying on the Dockerfile's USER staying put. The
+    # data volume has to be owned by this uid; see service/docs/first-run.md.
+    user: "5678:5678"
+
     volumes:
-      # THE SIGNING KEY. Read-only, and mounted as a file rather than a
-      # directory so that nothing else in that directory - the ledger the
-      # offline tool keeps, a backup, an editor's swap file - is inside the
-      # container at all.
+      # THERE IS NO SIGNING KEY HERE ANY MORE, and this comment is the tripwire
+      # for putting one back.
       #
-      # On the host it must be `chmod 600` and owned by uid 5678, which is the
-      # account the container runs as. The service refuses to start if any bit
-      # beyond the owner's is set:
+      # This service used to mount the private licence key read-only and mint
+      # licences with it during an activation. That put the one secret the whole
+      # scheme rests on - the thing that mints a valid licence for ANY Emby
+      # server, forever, with no revocation because the plugin checks offline -
+      # on a host with a port open to the internet. Every other control here was
+      # a wall around that one asset, and any single failure of any one of them
+      # lost it completely and silently.
       #
-      #   sudo install -o 5678 -g 5678 -m 600 \
-      #     licence-signing-key.private.json /srv/emby-sso/secrets/
-      - /srv/emby-sso/secrets/licence-signing-key.private.json:/run/secrets/licence-signing-key.private.json:ro
+      # Signing now happens with `licencetool sign` on a machine of your
+      # choosing, from a file this service hands you at /admin/signing. The
+      # service refuses to start if LICENCE_SIGNING_KEY_PATH is still set - it
+      # does not ignore it - because a key that is still mounted is still
+      # stealable whether or not anything reads it. Delete it from this host.
 
       # The state: SQLite store, the ledger in the offline tool's format, and
       # the outbox of codes waiting to be sent. Must be owned by uid 5678.
-      # BACK THIS UP. Losing it loses who bought what.
+      # BACK THIS UP. Losing it loses who bought what, and nothing anywhere
+      # else can rebuild it - not PayPal, not the plugin, not the signing
+      # machine. Set LICENCE_BACKUP_PASSPHRASE below and take an encrypted copy
+      # from /admin/backup; read it back with `restore`.
       - /srv/emby-sso/data:/data
 
     environment:
       # --- required ---------------------------------------------------------
-      LICENCE_SIGNING_KEY_PATH: /run/secrets/licence-signing-key.private.json
       LICENCE_DATA_DIR: /data
+
+      # The PUBLIC key or keys the plugin build trusts - one JWK, or a JSON
+      # array of them. NOT a secret: it is the same value that is compiled into
+      # src/Emby.Sso/Protocol/LicencePublicKey.cs, and `licencetool keygen`
+      # printed it. It is what lets this service check a signed licence before
+      # storing it, so that a wrong key or a wrong file is caught on your screen
+      # rather than on a customer's server.
+      #
+      # It must match the plugin build your customers are running. When you
+      # rotate a key, both sides get the new one and BOTH keep the old one until
+      # every licence signed with it has expired.
+      #
+      # The service refuses to start if this carries private key material.
+      LICENCE_PUBLIC_KEYS: '{"kty":"RSA","n":"...","e":"AQAB"}'
 
       # The address the plugin has compiled in and the address PayPal sends
       # buyers back to. Must match what the plugin ships with.
@@ -146,6 +194,51 @@ services:
       # LICENCE_RATE_PER_CLIENT_BURST: "5"
       # LICENCE_RATE_GLOBAL_PER_MINUTE: "300"
 
+      # --- encrypted backups: optional, and worth turning on ----------------
+      # With this set, /admin/backup hands you an encrypted copy of everything
+      # on the volume that cannot be rebuilt: who bought what, which servers are
+      # activated, every licence signed so far, the outbox and the audit trail.
+      # There is no unencrypted option - a backup of this store holds redemption
+      # codes and live licences, and the whole point of taking one is to put it
+      # somewhere less careful than this box.
+      #
+      # Generate one and keep it somewhere OTHER than beside the backups. It has
+      # to be the same passphrase to read a backup back, so changing it strands
+      # every backup taken before the change.
+      #
+      #   openssl rand -base64 32
+      #
+      # LICENCE_BACKUP_PASSPHRASE: ${LICENCE_BACKUP_PASSPHRASE}
+
+      # --- the admin page: optional, and off unless a password is set --------
+      # ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      #
+      # IN FRONT OF THE PASSWORD. Both optional, both off by default, both fail
+      # closed when set, and a request that fails either gets a 404 - the page
+      # does not exist rather than refusing, so a scanner learns nothing.
+      #
+      # The admin page is on the public internet and the password is otherwise
+      # the only barrier to the box holding your customer list. It is a good
+      # password and the login is throttled, but it is one factor: one reused
+      # password, one keylogger, one screenshot. A network restriction is a
+      # second, independent thing an attacker must have, costs nothing on a
+      # machine you already own, and cannot be phished.
+      #
+      # ADMIN_ALLOWED_CIDRS needs LICENCE_TRUSTED_PROXY_HOPS to be right, or
+      # every request looks like it came from the proxy. Set the hop count first
+      # and check the logs before relying on this.
+      #
+      # ADMIN_ALLOWED_CIDRS: "203.0.113.4/32, 10.0.0.0/8"
+      #
+      # ADMIN_REQUIRED_HEADER is where a Cloudflare Access assertion, an
+      # oauth2-proxy header, a client certificate your proxy verified, or simply
+      # a long shared secret plugs in. YOUR PROXY MUST STRIP IT FROM INCOMING
+      # REQUESTS - a header a client can set is not a check, and nothing here
+      # can enforce that for you.
+      #
+      # ADMIN_REQUIRED_HEADER: "X-From-The-Proxy"
+      # ADMIN_REQUIRED_HEADER_VALUE: ${ADMIN_PROXY_SECRET}
+
     # Bound to localhost, because TLS is the reverse proxy's job and this
     # service must never be the thing on port 443. If there is no proxy, there
     # is no HTTPS, and the contract says HTTPS only.
@@ -154,7 +247,9 @@ services:
 
     healthcheck:
       # /healthz proves the volume is writable, which is the failure that would
-      # otherwise show up as a lost sale.
+      # otherwise show up as a lost sale. It also reports which PUBLIC keys this
+      # service trusts, so "does it agree with the plugin build?" is answerable
+      # without a shell on the box.
       test: ["CMD", "dotnet", "Emby.Sso.LicenceService.dll", "healthcheck"]
       interval: 30s
       timeout: 5s

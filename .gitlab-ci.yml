@@ -13,7 +13,7 @@ stages:
   - build
   - publish
   - release
-  # Independent of everything above it. See the pages job at the bottom.
+  # Independent of everything above it. See the pages and wiki jobs at the bottom.
   - docs
 
 variables:
@@ -78,12 +78,39 @@ test:
   script:
     - dotnet test tests/Emby.Sso.Tests --logger "console;verbosity=normal"
 
+# Fails the pipeline if any package this project pulls in - directly or
+# transitively - has a known advisory against it.
+#
+# WHY IT IS A GATE AND NOT A REPORT. The plugin ships as ONE merged DLL: ILRepack
+# folds Microsoft.IdentityModel, Newtonsoft.Json, BouncyCastle and the rest into
+# Emby.Sso.dll and internalises them. An operator who installs it cannot see what
+# is inside, cannot patch a dependency without a new build from here, and has no
+# scanner that would tell them. The same is true of the service image. So a
+# vulnerable dependency is not something a downstream user can act on, and the
+# only place it can be caught is here, before it is published.
+#
+# --include-transitive, because that is where these things live: nothing in this
+# repository references BouncyCastle on purpose.
+#
+# IT NEEDS THE NETWORK. `dotnet list package --vulnerable` asks nuget.org for the
+# current advisory database rather than reading a cached copy, so this job fails
+# when nuget.org is unreachable. That is the right way round for a security gate,
+# but it does mean a network outage shows up as a red pipeline here.
+dependencies-audit:
+  extends: .nuget-cache
+  stage: test
+  needs: []
+  script:
+    - ci/audit-packages.sh Emby.Sso.sln service/Emby.Sso.Service.sln
+
 build:
   extends: .nuget-cache
   stage: build
-  # Explicit, not incidental: no artifact exists unless the suite passed.
+  # Explicit, not incidental: no artifact exists unless the suite passed and no
+  # dependency in the merged DLL has an advisory against it.
   needs:
     - job: test
+    - job: dependencies-audit
   script:
     - VERSION="$(ci/version.sh)"
     - INFORMATIONAL_VERSION="$VERSION+$CI_COMMIT_SHA"
@@ -241,9 +268,11 @@ service-image:
     # Kaniko's own entrypoint is the executor. GitLab needs to start a shell
     # in the job image instead, so it has to be cleared.
     entrypoint: [""]
-  # The whole point: a service whose tests do not pass is not publishable.
+  # The whole point: a service whose tests do not pass is not publishable, and
+  # neither is one built on a package with a known advisory against it.
   needs:
     - job: service-test
+    - job: dependencies-audit
   rules:
     # A release tag, and pushes to the default branch. Nothing else - a feature
     # branch that pushed an image would be pushing something nobody reviewed.
@@ -265,6 +294,47 @@ service-image:
       for tag in $TAGS; do
         echo "service-image: will push $IMAGE:$tag"
       done
+    # THE REGISTRY'S CA. Kaniko runs in its own scratch image and trusts only
+    # the public roots baked into it, so a registry whose certificate comes from
+    # an internal CA - which is what registry.koper.local is - fails the push
+    # with "certificate signed by unknown authority". It then retries over plain
+    # HTTP and gets nginx's "400 The plain HTTP request was sent to HTTPS port",
+    # which is the confusing half of that error and not the cause.
+    #
+    # The fix is to give kaniko the CA, NOT to turn verification off. There is a
+    # --skip-tls-verify flag; using it would mean this job pushes the licence
+    # service image to whatever answers on that address, which is not a trade
+    # worth making to save one CI variable.
+    #
+    # Two sources, either or both:
+    #   REGISTRY_CA_PEM       a CI/CD variable holding the PEM. Set this one.
+    #   CI_SERVER_TLS_CA_FILE the runner's own CA, present when the runner was
+    #                         configured with tls-ca-file. Free when it exists.
+    - |
+      BUNDLE=/kaniko/ssl/certs/additional-ca-cert-bundle.crt
+      mkdir -p "$(dirname "$BUNDLE")"
+      : > "$BUNDLE"
+
+      if [ -n "${REGISTRY_CA_PEM:-}" ]; then
+        printf '%s\n' "$REGISTRY_CA_PEM" >> "$BUNDLE"
+        echo "service-image: added REGISTRY_CA_PEM to kaniko's trust store"
+      fi
+
+      if [ -n "${CI_SERVER_TLS_CA_FILE:-}" ] && [ -s "${CI_SERVER_TLS_CA_FILE}" ]; then
+        cat "$CI_SERVER_TLS_CA_FILE" >> "$BUNDLE"
+        echo "service-image: added the runner's CI_SERVER_TLS_CA_FILE to kaniko's trust store"
+      fi
+
+      if [ ! -s "$BUNDLE" ]; then
+        echo "service-image: no extra CA was supplied. If $CI_REGISTRY uses an internal" >&2
+        echo "  certificate authority, the push below will fail with 'certificate signed by" >&2
+        echo "  unknown authority' followed by a 400 from nginx." >&2
+        echo "  THE FIX: on the registry host, take the issuing CA certificate and add it as a" >&2
+        echo "  CI/CD variable named REGISTRY_CA_PEM (Settings -> CI/CD -> Variables; type" >&2
+        echo "  File is fine, protected yes, masked no - a CA certificate is not a secret)." >&2
+        echo "  It is the CA, not the server certificate: openssl s_client -showcerts" >&2
+        echo "  -connect ${CI_REGISTRY} </dev/null prints the chain it presents." >&2
+      fi
     # CI_JOB_TOKEN can push to this project's own registry and expires with the
     # job. No long-lived credential is stored anywhere for the push side; the
     # PULL side is a different credential and is documented in
@@ -376,3 +446,36 @@ pages:
     paths:
       - public
     expire_in: 30 days
+
+# The same documentation, in this project's GitLab wiki.
+#
+# WHY BOTH. Pages builds a searchable site; the wiki is where people who already
+# have access to a PRIVATE project go looking, is editable in the browser when
+# something is wrong at three in the morning, and needs no build to read. Both
+# are generated from docs/site/, so there is one source and they cannot disagree
+# - which is the only arrangement in which having two is not a liability.
+#
+# ONE DIRECTION. The wiki is overwritten from the repository every time. Anything
+# typed into it by hand is lost on the next push to the default branch, and every
+# page it writes says so at the top.
+#
+# It needs WIKI_TOKEN - a project access token with write_repository, masked and
+# protected. CI_JOB_TOKEN cannot push to a wiki; GitLab does not grant it that.
+# Without the variable this job fails with instructions rather than silently
+# doing nothing, and allow_failure keeps that from turning a release red.
+wiki:
+  stage: docs
+  image: alpine/git:v2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+  needs: []
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - docs/site/**/*
+        - ci/publish-wiki.sh
+        - ci/wiki-markdown.awk
+        - .gitlab-ci.yml
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  script:
+    - sh ci/publish-wiki.sh docs/site
