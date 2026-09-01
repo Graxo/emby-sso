@@ -10,17 +10,49 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#pinUrl').textContent = base + '/sso/pin';
     }
 
-    // Admin-only endpoints on this plugin's own service. Fails quietly: the
-    // server id and the buy link are conveniences, and losing them must not
-    // stop the rest of the page working.
+    // Admin-only endpoint on this plugin's own service.
+    //
+    // TWO STATES, and the licensed one is deliberately almost empty: an
+    // operator whose licence is fine has nothing to do on this part of the page
+    // and should not have to read a screen of fields to establish that. When it
+    // is not fine, everything needed to fix it is there instead.
+    //
+    // FAILS TOWARDS THE FULL FORM. If this call does not come back - the
+    // endpoint is admin-only and could 401 on a session that has gone stale -
+    // the page shows the buy-and-redeem side rather than "Active", because
+    // claiming a licence is fine on no evidence is the one wrong answer.
     function showActivation(page) {
-        ApiClient.getJSON(ApiClient.getUrl('sso/activation')).then(function (info) {
-            page.querySelector('#serverId').textContent = info.ServerId || '';
+        var active = page.querySelector('#licenceActive');
+        var inactive = page.querySelector('#licenceInactive');
 
-            var buyLink = page.querySelector('#buyLink');
-            buyLink.href = info.BuyUrl || '#';
-            buyLink.style.display = info.BuyUrl ? '' : 'none';
+        function show(licensed, status, expires, serverId, buyUrl) {
+            active.style.display = licensed ? '' : 'none';
+            inactive.style.display = licensed ? 'none' : '';
+
+            page.querySelector('#licenceStatus').textContent = licensed
+                ? (expires ? status + ' until ' + expires : status)
+                : '';
+
+            page.querySelector('#licenceProblem').textContent = licensed ? '' : status;
+            page.querySelector('#serverId').textContent = serverId;
+
+            // No buy button when there is no address to send anybody to - a
+            // button that goes nowhere is worse than no button.
+            var buy = page.querySelector('#buyButton');
+
+            buy.dataset.url = buyUrl;
+            page.querySelector('#buyContainer').style.display = buyUrl ? '' : 'none';
+        }
+
+        ApiClient.getJSON(ApiClient.getUrl('sso/activation')).then(function (info) {
+            show(
+                info.Licensed === true,
+                info.Status || 'Not activated',
+                info.ExpiresUtc || '',
+                info.ServerId || '',
+                info.BuyUrl || '');
         }, function () {
+            show(false, 'Not activated', '', '', '');
         });
     }
 
@@ -57,6 +89,12 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
                 // over the licence that was just activated.
                 page.querySelector('#licenceKey').value = response.LicenceKey || '';
                 codeField.value = '';
+
+                // The page said "Not activated" a moment ago. Ask again rather
+                // than assuming: this re-reads the same check the sign-in path
+                // makes, so the page cannot start claiming Active on the
+                // strength of a response it has not verified.
+                showActivation(page);
             }
         }).catch(function (err) {
             loading.hide();
@@ -141,6 +179,19 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
 
         view.querySelector('#activateButton').addEventListener('click', function () {
             activate(view);
+        });
+
+        // A button rather than a link, because the address is only known after
+        // the activation endpoint answers - a link rendered before that would
+        // spend a moment pointing at nothing. noopener on the opened window: the
+        // shop is another origin and has no business reaching back into the
+        // dashboard through window.opener.
+        view.querySelector('#buyButton').addEventListener('click', function () {
+            var url = this.dataset.url;
+
+            if (url) {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            }
         });
     }
 

@@ -41,13 +41,71 @@ namespace Emby.Sso.Api
             _logger = logManager.GetLogger("AuthentikSso");
         }
 
-        public object Get(SsoActivationInfo request)
+        public async Task<object> Get(SsoActivationInfo request)
         {
+            // The same check the sign-in path makes, against the same keys and
+            // the same server id - so the page cannot say Active while a sign-in
+            // is being refused, which is the one disagreement that would send an
+            // operator looking in the wrong place.
+            var configuration = SsoRuntime.Configuration;
+
+            var status = await LicenceCheck.EvaluateAsync(
+                configuration?.LicenceKey,
+                LicencePublicKey.TrustedJwks,
+                SsoRuntime.ServerId,
+                DateTimeOffset.UtcNow).ConfigureAwait(false);
+
+            var licensed = LicenceCheck.Permits(status.Outcome);
+
             return new ActivationInfoResult
             {
                 ServerId = SsoRuntime.ServerId ?? string.Empty,
                 BuyUrl = SsoRuntime.BuyUrl() ?? string.Empty,
+                Licensed = licensed,
+                Status = Describe(status.Outcome),
+                ExpiresUtc = licensed && status.ExpiresAt.HasValue
+                    ? status.ExpiresAt.Value.UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+                    : string.Empty,
             };
+        }
+
+        /// <summary>
+        /// The outcome as a phrase for the configuration page.
+        ///
+        /// Short, and written for somebody deciding what to do next rather than
+        /// for a support thread. The log already carries the detail, and this is
+        /// the one refusal in the plugin whose cause is not deliberately vague -
+        /// see LicenceGate - but "vague" and "a paragraph" are not the only two
+        /// options.
+        ///
+        /// A default that reads as a refusal, like every other decision here: an
+        /// outcome nobody updated this for must not print as if it were fine.
+        /// </summary>
+        private static string Describe(LicenceOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case LicenceOutcome.Valid:
+                    return "Active";
+
+                case LicenceOutcome.ExpiringSoon:
+                    return "Active, expiring soon";
+
+                case LicenceOutcome.Missing:
+                    return "Not activated";
+
+                case LicenceOutcome.Expired:
+                    return "Expired";
+
+                case LicenceOutcome.WrongServer:
+                    return "Issued for a different server";
+
+                case LicenceOutcome.NotYetValid:
+                    return "Not valid yet - check this server's clock";
+
+                default:
+                    return "Not valid";
+            }
         }
 
         public async Task<object> Post(SsoActivate request)

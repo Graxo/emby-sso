@@ -130,42 +130,69 @@
 
       <br />
 
-      <div class="inputContainer">
-        <label for="licenceKey">Licence key</label>
-        <input is="emby-input" type="text" id="licenceKey" />
-        <div class="fieldDescription">
-          Without a valid licence, new sign-ins are refused.
+      <!-- LICENSED: one line, and nothing else. An operator whose licence is
+           fine has nothing to do here, and should not have to read a screen of
+           fields to establish that. -->
+      <div class="inputContainer" id="licenceActive" style="display: none;">
+        <label>Licence</label>
+        <p id="licenceStatus" style="font-weight: 600;"></p>
+      </div>
+
+      <!-- NOT LICENSED: buy one, or redeem the code you were given. The licence
+           key field lives at the bottom, collapsed - it is the fallback for a
+           licence delivered by hand, not the normal path.
+
+           THAT FIELD IS NEVER REMOVED FROM THE PAGE, only hidden. Save reads
+           its value into the configuration, so a page that dropped it would
+           blank the licence of anybody who pressed Save while licensed. -->
+      <div id="licenceInactive" style="display: none;">
+        <div class="inputContainer">
+          <label>Licence</label>
+          <p id="licenceProblem" style="font-weight: 600;"></p>
+          <div class="fieldDescription">
+            Without a valid licence, new sign-ins are refused.
+          </div>
         </div>
-      </div>
 
-      <div class="inputContainer">
-        <label>This server's id</label>
-        <p id="serverId" style="user-select: all; font-family: monospace;"></p>
-        <div class="fieldDescription">
-          A licence is issued for this id. Not secret.
-          Full documentation: https://gitlab.koper.cloud/Graxo/emby-sso/-/wikis/settings
+        <div class="inputContainer" id="buyContainer">
+          <button is="emby-button" type="button" id="buyButton" class="raised block">
+            <span>Buy a licence</span>
+          </button>
         </div>
-      </div>
 
-      <div class="inputContainer">
-        <label>Buy a licence</label>
-        <p><a id="buyLink" href="#" target="_blank" rel="noopener noreferrer">Open the licence shop for this server</a></p>
-      </div>
-
-      <div class="inputContainer">
-        <label for="redemptionCode">Redemption code</label>
-        <input is="emby-input" type="text" id="redemptionCode" />
-        <div class="fieldDescription">
-          Paste your code, then press Activate.
+        <div class="inputContainer">
+          <label for="redemptionCode">Redemption code</label>
+          <input is="emby-input" type="text" id="redemptionCode" />
+          <div class="fieldDescription">
+            Paste your code, then press Activate.
+          </div>
         </div>
+
+        <div class="inputContainer">
+          <button is="emby-button" type="button" id="activateButton" class="raised block">
+            <span>Activate</span>
+          </button>
+          <div class="fieldDescription" id="activationResult"></div>
+        </div>
+
+        <details style="margin-top: 1em;">
+          <summary>I already have a licence key</summary>
+
+          <div class="inputContainer">
+            <label for="licenceKey">Licence key</label>
+            <input is="emby-input" type="text" id="licenceKey" />
+          </div>
+
+          <div class="inputContainer">
+            <label>This server's id</label>
+            <p id="serverId" style="user-select: all; font-family: monospace;"></p>
+            <div class="fieldDescription">
+              A licence is issued for this id. Not secret.
+            </div>
+          </div>
+        </details>
       </div>
 
-      <div class="inputContainer">
-        <button is="emby-button" type="button" id="activateButton" class="raised block">
-          <span>Activate</span>
-        </button>
-        <div class="fieldDescription" id="activationResult"></div>
-      </div>
 
       <div class="inputContainer">
         <label>Redirect URI to configure in Authentik</label>

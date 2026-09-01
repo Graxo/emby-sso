@@ -69,6 +69,31 @@ namespace Emby.Sso.Api
 
         /// <summary>The purchase page, carrying the server id. Empty when one cannot be built.</summary>
         public string BuyUrl { get; set; }
+
+        /// <summary>
+        /// Whether this server currently holds a licence that would admit a
+        /// sign-in. The page shows one word when this is true and the whole
+        /// buy-and-redeem apparatus when it is false, because an operator who is
+        /// licensed has nothing to do here and should not have to read anything
+        /// to find that out.
+        /// </summary>
+        public bool Licensed { get; set; }
+
+        /// <summary>
+        /// One or two words for the page: Active, Expiring soon, Expired, and so
+        /// on. Deliberately NOT the outcome enum's name and never the log
+        /// detail - <see cref="Protocol.LicenceStatus.Detail"/> is for the
+        /// server log, and putting it on a page would leak what a refusal was
+        /// about to anyone who reached this endpoint.
+        /// </summary>
+        public string Status { get; set; }
+
+        /// <summary>
+        /// The expiry as yyyy-MM-dd, and only when licensed. A licence that
+        /// lapses without warning is the one failure this page can prevent
+        /// outright, so the date is worth the line it costs.
+        /// </summary>
+        public string ExpiresUtc { get; set; }
     }
 
     /// <summary>The answer to an Activate press.</summary>
