@@ -6,26 +6,32 @@ using Xunit;
 namespace Emby.Sso.Tests
 {
     /// <summary>
-    /// One real licence, signed by the real key, checked by the shipped build.
+    /// A REAL licence, signed by a key that has since been RETIRED, refused by
+    /// the shipped build.
     ///
-    /// Every other test in this suite signs with a key the test generated, which
-    /// proves the algorithm and proves nothing about the key this build actually
-    /// trusts. This one closes that gap: the token below came out of
-    /// `licencetool sign` on the vendor's signing machine, with the private half
-    /// of the key in <see cref="LicencePublicKey.TrustedJwks"/>. If the two ever
-    /// stop matching - a key pasted in wrong, a canonicalisation changed, an
-    /// entry dropped by accident - every customer is refused, and this fails
-    /// first.
+    /// This is the evidence that revocation is real. There is no revocation list
+    /// and no callback - the plugin verifies offline and never contacts anything
+    /// - so a key is revoked by not being in
+    /// <see cref="LicencePublicKey.TrustedJwks"/>, and the only way to know that
+    /// worked is to keep a licence it signed and check that it now fails.
     ///
-    /// WHEN YOU ROTATE A KEY, THIS TEST IS PART OF IT. Adding a key leaves this
-    /// passing, because the old key is still trusted. REMOVING the key that
-    /// signed this token makes it fail, correctly: replace the token with one
-    /// signed by a current key, and check in the new one alongside the change.
-    /// A green suite after a revocation that this did not notice would mean the
-    /// revocation had not happened.
+    /// The token below came out of `licencetool sign` for real, on 2026-09-01,
+    /// signed by key 173282303e3800b8 - an interim key whose private half lived
+    /// on a development workspace the vendor does not control. It was dropped
+    /// from the trusted set the moment the vendor's own key existed. This test
+    /// says so and would fail loudly if it were ever quietly trusted again.
     ///
-    /// It is not a secret. It is a licence for a server id that does not exist,
-    /// and a licence is public to whoever holds it in any case.
+    /// WHAT THIS TEST NO LONGER PROVES, stated rather than hidden: it used to
+    /// assert that a licence made by the real tool with the real key is ACCEPTED,
+    /// which is the one property no generated-key test can give. That half
+    /// lapsed with the rotation, because producing a new one needs the current
+    /// private key and that key is deliberately nowhere near this repository. To
+    /// restore it, sign a licence for the fictional server id below with the
+    /// current key and add it back as an accepted case - `licencetool issue
+    /// --server-id ... --days 3650` is enough.
+    ///
+    /// Neither token is a secret. Both are licences for a server id that does
+    /// not exist, and a licence is public to whoever holds it in any case.
     /// </summary>
     public class RealLicenceTests
     {
@@ -33,9 +39,9 @@ namespace Emby.Sso.Tests
         private const string ServerId = "c5bc6e91458540caa295c4efdda1a58a";
 
         /// <summary>
-        /// Signed 2026-09-01 for one year, by key 173282303e3800b8.
+        /// Signed 2026-09-01 for one year, by the RETIRED key 173282303e3800b8.
         /// </summary>
-        private const string Licence =
+        private const string RetiredKeyLicence =
             "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE3MzI4MjMwM2UzODAwYjgiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJ1cm46ZW1ieS1zc"
             + "286bGljZW5jZSIsInN1YiI6ImNvZGU6YWIxMmNkMzRlZjU2IiwiYXVkIjoiYzViYzZlOTE0NTg1NDBjYWEyOTVjNGVmZGRhM"
             + "WE1OGEiLCJpYXQiOjE3ODgyNjQwMDAsIm5iZiI6MTc4ODI2NDAwMCwiZXhwIjoxODE5ODAwMDAwfQ.3CL_9r4cMuXaIZKKNa"
@@ -54,51 +60,56 @@ namespace Emby.Sso.Tests
         private static readonly DateTimeOffset Now = new DateTimeOffset(2026, 9, 15, 12, 0, 0, TimeSpan.Zero);
 
         [Fact]
-        public async Task The_shipped_build_accepts_a_licence_signed_by_the_real_key()
+        public async Task A_licence_signed_by_the_retired_key_is_refused()
         {
-            var status = await LicenceCheck.EvaluateAsync(Licence, LicencePublicKey.TrustedJwks, ServerId, Now);
-
-            Assert.Equal(LicenceOutcome.Valid, status.Outcome);
-            Assert.Equal("code:ab12cd34ef56", status.Licensee);
-        }
-
-        [Fact]
-        public async Task It_is_refused_on_a_different_server()
-        {
+            // The whole point. This token was genuine, was accepted by an
+            // earlier build, and names a server and a date that are both still
+            // inside its own validity. It is refused for one reason: the key
+            // that signed it is not trusted any more.
             var status = await LicenceCheck.EvaluateAsync(
-                Licence,
-                LicencePublicKey.TrustedJwks,
-                "0b3d0f8fd4d9412e9c4e5ba0d09a3f77",
-                Now);
-
-            Assert.Equal(LicenceOutcome.WrongServer, status.Outcome);
-        }
-
-        [Fact]
-        public async Task It_is_refused_once_it_has_expired()
-        {
-            var status = await LicenceCheck.EvaluateAsync(
-                Licence,
+                RetiredKeyLicence,
                 LicencePublicKey.TrustedJwks,
                 ServerId,
-                Now.AddYears(2));
+                Now);
 
-            Assert.Equal(LicenceOutcome.Expired, status.Outcome);
+            Assert.Equal(LicenceOutcome.BadSignature, status.Outcome);
         }
 
         [Fact]
-        public async Task A_single_altered_character_is_refused()
+        public async Task It_is_refused_even_on_the_server_it_names_and_inside_its_own_dates()
         {
-            // The signature is what admits it, and nothing else. Flipping one
-            // character of the payload must not be survivable.
-            var tampered = Licence.Substring(0, 40)
-                + (Licence[40] == 'A' ? 'B' : 'A')
-                + Licence.Substring(41);
+            // Guards against a future reader concluding this fails for some
+            // incidental reason - a wrong audience, an expiry - and "fixing" it
+            // by trusting the key again. Neither of those is why.
+            var beforeExpiry = await LicenceCheck.EvaluateAsync(
+                RetiredKeyLicence,
+                LicencePublicKey.TrustedJwks,
+                ServerId,
+                Now.AddMonths(6));
 
-            var status = await LicenceCheck.EvaluateAsync(tampered, LicencePublicKey.TrustedJwks, ServerId, Now);
+            Assert.Equal(LicenceOutcome.BadSignature, beforeExpiry.Outcome);
+            Assert.NotEqual(LicenceOutcome.WrongServer, beforeExpiry.Outcome);
+            Assert.NotEqual(LicenceOutcome.Expired, beforeExpiry.Outcome);
+        }
 
-            Assert.NotEqual(LicenceOutcome.Valid, status.Outcome);
-            Assert.NotEqual(LicenceOutcome.ExpiringSoon, status.Outcome);
+        [Fact]
+        public void This_build_trusts_exactly_one_key_and_it_is_the_vendors()
+        {
+            // A second entry appearing here is either a rotation in progress -
+            // legitimate, and this assertion is then the thing to update
+            // deliberately - or a retired key that crept back. Either way it
+            // should be a decision somebody made, not a diff nobody read.
+            Assert.Single(LicencePublicKey.TrustedJwks);
+
+            var trusted = LicencePublicKey.TrustedJwks[0];
+
+            Assert.Contains("\"kty\":\"RSA\"", trusted, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"d\"", trusted, StringComparison.Ordinal);
+
+            // The two retired keys, by the start of their modulus. Neither may
+            // return; a licence signed by either must stay refused.
+            Assert.DoesNotContain("0sLbMum0TIALJnzGVTqcP1Bq02vp", trusted, StringComparison.Ordinal);
+            Assert.DoesNotContain("4MRfQ1GfRQHBCePuyRQs_4SrzClG", trusted, StringComparison.Ordinal);
         }
     }
 }

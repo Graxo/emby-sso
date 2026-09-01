@@ -192,13 +192,19 @@ silently.
 
 !!! unverified "The round trip has been run in tests, not on the real service"
 
-    **Checked, and by more than a passing test:**
-    `licencetool sign` was run for real, on this machine, against the actual
-    signing key: it read a requests file, produced a signed file at mode 600,
-    appended to the ledger, and wrote a token whose `kid` header names the key.
-    That token is checked into the plugin's suite
-    (`RealLicenceTests`) and the **shipped build accepts it**, which is the one
-    thing no generated-key test can prove.
+    **Checked:** `licencetool sign` was run for real against a real signing key:
+    it read a requests file, produced a signed file at mode 600, appended to the
+    ledger, and wrote a token whose `kid` header names the key.
+
+    **NO LONGER CHECKED, and this is a real gap.** That token was signed by a key
+    that has since been retired, so `RealLicenceTests` now proves the opposite -
+    that a licence signed by a revoked key is refused, which is worth having and
+    is not the same thing. **Nothing in the suite proves that a licence signed by
+    the CURRENT key is accepted by the shipped build**, because producing one
+    needs the current private key and that key is deliberately nowhere near this
+    repository. It is one paste from being restored: sign a licence for the
+    fictional server id in that file and add it back as an accepted case. Until
+    then, the first real activation is the first proof.
 
     The upload side - verification against the recorded terms, the refusals for
     a wrong key, a wrong server, an extended expiry, an unknown request, a

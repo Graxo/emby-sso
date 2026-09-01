@@ -28,14 +28,29 @@ namespace Emby.Sso.LicenceService.Tests
     public class PluginTrustedKeyTests
     {
         /// <summary>
-        /// The key that was retired on 2026-09-01. It had been loaded by the
-        /// internet-facing licence service AND pasted into a chat window, so it
-        /// had to be treated as public. There is no revocation list and no
-        /// callback: a key is revoked by not being in the plugin's trusted set,
-        /// which makes "is it really gone?" a thing worth asserting rather than
-        /// remembering.
+        /// The keys that have been retired, by the start of their modulus. There
+        /// is no revocation list and no callback: a key is revoked by not being
+        /// in the plugin's trusted set, which makes "is it really gone?" a thing
+        /// worth asserting rather than remembering.
+        ///
+        ///   * the original, which had been loaded at startup by the
+        ///     internet-facing licence service AND pasted into a chat window;
+        ///   * an interim key generated during that repair, whose private half
+        ///     lived on a development workspace the vendor does not control.
         /// </summary>
-        private const string RetiredKeyModulusPrefix = "0sLbMum0TIALJnzGVTqcP1Bq02vp";
+        private static readonly string[] RetiredKeyModulusPrefixes =
+        {
+            "0sLbMum0TIALJnzGVTqcP1Bq02vp",
+            "4MRfQ1GfRQHBCePuyRQs_4SrzClG",
+        };
+
+        /// <summary>
+        /// The key this build is expected to trust, by id. Pinned so that a
+        /// mistyped or half-pasted JWK is caught here rather than by every
+        /// customer at once - the id is a hash of the canonical public half, so
+        /// a single altered character changes it.
+        /// </summary>
+        private const string ExpectedKeyId = "71870a0bad21ceb2";
 
         [Fact]
         public void The_plugin_trusts_at_least_one_key()
@@ -67,9 +82,32 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
-        public void The_retired_key_is_not_trusted_any_more()
+        public void No_retired_key_is_trusted_any_more()
         {
-            Assert.DoesNotContain(RetiredKeyModulusPrefix, PluginSource(), StringComparison.Ordinal);
+            foreach (var retired in RetiredKeyModulusPrefixes)
+            {
+                foreach (var jwk in PluginKeys())
+                {
+                    Assert.DoesNotContain(retired, jwk, StringComparison.Ordinal);
+                }
+            }
+        }
+
+        [Fact]
+        public void The_build_trusts_the_key_it_is_supposed_to()
+        {
+            // The end of the chain: this id must be the one the vendor's signing
+            // machine prints, and the one /healthz reports on the service. When
+            // all three agree, a signed licence works; when they do not, every
+            // licence is refused somewhere and this says which link moved.
+            var ids = new System.Collections.Generic.List<string>();
+
+            foreach (var jwk in PluginKeys())
+            {
+                ids.Add(TrustedLicenceKeys.ReadOne(jwk).Kid);
+            }
+
+            Assert.Contains(ExpectedKeyId, ids);
         }
 
         [Fact]
