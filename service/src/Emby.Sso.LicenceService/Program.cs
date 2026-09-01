@@ -882,8 +882,14 @@ namespace Emby.Sso.LicenceService
         /// </summary>
         private static int HashPassword()
         {
-            Console.Error.WriteLine("Type the admin password and press enter (it is read from stdin, not from an");
-            Console.Error.WriteLine("argument, so it does not reach your shell history or the process list).");
+            // ReadToEnd, so at a terminal this returns on EOF and not on the
+            // newline. Saying "press enter" - which this did - leaves the
+            // operator watching a cursor blink, concluding the command has
+            // hung, and killing it.
+            Console.Error.WriteLine("Type the admin password, press enter, then press Ctrl-D.");
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("It is read from stdin rather than from an argument, so it does not reach your");
+            Console.Error.WriteLine("shell history, the process list, or the logs of anything wrapping this.");
 
             var password = Console.In.ReadToEnd();
 

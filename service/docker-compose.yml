@@ -17,8 +17,9 @@ services:
     # docker compose up -d licence` is the whole deployment.
     #
     # The project is private, so the pull needs credentials. Create a deploy
-    # token scoped to read_registry and `docker login registry.koper.cloud`
-    # once; service/docs/first-run.md, section 5, has the exact steps.
+    # token scoped to read_registry and `docker login registry.koper.local:5050`
+    # once; service/README.md, "The image CI builds", has the exact steps and
+    # says why it must not be a personal access token.
     #
     # THERE IS NO `latest` UNTIL THE FIRST RELEASE IS TAGGED, and a pull before
     # then fails with exactly this, which reads like a broken registry and is

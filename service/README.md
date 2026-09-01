@@ -658,9 +658,18 @@ one registry and says so in the log — which is what the client-portal pipeline
 does today, and what an unverified push costs is spelled out in the job's
 comments.
 
-**Pulling needs credentials**, because the project is private: a deploy token
-scoped to `read_registry`, and `docker login registry.koper.local:5050`.
-`docs/first-run.md`, section 5, has the steps and says how to treat the token.
+**Pulling needs credentials**, because the project is private. In GitLab:
+*Settings -> Repository -> Deploy tokens* on this project. Name it after the
+host, tick **`read_registry` and nothing else**, and set an expiry - a token
+with no expiry is a credential nobody ever revokes. The password is shown once.
+
+```
+docker login registry.koper.local:5050 -u <token-username> --password-stdin
+```
+
+Do NOT use a personal access token here. It would work, and it can push - which
+means the deployment host would hold a credential able to replace the image it
+runs.
 
 **There is no `:latest` until a `vX.Y.Z` tag is built.** `ci/image-tags.sh` is
 the only thing that decides tags: main publishes `main-<short sha>` and `main`,
