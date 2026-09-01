@@ -19,8 +19,15 @@ a valid one the plugin refuses new sign-ons.
 ## The documentation
 
 Everything that used to be in this file lives in
-[`docs/site/`](docs/site/index.md) and is published as a searchable site by
-GitLab Pages. Every page is also readable here as ordinary Markdown.
+[`docs/site/`](docs/site/index.md). It is published two ways from that one
+source, on every push to `main`:
+
+- **the project wiki** — <https://gitlab.koper.cloud/Graxo/emby-sso/-/wikis/home>,
+  which is where to look, and what the plugin's configuration page links to;
+- **GitLab Pages**, as a searchable site with the Material theme.
+
+Both are generated, so **edits made in the wiki are overwritten**. Change the
+files in `docs/site/`. Every page is also readable here as ordinary Markdown.
 
 | | |
 |---|---|
@@ -41,6 +48,8 @@ GitLab Pages. Every page is also readable here as ordinary Markdown.
 | [Troubleshooting](docs/site/troubleshooting.md) | Every message a user can be shown, and what to check |
 | [What has and has not been verified](docs/site/verification-status.md) | The honesty ledger — read it |
 | [Building from source](docs/site/building.md) | Build, test, and cut a release |
+| [Signing licences offline](docs/site/offline-signing.md) | Vendor only — the key is not on the server |
+| [Rotating and revoking a signing key](docs/site/key-rotation.md) | Vendor only — how a leak is survived |
 
 ---
 
@@ -183,7 +192,18 @@ cannot be locked out of your media server by a licensing problem**; nothing is
 disabled, deleted or reconfigured.
 
 A licence cannot be revoked — the check is offline, so there is nowhere a
-revocation could come from. An expiry date is the only lever.
+revocation could come from. An expiry date is the only lever. (Retiring a
+*signing key* stops every licence it ever signed, all at once; that is the
+remedy for a leaked key, not a way to deal with one customer. See
+[Rotating and revoking a signing key](docs/site/key-rotation.md).)
+
+**The first activation of a code is not instant.** It answers *"your licence is
+being issued"*, and pressing **Activate** again a few minutes later returns the
+licence; the code is not spent by the wait. That is because the vendor's licence
+service does not hold the key that signs licences — a key that mints a licence
+for any Emby server, forever, has no business on a host that answers requests
+from the internet. A person signs what has been paid for on a machine that is
+kept offline. See [Signing licences offline](docs/site/offline-signing.md).
 
 The licence is an RS256 JWT signed with a private key that never leaves the
 vendor. But the plugin ships as a .NET assembly, and **a .NET assembly can be
@@ -204,14 +224,14 @@ git tag, and the release page carries that one DLL and a SHA256 checksum for
 it:
 
 ```
-https://git.koper.cloud/Graxo/emby-sso/-/releases
+https://gitlab.koper.cloud/Graxo/emby-sso/-/releases
 ```
 
 The same two files have a stable, version-addressed download URL, so an
 upgrade is one substitution away:
 
 ```
-base=https://git.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
+base=https://gitlab.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
 curl -fLO $base/Emby.Sso.dll
 curl -fLO $base/Emby.Sso.dll.sha256
 sha256sum -c Emby.Sso.dll.sha256
@@ -266,7 +286,7 @@ the version taken from the tag.
 dotnet test tests/Emby.Sso.Tests
 ```
 
-runs the protocol test suite — 560 tests, no Emby server or network required.
+runs the protocol test suite — 565 tests, no Emby server or network required.
 It compiles the plugin's `Protocol/` layer only, so every decision is under
 test while the Emby-facing shell that calls them (`Auth/`, `Api/`) is not,
 because those types reference `MediaBrowser.*` and need a running server.

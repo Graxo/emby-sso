@@ -15,14 +15,14 @@ git tag, and the release page carries that one DLL and a SHA256 checksum for
 it:
 
 ```
-https://git.koper.cloud/Graxo/emby-sso/-/releases
+https://gitlab.koper.cloud/Graxo/emby-sso/-/releases
 ```
 
 The same two files have a stable, version-addressed download URL, so an upgrade
 is one substitution away:
 
 ```bash
-base=https://git.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
+base=https://gitlab.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
 curl -fLO $base/Emby.Sso.dll
 curl -fLO $base/Emby.Sso.dll.sha256
 sha256sum -c Emby.Sso.dll.sha256

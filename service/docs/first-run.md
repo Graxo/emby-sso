@@ -1,53 +1,70 @@
 # Standing the service up for the first time
 
-Everything below runs on the machine that will host the service. It assumes you
-have already generated your signing keypair with the offline licence tool; if
-you have not, start at step 1.
+Everything below runs on the machine that will host the service.
 
-Read [the key is the whole business](#the-key-is-the-whole-business) before you
-copy anything anywhere.
+**Read step 1 before you copy anything anywhere.** The signing key does not go
+on this machine, and if a previous version of this document had you put one
+there, that key has to be treated as leaked.
 
 ---
 
-## 1. The signing key
+## 1. The signing key stays where it is
 
-**Use the key you already have.** The plugin has *one* public key compiled into
-it, and only the matching private key can mint licences that plugin will accept.
-Generating a new keypair here does not give you a second valid key — it gives
-you a key that every already-released build refuses, and it invalidates every
-licence you have issued, including any you are already testing with.
+**The key does not go on this server, and this service refuses to start if you
+tell it one is there.**
 
-If you have never generated one, do it **on your own machine, not on the
-server**, with the offline tool:
+That is a change from an earlier version of this document, which had you copy
+the private key onto the host and mount it read-only. It was wrong. That key
+mints a valid licence for **any** Emby server, for any duration, and nothing
+recalls one — the plugin verifies offline and never calls home. Putting it on a
+machine with a port open to the internet meant every other control here (rate
+limits, the admin password, the webhook signature check, the container
+hardening) was a wall around it, and any single failure of any one of them lost
+it completely and silently.
+
+**If you followed the old instructions, that key is compromised.** Treat it as
+public: generate a new one, add its public half to the plugin build alongside
+the old one, reissue, and drop the old one in a later release. See
+[Rotating and revoking a signing key](../../docs/site/key-rotation.md).
+
+### What happens instead
+
+The service records what has been paid for and hands it to you as a file. You
+sign it on a machine of your choosing and upload the result. The whole round
+trip is in [Signing licences
+offline](../../docs/site/offline-signing.md); the short version is three steps
+on the `/admin/signing` page and one `licencetool sign` in between.
+
+The visible cost is that a customer's **first** activation is not instant — they
+are told their licence is being issued and press Activate again shortly. Repeat
+activations are immediate.
+
+### If you have never generated a key
+
+On your own machine, **not on this server**:
 
 ```
 export DOTNET_ROOT=$HOME/.dotnet
 dotnet run --project tools/Emby.Sso.LicenceTool -- keygen --out ~/emby-sso-licence
 ```
 
-That writes `~/emby-sso-licence/licence-signing-key.private.json` (mode 600) and
-prints the public key as one line of JSON. The public half goes into
-`src/Emby.Sso/Protocol/LicencePublicKey.cs` and is compiled into the plugin. The
-private half is what you are about to copy to the server.
+That writes `~/emby-sso-licence/licence-signing-key.private.json` (mode 600),
+and prints the public JWK and its key id. The public half goes into
+`TrustedJwks` in `src/Emby.Sso/Protocol/LicencePublicKey.cs` and is compiled
+into the plugin. **The private half stays on that machine.**
 
-### The key is the whole business
+**Back it up**, somewhere encrypted and away from this server. Losing it is as
+bad as leaking it, in the other direction: you can never issue another licence
+for any build carrying the matching public key, and it is deliberately *not* in
+the service's encrypted backup, because it is not on that machine at all.
 
-Until now this key has lived on a machine that does not accept connections. It
-is about to live on one that does. That is a real change and it is worth being
-deliberate about:
+### What this server needs instead
 
-- Anyone who reads this file can mint unlimited licences for **any** Emby
-  server, for any duration, and nothing you can do afterwards stops a licence
-  that has already been issued — the plugin verifies offline and never calls
-  home. The only remedy is a new keypair *and* a new plugin build, which
-  invalidates every existing customer at once.
-- So: this host should run this service and as little else as possible, and the
-  key should exist on it in exactly one place, owned by one account, readable by
-  nobody else.
-- **Back it up before you copy it anywhere**, somewhere encrypted and not on
-  this server. Losing it is as bad as leaking it, in a different direction: you
-  can never issue another licence for any build carrying the matching public
-  key.
+`LICENCE_PUBLIC_KEYS` — the **public** half, or a JSON array of several during a
+rotation. It is not a secret; it is the same value that is compiled into the
+plugin. It is what lets the service check a signed licence before storing it, so
+that a wrong key or a wrong file is caught on your screen rather than on a
+customer's server. The service refuses to start if it carries private material.
 
 ---
 
@@ -82,30 +99,26 @@ record of every customer.
 
 ---
 
-## 3. Copy the key to the server
+## 3. Make sure no key is on the server
 
-From the machine that holds the key:
-
-```
-scp ~/emby-sso-licence/licence-signing-key.private.json you@server:/tmp/key.json
-```
-
-Then on the server, put it in place with the right owner and mode, and remove
-the copy you staged:
+If an earlier deployment mounted one, remove it now — the variable AND the
+volume AND the file:
 
 ```
-sudo install -o 5678 -g 5678 -m 600 /tmp/key.json \
-  /srv/emby-sso/secrets/licence-signing-key.private.json
-shred -u /tmp/key.json 2>/dev/null || rm -f /tmp/key.json
+# In docker-compose.yml: delete the LICENCE_SIGNING_KEY_PATH line and the
+# /srv/emby-sso/secrets/... volume. Then, on the host:
+sudo shred -u /srv/emby-sso/secrets/licence-signing-key.private.json
+sudo rmdir /srv/emby-sso/secrets 2>/dev/null || true
 ```
 
-`install` sets ownership and permissions in one step, which matters: a file
-created first and chmod-ed second is briefly readable by everyone.
+The service will not start while `LICENCE_SIGNING_KEY_PATH` is set. It does not
+ignore the variable, because a key that is still mounted is still stealable
+whether or not anything reads it — and an operator who believes this host signs
+licences will not think to look for the key elsewhere.
 
-**The service refuses to start if any permission bit beyond the owner's is
-set.** That is deliberate and it is not fixed for you — a key that has already
-been group-readable on a shared machine should be treated as one that leaked,
-not one that needs a quieter `chmod`.
+**And treat that key as compromised.** It sat on an internet-facing host. See
+[Rotating and revoking a signing key](../../docs/site/key-rotation.md) for what
+that costs and how to do it while nothing is wrong.
 
 ---
 
@@ -124,6 +137,7 @@ compose file this host already uses. The values that must be set:
 
 | Variable | What it is |
 |---|---|
+| `LICENCE_PUBLIC_KEYS` | the **public** licence key or keys the plugin build trusts — one JWK, or a JSON array of them during a rotation. Not a secret; it is the same value that is in `LicencePublicKey.cs`. The service refuses to start without it, and refuses to start if it carries private key material |
 | `LICENCE_PUBLIC_BASE_URL` | the address the plugin has compiled in, e.g. `https://license.koper.cloud`. It must match, or the buy links point nowhere |
 | `PAYPAL_ENV` | `sandbox` until you have tested a real purchase end to end |
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | from the PayPal developer dashboard |
@@ -141,7 +155,16 @@ hand. See `email-delivery-checklist.md` before trusting a real send.
 
 The admin page is **off** until `ADMIN_PASSWORD_HASH` is set, and off means
 there is no `/admin` at all — no login form, no route. Leave it off until you
-have read step 10.
+have read step 10. **You now need it on**, because signing licences goes through
+it — but read that section first, including `ADMIN_ALLOWED_CIDRS` and
+`ADMIN_REQUIRED_HEADER`, which put something in front of the password.
+
+Set `LICENCE_BACKUP_PASSPHRASE` too, before you have any customers rather than
+after. It turns on `/admin/backup`, which is the only thing that can rebuild who
+bought what if this volume is lost — nothing else can, not PayPal, not the
+plugin, not the signing machine. There is no unencrypted option, and reading a
+backup back needs the passphrase that was in force when it was **taken**, so
+keep it somewhere other than beside the backups and do not change it casually.
 
 ---
 
@@ -369,24 +392,62 @@ runs.
 
 ---
 
-## 10. The admin page in a browser (optional)
+## 10. The admin page in a browser (now needed)
 
 Everything in step 8 is also a page at `https://<your host>/admin`. It is **off
 by default and there is no page at all until you set a password** — `/admin`
 answers 404 exactly the way `/nonsense` does.
 
-!!! danger "Turning this on puts a door on the internet, in front of your signing key"
-    Whoever gets through that page can issue a licence for any Emby server, for
-    any length of time, as many as they like — and **nothing recalls one**,
-    because the plugin checks its licence offline and never contacts this
-    service. There is no second factor and no allowlist. The password is the
-    whole barrier.
+It used to be optional. It is not any more: **signing licences goes through it**
+(`/admin/signing`), and so do encrypted backups (`/admin/backup`).
 
-    Two safer arrangements exist if you would rather have them: bind the
-    container to `127.0.0.1` and reach it through `ssh -L
-    8080:127.0.0.1:8080 you@host`, or put an IP allowlist in front of `/admin`
-    at your reverse proxy. Both cost you something in convenience and neither
-    needs a change to this service.
+### What is behind it now, and what is not
+
+The worst thing this page could once do is gone. It no longer sits in front of a
+signing key, because there is no signing key on this host: whoever gets through
+gets your customer list, the ability to hand out licences that are *already*
+signed, and the ability to stop new ones being issued. They cannot mint one.
+That is a large reduction and it is the whole point of
+[Signing licences offline](../../docs/site/offline-signing.md).
+
+It is still the customer list, and it is still on the public internet.
+
+### Put something in front of the password
+
+Both are optional, both off by default, both fail closed, and a request that
+fails either gets a **404** — the page does not exist rather than refusing, so a
+scanner learns nothing.
+
+```
+# Only from addresses you name. A bare address means that host.
+ADMIN_ALLOWED_CIDRS=203.0.113.4/32, 10.0.0.0/8
+
+# Or a header your own proxy adds, checked in constant time and BEFORE the
+# password - so a caller who cannot produce it never costs this service a
+# PBKDF2 verification.
+ADMIN_REQUIRED_HEADER=X-From-The-Proxy
+ADMIN_REQUIRED_HEADER_VALUE=<a long generated secret>
+```
+
+Two things to get right:
+
+* **`ADMIN_ALLOWED_CIDRS` depends on `LICENCE_TRUSTED_PROXY_HOPS`.** Behind a
+  reverse proxy with the hop count still at `0`, every request looks like it
+  came from the proxy — so either everyone is allowed or nobody is. Set the hop
+  count first, then check the log.
+* **Your proxy must STRIP `ADMIN_REQUIRED_HEADER` from incoming requests.** A
+  header a client can set is not a check, and nothing in this service can
+  enforce that for you.
+
+The startup line says which are on, and says `PASSWORD ONLY` when neither is:
+
+```
+admin page: on at /admin, ADMIN_PASSWORD_HASH, idle timeout 30m, absolute 480m;
+  in front of it: PASSWORD ONLY - consider ADMIN_ALLOWED_CIDRS or ADMIN_REQUIRED_HEADER
+```
+
+The older advice still works and still costs nothing: bind the container to
+`127.0.0.1` and reach it through `ssh -L 8080:127.0.0.1:8080 you@host`.
 
 ### Turn it on
 
@@ -419,6 +480,17 @@ on exactly as before.
 
 * The same five jobs as step 8: list codes, show one, void one, issue one, and
   work through the outbox.
+* **Signing**, which is where licences actually get made: download what is
+  waiting, sign it with `licencetool sign` where the key lives, upload the
+  result. The number beside it in the navigation is how many customers are
+  waiting for a licence right now, and it is on every page for that reason.
+  Each uploaded licence is checked against the terms this service recorded -
+  right key, right server, right dates - before it is stored, so a wrong file is
+  caught on your screen instead of on a customer's server.
+* **Backup**, if `LICENCE_BACKUP_PASSPHRASE` is set: an encrypted copy of
+  everything that cannot be rebuilt. Take one, put it somewhere that is not this
+  machine, and read it back with
+  `docker compose exec licence dotnet Emby.Sso.LicenceService.dll restore --in <file> --out <empty dir>`.
 * **No code the store holds by hash is ever shown**, on any page. A code you
   *issue* is shown once, on the page straight after the form, and never again —
   copy it there and then. The same is true of reading one back out of the

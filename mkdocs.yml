@@ -124,3 +124,6 @@ nav:
       - Troubleshooting: troubleshooting.md
       - What has and has not been verified: verification-status.md
       - Building from source: building.md
+  - For the vendor:
+      - Signing licences offline: offline-signing.md
+      - Rotating and revoking a signing key: key-rotation.md

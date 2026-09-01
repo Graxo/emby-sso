@@ -77,6 +77,13 @@ at most one every six hours — telling you how many days are left.
 
     An expiry date is the only lever. Issue accordingly.
 
+There is one thing that acts *like* a revocation and is not one: retiring a
+signing key. A licence is accepted only if one of the keys compiled into the
+plugin signed it, so dropping a key from that set stops every licence it ever
+signed — all of them at once, including the ones belonging to customers who did
+nothing wrong. It is the remedy for a leaked key, not a way to deal with one
+customer. See [Rotating and revoking a signing key](key-rotation.md).
+
 ## What this is worth, honestly
 
 The licence is an RS256 JWT signed with a private key that never leaves the
@@ -97,17 +104,21 @@ it is not described as DRM anywhere in this project.** The enforceable part is
 
 ## For the vendor
 
-`tools/Emby.Sso.LicenceTool/` generates the signing keypair and mints licences,
-and its own README covers where the private key must live.
+`tools/Emby.Sso.LicenceTool/` generates signing keypairs and signs licences, and
+its own README covers where a private key must live. Two pages cover the rest:
+
+- [Signing licences offline](offline-signing.md) — the round trip, and why the
+  licence service does not hold a signing key at all;
+- [Rotating and revoking a signing key](key-rotation.md) — how a build trusts a
+  *set* of keys, and what revoking one costs.
 
 !!! danger "A build with no public key refuses every sign-on"
 
-    Before the **first** release, and only once: generate the licence signing
-    keypair and paste its public half into
-    `src/Emby.Sso/Protocol/LicencePublicKey.cs`. A build whose
-    `LicencePublicKey.Jwk` is still empty refuses every single sign-on and says
-    so in the server log — deliberately, because a build with no key cannot
-    verify a licence and so cannot honestly accept one.
+    A build whose `LicencePublicKey.TrustedJwks` is empty refuses every single
+    sign-on and says so in the server log — deliberately, because a build with
+    no key cannot verify a licence and so cannot honestly accept one. Emby's own
+    local accounts are unaffected, so this never locks an operator out of their
+    own server.
 
 ## What has not been observed
 

@@ -1,5 +1,17 @@
 # Licence tool
 
+**This is where licences are signed.** The licence service does not hold a
+signing key and cannot mint anything; it records what has been paid for and
+hands it to this tool as a file. `sign` is the command that does the day-to-day
+work — see [Signing licences offline](../../docs/site/offline-signing.md) for
+the round trip, and [Rotating and revoking a signing
+key](../../docs/site/key-rotation.md) for what a build trusting a *set* of keys
+buys you.
+
+Run this on a machine that answers no requests. That is the entire security
+argument, and it is why the service refuses to start if a key is still mounted
+on it.
+
 Mints the licences `Emby.Sso` checks. **The vendor runs this. It is not shipped
 to anyone.** No code in this directory reaches the plugin DLL: this project holds
 no reference to `src/Emby.Sso`, nothing in the plugin references it, and ILRepack

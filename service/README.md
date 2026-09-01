@@ -27,6 +27,32 @@ ends*, below.
 
 ---
 
+## THE SIGNING KEY IS NOT HERE
+
+This service does not hold the private licence signing key and cannot mint a
+licence. It refuses to start if `LICENCE_SIGNING_KEY_PATH` is set.
+
+It used to. That put the one secret the whole scheme rests on — the thing that
+mints a valid licence for **any** Emby server, forever, with no revocation
+because the plugin verifies offline — on a host with a port open to the
+internet. Every other control in this service was a wall around that one asset,
+and any single failure of any one of them lost it completely and silently.
+
+What happens now: an activation records what has been paid for and what terms
+were agreed; the operator downloads that from `/admin/signing`, signs it with
+`licencetool sign` on a machine of their choosing, and uploads the result, which
+is checked against the recorded terms before it is stored. A total compromise of
+this host yields the customer list and the ability to stop issuing. It does not
+yield the ability to mint one licence.
+
+The cost, stated plainly because it is visible to customers: **a first
+activation is not instant.** It answers `pending_signature` with 202 and the
+plugin tells the customer to press Activate again shortly. The code is not spent
+by the wait, and repeat activations are immediate.
+
+Full detail: [Signing licences offline](../docs/site/offline-signing.md) and
+[Rotating and revoking a signing key](../docs/site/key-rotation.md).
+
 ## The one thing to understand before deploying this
 
 **This box holds the private signing key.** Until now that key lived offline, on
@@ -251,15 +277,42 @@ the log says so loudly — the record is not lost, only the tool's view of it.
 ### Back up `/data`
 
 Losing it loses who bought what, and no server can be asked what it holds — the
-plugin never calls home.
+plugin never calls home. Nothing else can rebuild it: not PayPal, not the
+signing machine.
+
+**Set `LICENCE_BACKUP_PASSPHRASE` and take one from `/admin/backup`.** It is a
+single encrypted file holding the database (as a `VACUUM INTO` snapshot, not a
+file copy — this store runs in WAL mode, so the `.db` on its own is an older
+database than the one being served), the ledger, the outbox and the audit trail.
+
+There is no unencrypted option, and that is not fussiness: the outbox holds
+redemption codes in the clear and a redemption code is a bearer credential, the
+store holds every licence that has been signed, and the entire point of a backup
+is to put it somewhere less careful than this box.
+
+Reading one back:
+
+```
+docker compose exec licence dotnet Emby.Sso.LicenceService.dll \
+  restore --in /data/whatever.backup --out /data/restored
+```
+
+It needs the passphrase that was in force **when the backup was taken**, refuses
+a destination that is not empty, and never writes over a live store — moving the
+files into place is your own deliberate step. Rehearse it before you need it.
+
+**The signing key is not in there.** It is not on this machine. Back it up
+separately, where it lives; losing it is unrecoverable in a way that losing this
+is not.
+
+The older, manual way still works if you prefer it:
 
 ```
 sqlite3 /srv/emby-sso/data/licences.db ".backup '/backup/licences.db'"
 cp /srv/emby-sso/data/licences-issued.jsonl /backup/
 ```
 
-The outbox is a credential store; back it up only if you are willing to guard
-the backup like one, and prune it as you deliver.
+...but you then encrypt it yourself, and the outbox in it is a credential store.
 
 ---
 
@@ -419,8 +472,10 @@ rather than starting half-configured.
 
 | Variable | Default | |
 | --- | --- | --- |
-| `LICENCE_SIGNING_KEY_PATH` | *(required)* | The read-only mounted private key. |
+| `LICENCE_SIGNING_KEY_PATH` | *(refused)* | **Setting this stops the service starting.** There is no private key on this host; see *THE SIGNING KEY IS NOT HERE*. |
+| `LICENCE_PUBLIC_KEYS` | *(required)* | The PUBLIC licence key or keys the plugin build trusts — one JWK, or a JSON array during a rotation. Not a secret; refused if it carries private material. |
 | `LICENCE_DATA_DIR` | `/data` | The mounted volume. |
+| `LICENCE_BACKUP_PASSPHRASE` | — | Turns on `/admin/backup`. At least 16 characters. There is no unencrypted backup. |
 | `LICENCE_PUBLIC_BASE_URL` | — | The https address this service is reached on. Derives the PayPal return and cancel URLs. |
 | `LICENCE_ACTIVATIONS_ALLOWED` | `3` | Servers per code. |
 | `LICENCE_DAYS` | `365` | Licence term, fixed at a code's first activation. |
@@ -439,6 +494,16 @@ rather than starting half-configured.
 | `PAYPAL_PRODUCT_NAME` | `Emby SSO plugin licence` | |
 | `PAYPAL_RETURN_URL` | derived | |
 | `PAYPAL_CANCEL_URL` | derived | |
+
+**In front of the admin password — both optional, both off, both fail closed.**
+`ADMIN_ALLOWED_CIDRS` is a comma-separated list of networks `/admin` may be
+reached from (a bare address means that host; it depends on
+`LICENCE_TRUSTED_PROXY_HOPS` being right). `ADMIN_REQUIRED_HEADER` and
+`ADMIN_REQUIRED_HEADER_VALUE` require a header your proxy adds — a Cloudflare
+Access assertion, an oauth2-proxy header, a verified client certificate, or a
+long shared secret — checked in constant time *before* the password, so a caller
+who cannot produce it never costs a PBKDF2 verification. **Your proxy must strip
+that header from incoming requests.** A request that fails either gets a 404.
 
 **The admin page — all optional, and off.** `ADMIN_PASSWORD_HASH` is the switch:
 with it unset the routes are never mapped. See *The admin page* for what turning

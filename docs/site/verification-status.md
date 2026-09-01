@@ -179,13 +179,80 @@ silently.
 !!! unverified "Nothing here has confirmed that GitLab Pages publishes it"
 
     The site builds locally and the `pages` job follows GitLab's contract, but
-    there is no HTTPS access to `git.koper.cloud` from the environment this was
+    there is no HTTPS access to `git.koper.cloud` (which is SSH only - the web
+    and API host is `gitlab.koper.cloud`) from the environment this was
     written in. Whether Pages is enabled on the instance or the project, what
     the resulting URL is, and whether a pipeline run actually publishes are all
     unconfirmed.
 
     If the project is **private**, GitLab Pages may be access-controlled, and
     anyone you send here would need an account on the instance to read it.
+
+### Offline signing
+
+!!! unverified "The round trip has been run in tests, not on the real service"
+
+    **Checked, and by more than a passing test:**
+    `licencetool sign` was run for real, on this machine, against the actual
+    signing key: it read a requests file, produced a signed file at mode 600,
+    appended to the ledger, and wrote a token whose `kid` header names the key.
+    That token is checked into the plugin's suite
+    (`RealLicenceTests`) and the **shipped build accepts it**, which is the one
+    thing no generated-key test can prove.
+
+    The upload side - verification against the recorded terms, the refusals for
+    a wrong key, a wrong server, an extended expiry, an unknown request, a
+    replayed file - is covered by `OfflineSigningTests` against a real store, and
+    the audience check was confirmed to fail those tests when removed.
+
+    **Not yet done on the deployed service:** nobody has pressed Download on a
+    live `/admin/signing`, signed that file, and uploaded it. The exchange format
+    is shared code and the file this tool wrote by hand parses, but the browser
+    round trip - the multipart upload, the download's `Content-Disposition` - has
+    only been exercised through a TestServer.
+
+### The admin network gate and required header
+
+!!! unverified "Correct over a TestServer; never tried behind the real proxy"
+
+    `AdminAccessGateTests` and `AdminGateEndpointTests` cover the parsing, the
+    CIDR maths, the fail-closed directions and the 404. What they cannot cover is
+    the thing most likely to be wrong in practice: **whether
+    `LICENCE_TRUSTED_PROXY_HOPS` is set correctly for the reverse proxy actually
+    in front of the service.** Set it, then check the log lines name real client
+    addresses, *before* relying on `ADMIN_ALLOWED_CIDRS` - with the hop count
+    wrong, the restriction either allows everyone or nobody.
+
+    Nothing here can check that your proxy strips `ADMIN_REQUIRED_HEADER` from
+    incoming requests, and a header a client can set is not a check.
+
+### Encrypted backups
+
+!!! unverified "Round-tripped in tests, including a real store; never restored in anger"
+
+    **Checked:** a backup of a live test service - WAL-mode database included,
+    via `VACUUM INTO` rather than a file copy - restores to a database that opens
+    and holds the right rows. The wrong passphrase fails, a single flipped byte
+    fails, the iteration count cannot be lowered, two backups of the same data
+    differ, and an archive entry that would escape the destination is refused.
+
+    **Not checked:** that a restore into the real deployment's `/data` produces a
+    service that starts. The `restore` command deliberately never writes over a
+    live store, so the last step - stop, move the files, fix ownership, start -
+    is by hand and has not been rehearsed. Rehearse it before you need it.
+
+### The dependency audit and the wiki
+
+!!! unverified "New CI jobs, not yet run by a runner"
+
+    `ci/audit-packages.sh` was run locally against both solutions and **found a
+    real High-severity advisory on the first run** (`SQLitePCLRaw.lib.e_sqlite3`
+    2.1.6, GHSA-2m69-gcr7-jv3q), which is fixed in the same commit that added
+    the gate. Its detector was negative-tested against a synthetic finding.
+
+    `ci/publish-wiki.sh` has never pushed to a wiki: it needs a `WIKI_TOKEN` that
+    does not exist yet, and `CI_JOB_TOKEN` cannot push to a wiki. The markdown
+    conversion it does was run over these pages locally; the push was not.
 
 ## Anything else on a page
 

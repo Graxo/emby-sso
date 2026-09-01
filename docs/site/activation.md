@@ -49,6 +49,30 @@ usable; otherwise the page shows no link at all rather than a broken one.
     because a hostname is whatever DNS answers for, and DNS answers for
     `license.koper.cloud`. The other spelling has no record at all.
 
+## The first activation is not instant
+
+The **first** time a code is activated onto a server, the answer is *"your
+licence has been requested and is being issued"*, not a licence. Pressing
+**Activate** again once the vendor has signed it returns the licence, and every
+activation after that is immediate.
+
+This is deliberate, and it is the one place the plugin's user experience pays
+for a security decision. The vendor's licence service does not hold the key that
+signs licences — the key that could mint one for any Emby server, forever, with
+no way to recall it. A person with that key signs what has been paid for, on a
+machine that answers no requests. [The full reasoning is
+here](offline-signing.md).
+
+What it means for you:
+
+- **your code is not spent by the wait** — the activation is already recorded
+  against your server, and pressing Activate again does not use up another;
+- **nothing about your server's sign-ins changes while you wait** — the licence
+  check only affects *new* single sign-ons, and an unlicensed server has always
+  had its own Emby accounts working normally;
+- **if it is still pending after a few hours**, the vendor has not signed it
+  yet, and that is who to ask.
+
 ## What pressing Activate actually does
 
 1. The page POSTs the code to this plugin's own admin-only endpoint,
@@ -124,6 +148,7 @@ refusal and **Info** for a success. Neither ever contains the code.
 
 | What you see | What happened | What to do |
 |---|---|---|
+| Your licence has been requested and is being issued. | `pending_signature`. **Not an error, and your code has not been used up.** The vendor signs licences on a machine that is deliberately kept offline, so it is not instant — see [Signing licences offline](offline-signing.md) for why. | Press Activate again in a few minutes. Pressing it early costs nothing. |
 | Activated. The licence for this server has been saved. | The service issued a licence, this build verified it, and it was stored. | Nothing. The check is offline from here on. |
 | That redemption code was not recognised. | `invalid_code`: the service does not know it, or the purchase has not completed. | Check for typing mistakes, then ask the vendor. |
 | That redemption code has already been activated on as many servers as it allows. | `code_exhausted`. | Ask the vendor to release an activation, or buy another licence. |

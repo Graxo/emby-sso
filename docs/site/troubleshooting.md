@@ -204,6 +204,28 @@ cookie's `Path` no longer covers `/sso/callback`.
 
 ---
 
+## Your licence has been requested and is being issued.
+
+**Not an error, and nothing is wrong.** It appears under the **Activate** button
+on the plugin's configuration page the first time a redemption code is used on a
+server.
+
+The vendor's licence service does not hold the key that signs licences — it is
+kept on a machine that answers no requests, so that breaking into the service
+cannot mint one. Somebody signs what has been paid for and uploads it, and your
+next press of **Activate** returns the licence.
+
+- **Your code has not been used up.** The activation is already recorded against
+  this server; pressing Activate again does not consume another.
+- **Pressing it early costs nothing** beyond one rate-limiter token.
+- **Sign-ins are unaffected while you wait.** The licence check only gates *new*
+  single sign-ons; existing sessions and Emby's own local accounts carry on
+  exactly as before.
+- **Still pending after a few hours?** Then the vendor has not signed it yet,
+  and they are who to ask.
+
+The full reasoning is in [Signing licences offline](offline-signing.md).
+
 ## Problems that are not an error message
 
 ### A user cannot sign in with their old Emby password after using SSO once
