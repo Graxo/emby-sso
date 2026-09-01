@@ -38,37 +38,58 @@ a root-owned key fails later in a way that looks like corruption.
 
 ## 2. Configure the server
 
-Own the data directory. The container runs as **uid 5678** and cannot chown
-anything itself:
+Nothing to create and nothing to chown — **use a named volume** and Docker gives
+it the ownership the image already set. The container runs as uid 5678, holds no
+capabilities and never runs as root, so it cannot fix a directory itself; a
+named volume means it never has to.
 
-```
-sudo mkdir -p /srv/emby-sso/data
-sudo chown -R 5678:5678 /srv/emby-sso/data
-```
-
-Then, in your compose file or the `.env` beside it:
+In your compose file or the `.env` beside it:
 
 ```yaml
-image: registry.koper.local:5050/graxo/emby-sso/licence-service:main
-
-environment:
-  LICENCE_DATA_DIR: /data
-  LICENCE_PUBLIC_KEYS: '<the public JWK from step 1>'
-  LICENCE_PUBLIC_BASE_URL: https://license.koper.cloud
-  LICENCE_BACKUP_PASSPHRASE: <openssl rand -base64 32>
-  ADMIN_PASSWORD_HASH: <from step 3>
-  PAYPAL_ENV: sandbox
-  PAYPAL_WEBHOOK_ID: <from the PayPal dashboard>
-  PAYPAL_CLIENT_ID: <...>
-  PAYPAL_CLIENT_SECRET: <...>
-  PAYPAL_CURRENCY: GBP
-  PAYPAL_PRICE: "19.00"
+services:
+  licence:
+    image: registry.koper.local:5050/graxo/emby-sso/licence-service:main
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - licence-data:/data
+    environment:
+      LICENCE_DATA_DIR: /data
+      LICENCE_PUBLIC_KEYS: '<the public JWK from step 1>'
+      LICENCE_PUBLIC_BASE_URL: https://license.koper.cloud
+      LICENCE_BACKUP_PASSPHRASE: <openssl rand -base64 32>
+      ADMIN_PASSWORD_HASH: <from step 3>
+      PAYPAL_ENV: sandbox
+      PAYPAL_WEBHOOK_ID: <from the PayPal dashboard>
+      PAYPAL_CLIENT_ID: <...>
+      PAYPAL_CLIENT_SECRET: <...>
+      PAYPAL_CURRENCY: GBP
+      PAYPAL_PRICE: "19.00"
 
 volumes:
-  - /srv/emby-sso/data:/data
+  licence-data:
 ```
 
+That is the minimum that runs. `service/docker-compose.yml` has the same thing
+with the hardening on it — read-only root filesystem, dropped capabilities,
+memory and process limits — and comments explaining each. Take that one for a
+real deployment.
+
 Single quotes around the JWK — it contains `"` and `:`.
+
+> **Why a named volume.** A bind mount arrives owned by whoever owns it on the
+> host — root, unless somebody remembered `chown -R 5678:5678`. Nothing in the
+> container can fix that, and the first start dies with SQLite error 14,
+> `unable to open database file`. A named volume is initialised by Docker from
+> the image, ownership included, so it just works.
+>
+> If you want the data at a path you choose, a bind mount still works — use
+> `- /srv/emby-sso/data:/data` and run `sudo chown -R 5678:5678
+> /srv/emby-sso/data` **before** the first start.
+>
+> Either way, backups come from `/admin/backup`, which does not care which you
+> picked.
 
 **And remove any signing key.** The service will not start while one is
 configured:
@@ -134,7 +155,7 @@ It is misconfigured, and lists every problem at once:
 | `LICENCE_SIGNING_KEY_PATH is set` | Step 2 — grep the `.env` too, not just the compose file |
 | `LICENCE_PUBLIC_KEYS is not set` | Step 2 — the public JWK from step 1 |
 | `...carries PRIVATE key material` | You pasted the key *file*; it wants the printed public JWK |
-| `unable to open database file` | `chown -R 5678:5678` the **host** directory |
+| `unable to open database file` | The message names the uid it is running as and whether the directory is writable. Easiest fix is a named volume (step 2); with a bind mount, `chown -R <that uid>` the **host** directory |
 | `PAYPAL_WEBHOOK_ID` / `PAYPAL_PRICE` missing | Step 2 |
 | `LICENCE_BACKUP_PASSPHRASE is shorter than 16` | Generate a real one |
 

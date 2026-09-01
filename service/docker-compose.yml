@@ -1,14 +1,16 @@
-# FIRST TIME? Read service/docs/first-run.md. It covers where the signing key
-# comes from, creating /srv/emby-sso with the ownership uid 5678 needs, copying
-# the key without leaving a world-readable copy behind, and what each refusal to
-# start means. The paths below will not exist until you have done that.
+# FIRST TIME? Read service/docs/first-run.md - four steps, and this file is
+# step 2.
+#
+# As written, `docker compose up -d licence` needs no directory created, no
+# chown and no root: the state lives in a NAMED VOLUME that Docker initialises
+# with the ownership the image already set. The only things that must be your
+# own are LICENCE_PUBLIC_KEYS and the PayPal values under `environment`.
 #
 # The vendor runs this. It is a snippet to paste into whatever compose file the
-# host already has, not a file to run as-is: the two paths and the six values
-# under `environment` have to be the operator's own.
+# host already has, rather than a file to run as-is.
 #
-# UNRUN. Docker was not available where this was written, so neither this nor
-# the Dockerfile beside it has ever been built or started - by hand or by CI.
+# THE SIGNING KEY IS NOT HERE and must not be added - the service refuses to
+# start if it is. See the volumes block.
 
 services:
   licence:
@@ -116,12 +118,39 @@ services:
       # stealable whether or not anything reads it. Delete it from this host.
 
       # The state: SQLite store, the ledger in the offline tool's format, and
-      # the outbox of codes waiting to be sent. Must be owned by uid 5678.
-      # BACK THIS UP. Losing it loses who bought what, and nothing anywhere
-      # else can rebuild it - not PayPal, not the plugin, not the signing
-      # machine. Set LICENCE_BACKUP_PASSPHRASE below and take an encrypted copy
-      # from /admin/backup; read it back with `restore`.
-      - /srv/emby-sso/data:/data
+      # the outbox of codes waiting to be sent.
+      #
+      # A NAMED VOLUME, NOT A BIND MOUNT, and that is the difference between
+      # `docker compose up -d` working and it not.
+      #
+      # This container runs as uid 5678 and cannot chown anything - it holds no
+      # capabilities and never runs as root. SQLite has to CREATE files in here
+      # (the database and its -wal and -shm siblings), so the directory itself
+      # must be writable by that uid.
+      #
+      #   a BIND MOUNT arrives owned by whoever owns it on the host, which is
+      #   root unless somebody remembered `chown -R 5678:5678`. Nothing in the
+      #   container can fix that, so the first start fails with SQLite error 14,
+      #   'unable to open database file' - which names neither the uid nor the
+      #   directory. It was the most common first failure of this service.
+      #
+      #   a NAMED VOLUME is initialised by Docker from the image, ownership
+      #   included, and the Dockerfile already does `chown 5678:5678 /data`. So
+      #   it comes up owned correctly, with no chown, no root and nothing for
+      #   the operator to remember.
+      #
+      # BACK IT UP. Losing it loses who bought what, and nothing anywhere else
+      # can rebuild it - not PayPal, not the plugin, not the signing machine.
+      # Set LICENCE_BACKUP_PASSPHRASE below and take an encrypted copy from
+      # /admin/backup; read it back with `restore`. That is the supported route
+      # and it does not care which kind of volume this is.
+      #
+      # IF YOU WANT THE DATA AT A PATH YOU CHOOSE, a bind mount still works -
+      # swap the line below for `- /srv/emby-sso/data:/data` and run
+      # `sudo chown -R 5678:5678 /srv/emby-sso/data` FIRST, before the first
+      # start. The service prints the uid it is actually running as when it
+      # cannot write, so a mismatch is one line to diagnose rather than a guess.
+      - licence-data:/data
 
     environment:
       # --- required ---------------------------------------------------------
@@ -277,3 +306,10 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+# The state volume. Named rather than bound so that Docker gives it the
+# ownership the image already set on /data - see the comment on the mount
+# itself. `docker volume inspect emby-sso_licence-data` says where it lives on
+# the host if you ever need to reach it directly.
+volumes:
+  licence-data:

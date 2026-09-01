@@ -127,17 +127,36 @@ namespace Emby.Sso.LicenceService.Storage
                 // its -wal and -shm siblings - so being able to read the
                 // directory is not enough.
                 //
-                // Say which directory, and which user has to own it, because
-                // that is the whole of the fix and the operator cannot see this
-                // process's uid from the host.
+                // Say what was actually found, not what is usually wrong. The
+                // previous version of this message told the operator to chown
+                // the directory to 5678 - which is right, and is useless to
+                // somebody who has already done exactly that and is looking at
+                // the same error. It named no uid, so there was no way to tell
+                // "you chowned the wrong directory" from "you chowned the right
+                // one and something else is broken".
+                //
+                // So: the uid this process is really running as, whether the
+                // directory is even there, and whether a plain file can be
+                // created in it. Those three answers separate every cause this
+                // failure has.
                 throw new InvalidOperationException(
-                    "The licence store at " + Path + " could not be opened: " + ex.Message + Environment.NewLine +
-                    "The directory " + (directory ?? ".") + " must be writable by the user this service runs as, " +
-                    "which in the shipped image is uid 5678. In Docker that means the HOST directory you mounted " +
-                    "there, which is a different thing from the path inside the container: " +
-                    "`sudo chown -R 5678:5678 <the host directory>`." +
-                    Environment.NewLine +
-                    "See service/docs/first-run.md.",
+                    "The licence store at " + Path + " could not be opened: " + ex.Message + Environment.NewLine
+                    + Environment.NewLine
+                    + "  data directory : " + (directory ?? ".") + Environment.NewLine
+                    + "  exists         : " + (Directory.Exists(directory) ? "yes" : "NO") + Environment.NewLine
+                    + "  writable by me : " + (CanCreateAFileIn(directory) ? "yes" : "NO") + Environment.NewLine
+                    + "  running as uid : " + EffectiveUid() + Environment.NewLine
+                    + Environment.NewLine
+                    + "SQLite has to CREATE files here - the database and its -wal and -shm siblings - so being "
+                    + "able to READ the directory is not enough." + Environment.NewLine
+                    + Environment.NewLine
+                    + "If this is a bind mount, the HOST directory must be owned by the uid above, which is a "
+                    + "different thing from the path inside the container:" + Environment.NewLine
+                    + "    sudo chown -R " + EffectiveUid() + ":" + EffectiveUid() + " <the host directory>"
+                    + Environment.NewLine + Environment.NewLine
+                    + "Simpler: use a NAMED VOLUME instead. Docker gives a new named volume the ownership this "
+                    + "image already set on /data, so it works with no chown and no root. See "
+                    + "service/docs/first-run.md.",
                     ex);
             }
 
@@ -287,6 +306,82 @@ CREATE TABLE IF NOT EXISTS webhook_events (
             command.CommandText = "VACUUM INTO $path;";
             command.Parameters.AddWithValue("$path", full);
             command.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// The uid this process is really running as, so a startup failure can
+        /// print it. .NET exposes no portable way to ask, and the image is
+        /// Linux-only, so /proc/self/status it is - its `Uid:` line is real,
+        /// effective, saved, filesystem, and the effective one is what the
+        /// kernel checks a write against.
+        /// </summary>
+        private static string EffectiveUid()
+        {
+            try
+            {
+                foreach (var line in File.ReadAllLines("/proc/self/status"))
+                {
+                    if (!line.StartsWith("Uid:", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var fields = line.Split(new[] { '\t', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    if (fields.Length >= 3)
+                    {
+                        return fields[2];
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // Not Linux, or a stripped /proc. The message is worth slightly
+                // less; it is not worth failing differently over.
+            }
+
+            return "unknown";
+        }
+
+        /// <summary>
+        /// Whether this process can actually create a file here - which is the
+        /// question, and is not the same as whether it can read the directory.
+        /// The probe is removed again whatever happens.
+        /// </summary>
+        private static bool CanCreateAFileIn(string directory)
+        {
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                return false;
+            }
+
+            var probe = System.IO.Path.Combine(directory, ".write-probe-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                using (File.Create(probe))
+                {
+                }
+
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return false;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(probe);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    // It was never created, or cannot be removed. Either way this
+                    // is a diagnostic on a failing path; do not mask the real
+                    // error with a cleanup one.
+                }
+            }
         }
 
         /// <summary>Cheap proof that the volume is mounted and writable, for /healthz.</summary>
