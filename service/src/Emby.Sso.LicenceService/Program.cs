@@ -73,6 +73,9 @@ namespace Emby.Sso.LicenceService
                     case "hash-password":
                         return HashPassword();
 
+                    case "restore":
+                        return Restore(args);
+
                     case "list-codes":
                         return Manage(args, ManagementCommands.ListCodes);
 
@@ -123,27 +126,11 @@ namespace Emby.Sso.LicenceService
                 return ConfigurationError;
             }
 
-            SigningKeyFile.SigningKey key;
-
-            try
-            {
-                key = SigningKeyFile.Load(options.SigningKeyPath);
-            }
-            catch (SigningKeyFile.SigningKeyException ex)
-            {
-                // The loudest failure in the service, and the earliest. A licence
-                // service that starts without a usable signing key would take
-                // money and fail at the last step.
-                Console.Error.WriteLine(ex.Message);
-
-                return ConfigurationError;
-            }
-
             WebApplication app;
 
             try
             {
-                app = BuildApp(options, key, null);
+                app = BuildApp(options, null);
             }
             catch (MailTemplateException ex)
             {
@@ -164,9 +151,14 @@ namespace Emby.Sso.LicenceService
         /// </summary>
         internal static WebApplication BuildApp(
             ServiceOptions options,
-            SigningKeyFile.SigningKey key,
             Action<WebApplicationBuilder> configure)
         {
+            // THERE IS NO PRIVATE KEY HERE, and Problems() has already refused
+            // to start if the environment still names one. What this service
+            // holds is the PUBLIC half, used to check a licence somebody with the
+            // key signed elsewhere before it is stored. See Signing.SigningDesk.
+            var trusted = TrustedKeys.Parse(options.PublicKeys);
+
             var builder = WebApplication.CreateBuilder(Array.Empty<string>());
 
             builder.Logging.ClearProviders();
@@ -191,9 +183,10 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(options.PayPal);
             builder.Services.AddSingleton(options.RateLimit);
             builder.Services.AddSingleton(store);
-            builder.Services.AddSingleton(key);
-            builder.Services.AddSingleton(new LicenceIssuer(key.Key));
+            builder.Services.AddSingleton(trusted);
             builder.Services.AddSingleton(new LicenceLedger(options.LedgerPath));
+            builder.Services.AddSingleton<Signing.SigningDesk>();
+            builder.Services.AddSingleton<Backup.BackupService>();
             var outbox = new CodeOutbox(options.OutboxPath);
 
             builder.Services.AddSingleton(outbox);
@@ -287,10 +280,10 @@ namespace Emby.Sso.LicenceService
             var log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Emby.Sso.LicenceService");
 
             log.LogInformation(
-                "signing key {Thumbprint} loaded from {Path}; store {Store}; ledger {Ledger}; paypal {Env}; "
+                "THIS SERVICE CANNOT SIGN - no private key is loaded, by design. Trusted licence keys: {Keys}. "
+                + "store {Store}; ledger {Ledger}; paypal {Env}; "
                 + "{Allowed} activations per code; {Days} day licences",
-                key.Thumbprint,
-                key.Path,
+                trusted.Describe(),
                 store.Path,
                 options.LedgerPath,
                 options.PayPal.IsLive ? "LIVE" : "sandbox",
@@ -313,6 +306,30 @@ namespace Emby.Sso.LicenceService
 
             log.LogInformation("admin page: {Admin}", options.Admin.Describe());
 
+            var waiting = store.CountWaitingToBeSigned();
+
+            if (waiting > 0)
+            {
+                // At startup, because it is the one number a restart should not
+                // let an operator forget: every one of these is a customer who
+                // has paid and is being told to try again later.
+                log.LogWarning(
+                    "{Waiting} licence(s) are waiting to be signed. Download them from /admin/signing, sign them "
+                    + "with `licencetool sign`, and upload the result.",
+                    waiting);
+            }
+
+            if (!string.IsNullOrEmpty(options.BackupPassphrase))
+            {
+                log.LogInformation("encrypted backups: on, downloadable from /admin/backup");
+            }
+            else
+            {
+                log.LogWarning(
+                    "encrypted backups: OFF. Nothing here can rebuild who bought what if this volume is lost. "
+                    + "Set LICENCE_BACKUP_PASSPHRASE and take one from /admin/backup.");
+            }
+
             // Before any route, so that every response carries them - including
             // the ones a route never reaches, such as a 404 or a 413.
             app.UseSecurityHeaders();
@@ -321,7 +338,7 @@ namespace Emby.Sso.LicenceService
 
             if (adminPassword != null)
             {
-                AdminEndpoints.Map(app, options, adminPassword);
+                AdminEndpoints.Map(app, options, adminPassword, new AdminAccessGate(options.Admin, options.TrustedProxyHops));
             }
 
             return app;
@@ -584,7 +601,7 @@ namespace Emby.Sso.LicenceService
                 }
             });
 
-            app.MapGet("/healthz", (LicenceStore store, SigningKeyFile.SigningKey key, ActivationRateLimiter limiter) =>
+            app.MapGet("/healthz", (LicenceStore store, TrustedKeys trusted, ActivationRateLimiter limiter) =>
             {
                 try
                 {
@@ -602,11 +619,12 @@ namespace Emby.Sso.LicenceService
                     {
                         status = "ok",
 
-                        // The PUBLIC key's thumbprint, so "which key is this box
-                        // signing with" is answerable from outside without a
-                        // shell, and answerable by comparing it to the plugin
-                        // build's embedded key. Nothing here is secret.
-                        signingKey = key.Thumbprint,
+                        // Which PUBLIC keys this box will accept a signed
+                        // licence from, so "does the service agree with the
+                        // plugin build?" is answerable from outside without a
+                        // shell. Nothing here is secret, and there is no private
+                        // key on this host to name.
+                        trustedKeys = trusted.Describe(),
                         paypal = options.PayPal.IsLive ? "live" : "sandbox",
                         rateLimiterClients = limiter.TrackedClients,
                     },
@@ -670,6 +688,13 @@ namespace Emby.Sso.LicenceService
 
                 case ActivationError.RateLimited:
                     return 429;
+
+                // 202 Accepted, and the one code in this contract that is not a
+                // failure: the activation IS recorded and the licence is being
+                // signed on a machine this service cannot reach. The plugin
+                // shows the message and the customer presses Activate again.
+                case ActivationError.PendingSignature:
+                    return 202;
 
                 default:
                     return 500;
@@ -899,6 +924,82 @@ namespace Emby.Sso.LicenceService
         /// themselves, so every one of them can be run in a test against a
         /// temporary directory and have its output read back.
         /// </summary>
+        /// <summary>
+        /// `restore` - reads an encrypted backup back out.
+        ///
+        /// A COMMAND, NOT A PAGE, and deliberately. Taking a backup is routine
+        /// and belongs on the admin page; putting one back is the one operation
+        /// that could destroy a live store, and it should require a shell on the
+        /// box rather than a session cookie. It also has to work when the
+        /// service will not start, which is exactly when a restore is needed.
+        ///
+        /// It never writes over anything: the destination has to be empty, and
+        /// moving the files into place afterwards is the operator's own,
+        /// deliberate step.
+        /// </summary>
+        private static int Restore(string[] args)
+        {
+            var parsed = ParseArguments(args);
+
+            if (!parsed.TryGetValue("in", out var input) || string.IsNullOrWhiteSpace(input))
+            {
+                Console.Error.WriteLine("restore --in <backup file> --out <an empty directory>");
+
+                return 1;
+            }
+
+            if (!parsed.TryGetValue("out", out var output) || string.IsNullOrWhiteSpace(output))
+            {
+                Console.Error.WriteLine("restore --in <backup file> --out <an empty directory>");
+
+                return 1;
+            }
+
+            var passphrase = Environment.GetEnvironmentVariable("LICENCE_BACKUP_PASSPHRASE");
+
+            if (string.IsNullOrEmpty(passphrase))
+            {
+                Console.Error.WriteLine(
+                    "LICENCE_BACKUP_PASSPHRASE is not set. It has to be the passphrase that was in force WHEN THE "
+                    + "BACKUP WAS TAKEN, which is not necessarily the one this deployment uses now.");
+
+                return ConfigurationError;
+            }
+
+            byte[] blob;
+
+            try
+            {
+                blob = File.ReadAllBytes(input);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine("Could not read " + input + ": " + ex.Message);
+
+                return 1;
+            }
+
+            try
+            {
+                var restored = Backup.BackupArchive.Restore(blob, passphrase, output);
+
+                Console.Error.WriteLine(
+                    "Restored " + restored.ToString(CultureInfo.InvariantCulture) + " file(s) into "
+                    + Path.GetFullPath(output) + ".");
+                Console.Error.WriteLine(
+                    "Nothing live has been touched. Stop the service, move licences.db and the .jsonl files into "
+                    + "LICENCE_DATA_DIR yourself, make sure they are owned by uid 5678, and start it again.");
+
+                return 0;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentException)
+            {
+                Console.Error.WriteLine(ex.Message);
+
+                return 1;
+            }
+        }
+
         private static int Manage(
             string[] args,
             Func<IDictionary<string, string>, ServiceOptions, TextWriter, TextWriter, DateTimeOffset, int> command)
@@ -1023,6 +1124,12 @@ namespace Emby.Sso.LicenceService
       Sales whose code has not reached the buyer. --reveal prints the codes
       themselves, which are in the outbox file in the clear.
 
+  restore --in <backup file> --out <an empty directory>
+      Decrypts a backup taken from /admin/backup, using the passphrase in
+      LICENCE_BACKUP_PASSPHRASE - which must be the one that was in force when
+      the backup was TAKEN. Restores into an empty directory and never over a
+      live store; moving the files into place is your own step.
+
   healthcheck [--url <url>]
       Exits 0 if /healthz answers 200. What the container HEALTHCHECK runs.
 
@@ -1031,7 +1138,9 @@ namespace Emby.Sso.LicenceService
       turns on the admin page at /admin. With no such variable set there is no
       admin page at all: the routes are never mapped. Read the section in
       service/README.md before turning it on - it is a public door to the box
-      that holds the signing key.
+      that holds the customer store. ADMIN_ALLOWED_CIDRS and
+      ADMIN_REQUIRED_HEADER put something in front of the password; both are
+      off by default and both fail closed when set.
 
 Exit codes: 0 done, 1 no such code or bad usage, 66 there is no store at
 LICENCE_DATA_DIR, 78 the configuration is wrong.";

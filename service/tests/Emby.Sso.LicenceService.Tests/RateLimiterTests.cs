@@ -194,7 +194,13 @@ namespace Emby.Sso.LicenceService.Tests
 
             var code = service.GiveOutACode();
 
-            Assert.True(service.Activations.Activate(Request(code), "1.2.3.4").IsSuccess);
+            // The first call is allowed through - it spends the budget whether
+            // or not it can hand a licence back. Since the private key left this
+            // host, a first activation answers "being signed" rather than a
+            // licence; what matters here is that it was not rate limited.
+            Assert.NotEqual(
+                ActivationError.RateLimited,
+                service.Activations.Activate(Request(code), "1.2.3.4").Error);
 
             var refused = service.Activations.Activate(Request(code), "1.2.3.4");
 

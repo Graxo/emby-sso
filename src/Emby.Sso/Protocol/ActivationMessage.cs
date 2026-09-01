@@ -171,6 +171,18 @@ namespace Emby.Sso.Protocol
                         + "code or your server. Try again in a few minutes.",
                         detail);
 
+                case "pending_signature":
+                    // Not an error, and the wording says so plainly, because an
+                    // administrator who reads this as a failure will retype their
+                    // code, then email the vendor, then give up - when all that
+                    // is needed is to press the button again later.
+                    return ActivationResult.Refused(
+                        ActivationOutcome.PendingSignature,
+                        "Your licence has been requested and is being issued. Nothing is wrong and your code "
+                        + "has not been used up - the vendor signs licences on a machine that is deliberately "
+                        + "kept offline, so it is not instant. Press Activate again in a few minutes.",
+                        detail);
+
                 default:
                     // No code, or one this build does not know. Still a refusal.
                     return ActivationResult.Refused(
@@ -195,6 +207,7 @@ namespace Emby.Sso.Protocol
                 case "malformed_request":
                 case "rate_limited":
                 case "server_error":
+                case "pending_signature":
                     return true;
 
                 default:

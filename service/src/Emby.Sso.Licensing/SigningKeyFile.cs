@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.IdentityModel.Tokens;
@@ -12,12 +10,15 @@ namespace Emby.Sso.Licensing
     /// Loads the private signing key off disk, and refuses to load one that is
     /// stored carelessly.
     ///
-    /// THIS IS THE ONE THING THE WHOLE SCHEME RESTS ON. Until this service
-    /// existed the key lived offline on the vendor's laptop and touched the
-    /// network never; it now sits on a box with a port open to the internet.
-    /// Everything this class refuses to do is refused loudly and at startup,
-    /// because a licence service that has quietly fallen back to something
-    /// weaker is worse than one that will not start.
+    /// THIS IS THE ONE THING THE WHOLE SCHEME RESTS ON, and it belongs on the
+    /// SIGNING MACHINE ONLY. For one release the licence service loaded this at
+    /// startup, which put the key that mints every customer's licence on a box
+    /// with a port open to the internet; it does not any more, and refuses to
+    /// start if that mount is still there. The only caller now is
+    /// `licencetool sign`, run by hand on a machine of the vendor's choosing.
+    /// Everything this class refuses to do is refused loudly and up front,
+    /// because a signing tool that has quietly fallen back to something weaker
+    /// is worse than one that will not run.
     /// </summary>
     public static class SigningKeyFile
     {
@@ -60,8 +61,8 @@ namespace Emby.Sso.Licensing
             if (string.IsNullOrWhiteSpace(path))
             {
                 throw new SigningKeyException(
-                    "No signing key path configured. Set LICENCE_SIGNING_KEY_PATH to the "
-                    + LicenceFormat.PrivateKeyFileName + " that was mounted read-only into this container.");
+                    "No signing key path given. Point --key at the " + LicenceFormat.PrivateKeyFileName
+                    + " that `licencetool keygen` wrote.");
             }
 
             var full = Path.GetFullPath(path);
@@ -70,8 +71,8 @@ namespace Emby.Sso.Licensing
             {
                 throw new SigningKeyException(
                     "No signing key at " + full + "." + Environment.NewLine
-                    + "Nothing can be issued without it. Check the read-only bind mount in docker-compose.yml, "
-                    + "and that LICENCE_SIGNING_KEY_PATH names the file rather than the directory it is in.");
+                    + "Nothing can be signed without it. Check that the path names the file rather than the "
+                    + "directory it is in, and that you are on the machine the key lives on.");
             }
 
             RefuseAGitWorkingTree(full);
@@ -87,7 +88,7 @@ namespace Emby.Sso.Licensing
             {
                 throw new SigningKeyException(
                     "Cannot read the signing key at " + full + ": " + ex.Message + Environment.NewLine
-                    + "The mount has to be readable by the uid this container runs as.");
+                    + "It has to be readable by the account running this.");
             }
 
             JsonWebKey key;
@@ -146,7 +147,7 @@ namespace Emby.Sso.Licensing
                 throw new SigningKeyException(
                     "REFUSING TO START: the signing key at " + path + " is readable or writable by accounts "
                     + "other than its owner (mode " + Describe(mode) + ")." + Environment.NewLine
-                    + "This key mints licences for every customer you have. `chmod 600` it on the host, and if it "
+                    + "This key mints licences for every customer you have. `chmod 600` it, and if it "
                     + "has been sitting like that on a machine other people can reach, treat it as leaked: new "
                     + "keypair, new plugin build, reissue everybody.");
             }
@@ -197,18 +198,18 @@ namespace Emby.Sso.Licensing
         {
             internal SigningKey(JsonWebKey key, string path)
             {
-                Key = key;
                 Path = path;
-                PublicJwk = JsonSerializer.Serialize(new Dictionary<string, string>
-                {
-                    ["kty"] = "RSA",
-                    ["n"] = key.N,
-                    ["e"] = key.E,
-                });
+                PublicJwk = LicenceFormat.PublicJwk(key.N, key.E);
+                Thumbprint = LicenceFormat.KeyId(PublicJwk);
 
-                var hash = SHA256.HashData(Encoding.UTF8.GetBytes(PublicJwk));
+                // The name every licence this key signs will carry in its `kid`
+                // header, set on the key itself because that is where
+                // IdentityModel reads it from when it writes the header. It is
+                // derived from the public half, so the plugin can work out the
+                // same name for the same key without having been told it.
+                key.Kid = Thumbprint;
 
-                Thumbprint = Convert.ToHexString(hash).ToLowerInvariant().Substring(0, 16);
+                Key = key;
             }
 
             /// <summary>The key itself, private half included. Never log this.</summary>
@@ -220,10 +221,11 @@ namespace Emby.Sso.Licensing
             public string PublicJwk { get; }
 
             /// <summary>
-            /// A short SHA-256 of the PUBLIC half, so a startup log line and the
-            /// health endpoint can say <em>which</em> key is loaded - "did I mount
-            /// last year's key?" is a real question - without any of it being
-            /// derived from the private material.
+            /// A short SHA-256 of the PUBLIC half, so a log line can say
+            /// <em>which</em> key is loaded - "did I sign that with last year's
+            /// key?" is a real question - without any of it being derived from
+            /// the private material. It is also the licence's `kid`, and the
+            /// name the plugin knows this key by.
             /// </summary>
             public string Thumbprint { get; }
         }

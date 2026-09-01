@@ -10,6 +10,7 @@ using Emby.Sso.LicenceService.Configuration;
 using Emby.Sso.LicenceService.Delivery;
 using Emby.Sso.LicenceService.Management;
 using Emby.Sso.LicenceService.Storage;
+using Emby.Sso.Licensing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -57,7 +58,16 @@ namespace Emby.Sso.LicenceService.Admin
     {
         private const string CodesPath = "/admin/codes";
 
-        public static void Map(WebApplication app, ServiceOptions options, AdminPassword password)
+        /// <summary>
+        /// The most a signed-licence upload may be. A batch is capped at 500
+        /// licences by SigningExchange and a licence is under a kilobyte, so
+        /// this is generous - it exists so that an authenticated operator with a
+        /// wrong file cannot make the service read an arbitrary amount into
+        /// memory.
+        /// </summary>
+        private const long MaximumUploadBytes = 4 * 1024 * 1024;
+
+        public static void Map(WebApplication app, ServiceOptions options, AdminPassword password, AdminAccessGate gate)
         {
             var sessions = app.Services.GetRequiredService<AdminSessions>();
             var throttle = app.Services.GetRequiredService<AdminLoginThrottle>();
@@ -65,8 +75,44 @@ namespace Emby.Sso.LicenceService.Admin
             var audit = app.Services.GetRequiredService<AdminAudit>();
             var store = app.Services.GetRequiredService<LicenceStore>();
             var clock = app.Services.GetRequiredService<TimeProvider>();
+            var desk = app.Services.GetRequiredService<Signing.SigningDesk>();
+            var backups = app.Services.GetRequiredService<Backup.BackupService>();
+            var facts = new ChromeFacts(desk, backups.IsConfigured);
 
             string Client(HttpContext context) => Program.ClientKey(context, options.TrustedProxyHops);
+
+            // BEFORE EVERYTHING. Not part of a route, not after the session
+            // lookup, not after the throttle: a caller who is not allowed to see
+            // this page at all must not be able to spend the login throttle's
+            // budget or make this service do PBKDF2 work. See AdminAccessGate
+            // for what it checks and why a refusal is a 404 rather than a 403.
+            if (!gate.IsOpen)
+            {
+                app.Use(async (context, next) =>
+                {
+                    if (context.Request.Path.StartsWithSegments("/admin"))
+                    {
+                        var header = gate.HeaderName == null
+                            ? null
+                            : context.Request.Headers[gate.HeaderName].ToString();
+
+                        if (!gate.Admits(
+                                context.Connection.RemoteIpAddress,
+                                context.Request.Headers["X-Forwarded-For"].ToString(),
+                                header))
+                        {
+                            // Exactly what an unmapped path answers. A scanner
+                            // learns nothing, including that there is a page here
+                            // worth coming back to from somewhere else.
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+
+                            return;
+                        }
+                    }
+
+                    await next(context).ConfigureAwait(false);
+                });
+            }
 
             // ------------------------------------------------------- sign in
 
@@ -186,7 +232,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     audit.Record(AdminAudit.CsrfRefused, client, session, "logout");
 
-                    return Refused(session, "Signing out was refused.");
+                    return Refused(session, facts, "Signing out was refused.");
                 }
 
                 // The state that authorises a request is destroyed here, on the
@@ -265,7 +311,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     audit.Record(AdminAudit.CsrfRefused, client, session, "find");
 
-                    return Refused(session, "That lookup was refused.");
+                    return Refused(session, facts, "That lookup was refused.");
                 }
 
                 var result = CodeLookup.ByCode(store, form["code"].ToString());
@@ -277,7 +323,7 @@ namespace Emby.Sso.LicenceService.Admin
 
                 return Html(
                     AdminPages.Notice(
-                        Chrome(session),
+                        Chrome(session, facts),
                         "Not found",
                         "That code was not found",
                         result.Explain()),
@@ -299,12 +345,13 @@ namespace Emby.Sso.LicenceService.Admin
                 if (!found.Found)
                 {
                     return Html(
-                        AdminPages.Notice(Chrome(session), "Not found", "No such code", found.Explain()),
+                        AdminPages.Notice(Chrome(session, facts), "Not found", "No such code", found.Explain()),
                         404);
                 }
 
                 return Html(AdminPages.Detail(DetailFor(
                     session,
+                    facts,
                     options,
                     store,
                     found.Code,
@@ -330,12 +377,12 @@ namespace Emby.Sso.LicenceService.Admin
                 if (!found.Found)
                 {
                     return Html(
-                        AdminPages.Notice(Chrome(session), "Not found", "No such code", found.Explain()),
+                        AdminPages.Notice(Chrome(session, facts), "Not found", "No such code", found.Explain()),
                         404);
                 }
 
                 return Html(AdminPages.VoidConfirm(
-                    DetailFor(session, options, store, found.Code, clock.GetUtcNow(), null)));
+                    DetailFor(session, facts, options, store, found.Code, clock.GetUtcNow(), null)));
             });
 
             app.MapPost("/admin/void", async (HttpContext context) =>
@@ -354,7 +401,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     audit.Record(AdminAudit.CsrfRefused, client, session, "void");
 
-                    return Refused(session, "That void was refused and nothing was changed.");
+                    return Refused(session, facts, "That void was refused and nothing was changed.");
                 }
 
                 var found = CodeLookup.ByTag(store, form["tag"].ToString());
@@ -362,7 +409,7 @@ namespace Emby.Sso.LicenceService.Admin
                 if (!found.Found)
                 {
                     return Html(
-                        AdminPages.Notice(Chrome(session), "Not found", "No such code", found.Explain()),
+                        AdminPages.Notice(Chrome(session, facts), "Not found", "No such code", found.Explain()),
                         404);
                 }
 
@@ -430,7 +477,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     audit.Record(AdminAudit.CsrfRefused, client, session, "issue");
 
-                    return Refused(session, "That was refused and NO CODE WAS CREATED.");
+                    return Refused(session, facts, "That was refused and NO CODE WAS CREATED.");
                 }
 
                 // Spent before anything is created, and spent whatever happens
@@ -441,7 +488,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     return Html(
                         AdminPages.Notice(
-                            Chrome(session),
+                            Chrome(session, facts),
                             "Already submitted",
                             "That form had already been submitted",
                             new[]
@@ -524,7 +571,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     return Html(
                         AdminPages.Notice(
-                            Chrome(session),
+                            Chrome(session, facts),
                             "Shown once",
                             "That code has already been shown",
                             new[]
@@ -539,7 +586,7 @@ namespace Emby.Sso.LicenceService.Admin
                         410);
                 }
 
-                return Html(AdminPages.ShowCodeOnce(Chrome(session), flash));
+                return Html(AdminPages.ShowCodeOnce(Chrome(session, facts), flash));
             });
 
             // -------------------------------------------------------- outbox
@@ -595,7 +642,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     audit.Record(AdminAudit.CsrfRefused, client, session, "outbox reveal");
 
-                    return Refused(session, "That was refused and nothing was shown.");
+                    return Refused(session, facts, "That was refused and nothing was shown.");
                 }
 
                 if (!session.ConsumeNonce(form["nonce"].ToString()))
@@ -610,7 +657,7 @@ namespace Emby.Sso.LicenceService.Admin
                 {
                     return Html(
                         AdminPages.Notice(
-                            Chrome(session),
+                            Chrome(session, facts),
                             "Nothing to show",
                             "There is no code on that line",
                             new[] { "The line has been pruned, or it never carried a code." }),
@@ -634,6 +681,204 @@ namespace Emby.Sso.LicenceService.Admin
             });
 
             // --------------------------------------------------------- audit
+
+            // ------------------------------------------------------- signing
+
+            app.MapGet("/admin/signing", (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                return Html(AdminPages.Signing(SigningPage(session, facts, desk, options)));
+            });
+
+            app.MapPost("/admin/signing/download", async (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                var form = await ReadFormAsync(context).ConfigureAwait(false);
+
+                if (!Csrf(form, session))
+                {
+                    return Refused(session, facts, "That download was refused.");
+                }
+
+                var file = desk.Download();
+
+                // Recorded, because it is a list of every customer waiting -
+                // server ids and all - leaving the machine.
+                audit.Record(
+                    AdminAudit.SigningDownloaded,
+                    Client(context),
+                    session,
+                    file.Requests.Count.ToString(CultureInfo.InvariantCulture) + " request(s)");
+
+                context.Response.Headers.ContentDisposition =
+                    "attachment; filename=\"emby-sso-signing-requests.json\"";
+
+                return Results.Text(SigningExchange.Write(file), "application/json", Encoding.UTF8);
+            });
+
+            app.MapPost("/admin/signing/upload", async (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                var form = await ReadFormAsync(context).ConfigureAwait(false);
+
+                if (!Csrf(form, session))
+                {
+                    return Refused(session, facts, "That upload was refused and nothing was stored.");
+                }
+
+                var file = form.Files.GetFile("file");
+
+                if (file == null || file.Length == 0)
+                {
+                    return Html(AdminPages.Signing(SigningPage(
+                        session,
+                        facts,
+                        desk,
+                        options,
+                        "Choose the file `licencetool sign` wrote.",
+                        bad: true)));
+                }
+
+                if (file.Length > MaximumUploadBytes)
+                {
+                    return Html(AdminPages.Signing(SigningPage(
+                        session,
+                        facts,
+                        desk,
+                        options,
+                        "That file is larger than an upload of signed licences can be.",
+                        bad: true)));
+                }
+
+                string json;
+
+                using (var reader = new StreamReader(file.OpenReadStream(), Encoding.UTF8))
+                {
+                    json = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                var report = await desk.UploadAsync(json).ConfigureAwait(false);
+
+                audit.Record(
+                    AdminAudit.SigningUploaded,
+                    Client(context),
+                    session,
+                    report.Summary());
+
+                var problems = new List<string>();
+
+                foreach (var rejection in report.Rejected)
+                {
+                    problems.Add(rejection.RequestId + ": " + rejection.Why);
+                }
+
+                return Html(AdminPages.Signing(SigningPage(
+                    session,
+                    facts,
+                    desk,
+                    options,
+                    report.Summary(),
+                    report.AnythingWrong,
+                    problems)));
+            });
+
+            // -------------------------------------------------------- backup
+
+            app.MapGet("/admin/backup", (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                var model = Chrome(session, facts);
+
+                return Html(AdminPages.Backup(new BackupModel
+                {
+                    SignedIn = true,
+                    CsrfToken = model.CsrfToken,
+                    Waiting = model.Waiting,
+                    BackupsOn = model.BackupsOn,
+                    Configured = backups.IsConfigured,
+                }));
+            });
+
+            app.MapPost("/admin/backup/download", async (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                var form = await ReadFormAsync(context).ConfigureAwait(false);
+
+                if (!Csrf(form, session))
+                {
+                    return Refused(session, facts, "That backup was refused.");
+                }
+
+                if (!backups.IsConfigured)
+                {
+                    return SeeOther(context, "/admin/backup");
+                }
+
+                byte[] blob;
+
+                try
+                {
+                    blob = backups.Create();
+                }
+                catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
+                {
+                    var chrome = Chrome(session, facts);
+
+                    return Html(AdminPages.Backup(new BackupModel
+                    {
+                        SignedIn = true,
+                        CsrfToken = chrome.CsrfToken,
+                        Waiting = chrome.Waiting,
+                        BackupsOn = chrome.BackupsOn,
+                        Configured = true,
+                        Notice = ex.Message,
+                    }));
+                }
+
+                // The single most sensitive thing this service ever hands out -
+                // the whole customer store - so it is recorded with who and from
+                // where, like every other act on this page.
+                audit.Record(
+                    AdminAudit.BackupTaken,
+                    Client(context),
+                    session,
+                    blob.Length.ToString(CultureInfo.InvariantCulture) + " bytes, encrypted");
+
+                context.Response.Headers.ContentDisposition =
+                    "attachment; filename=\"" + backups.FileName() + "\"";
+
+                return Results.Bytes(blob, "application/octet-stream");
+            });
 
             app.MapGet("/admin/audit", (HttpContext context) =>
             {
@@ -758,16 +1003,86 @@ namespace Emby.Sso.LicenceService.Admin
             }
         }
 
-        private static ChromeModel Chrome(AdminSession session)
+        /// <summary>
+        /// The two facts every page's navigation shows, gathered once per
+        /// request rather than threaded through every model by hand.
+        ///
+        /// <see cref="Waiting"/> is deliberately live rather than captured at
+        /// startup: it is the count of customers who have paid and are being
+        /// told to come back later, and an operator should see it drop as they
+        /// work rather than after a restart.
+        /// </summary>
+        private sealed class ChromeFacts
         {
-            return new ChromeModel { SignedIn = true, CsrfToken = session.CsrfToken };
+            private readonly Signing.SigningDesk _desk;
+
+            public ChromeFacts(Signing.SigningDesk desk, bool backups)
+            {
+                _desk = desk;
+                BackupsOn = backups;
+            }
+
+            public bool BackupsOn { get; }
+
+            public int Waiting
+            {
+                get
+                {
+                    try
+                    {
+                        return _desk.Waiting;
+                    }
+                    catch (Microsoft.Data.Sqlite.SqliteException)
+                    {
+                        // A badge is not worth a 500. The Signing page itself
+                        // will fail loudly if the store is really unreadable.
+                        return 0;
+                    }
+                }
+            }
         }
 
-        private static IResult Refused(AdminSession session, string what)
+        private static ChromeModel Chrome(AdminSession session, ChromeFacts facts)
+        {
+            return new ChromeModel
+            {
+                SignedIn = true,
+                CsrfToken = session.CsrfToken,
+                Waiting = facts.Waiting,
+                BackupsOn = facts.BackupsOn,
+            };
+        }
+
+        private static SigningModel SigningPage(
+            AdminSession session,
+            ChromeFacts facts,
+            Signing.SigningDesk desk,
+            ServiceOptions options,
+            string notice = null,
+            bool bad = false,
+            IReadOnlyList<string> problems = null)
+        {
+            var chrome = Chrome(session, facts);
+
+            return new SigningModel
+            {
+                SignedIn = true,
+                CsrfToken = chrome.CsrfToken,
+                Waiting = chrome.Waiting,
+                BackupsOn = chrome.BackupsOn,
+                TrustedKeys = desk.TrustedKeyNames,
+                Notice = notice,
+                Bad = bad,
+                Problems = problems ?? Array.Empty<string>(),
+                Rows = desk.Download().Requests,
+            };
+        }
+
+        private static IResult Refused(AdminSession session, ChromeFacts facts, string what)
         {
             return Html(
                 AdminPages.Notice(
-                    Chrome(session),
+                    Chrome(session, facts),
                     "Refused",
                     "Refused",
                     new[]
@@ -783,6 +1098,7 @@ namespace Emby.Sso.LicenceService.Admin
 
         private static DetailModel DetailFor(
             AdminSession session,
+            ChromeFacts facts,
             ServiceOptions options,
             LicenceStore store,
             CodeSummary code,

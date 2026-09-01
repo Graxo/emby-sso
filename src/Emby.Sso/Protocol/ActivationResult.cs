@@ -62,6 +62,20 @@ namespace Emby.Sso.Protocol
         /// would have thrown the whole licensing model away.
         /// </summary>
         LicenceRejected = 10,
+
+        /// <summary>
+        /// The service took the activation and has no licence to give yet: the
+        /// vendor signs licences on a machine the service cannot reach, so that
+        /// breaking into the service cannot mint one. NOT a failure of the code,
+        /// and the code has not been spent twice - pressing Activate again once
+        /// the vendor has signed returns the licence.
+        ///
+        /// It is in this enum rather than folded into ServiceError because the
+        /// action an administrator should take is completely different: wait and
+        /// press the button again, rather than check what they typed or contact
+        /// the vendor.
+        /// </summary>
+        PendingSignature = 11,
     }
 
     /// <summary>

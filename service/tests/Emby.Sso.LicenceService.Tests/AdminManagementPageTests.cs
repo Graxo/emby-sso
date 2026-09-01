@@ -118,7 +118,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             var code = host.Service.GiveOutACode();
 
-            Assert.True(host.Service.Activations.Activate(
+            Assert.True(host.Service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1").IsSuccess);
 
@@ -145,7 +145,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             var code = host.Service.GiveOutACode();
 
-            host.Service.Activations.Activate(
+            host.Service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1");
 
@@ -199,7 +199,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             Assert.Equal(CodeStatus.Void, host.Service.Store.FindCodeByHash(HashOf(code)).Status);
 
-            var afterwards = host.Service.Activations.Activate(
+            var afterwards = host.Service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = code, ServerId = "aaaa1111bbbb2222cccc3333dddd4444" },
                 "10.0.0.1");
 
@@ -401,7 +401,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             // It activates, which is the only test of "the same kind" that
             // matters: it went through CodeIssuing, the way `issue-code` does.
-            var outcome = host.Service.Activations.Activate(
+            var outcome = host.Service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1");
 

@@ -184,13 +184,17 @@ namespace Emby.Sso.LicenceService.Tests
             Activate(code, ServerA);
             Activate(code, ServerB);
 
-            // Including the free re-activation: a new licence string really was
-            // minted, so a new fingerprint really was issued.
+            // The free re-activation adds NOTHING to the ledger, and that is a
+            // change from when this service minted licences itself. There is now
+            // one licence per server, signed once: re-activating hands back the
+            // same string rather than minting a second live credential for the
+            // same server. Fewer credentials in circulation for the same
+            // customer is the better answer, and the ledger says so.
             Activate(code, ServerA);
 
             var lines = File.ReadAllLines(_service.Options.LedgerPath);
 
-            Assert.Equal(3, lines.Length);
+            Assert.Equal(2, lines.Length);
 
             foreach (var line in lines)
             {
@@ -235,9 +239,17 @@ namespace Emby.Sso.LicenceService.Tests
             return normalised;
         }
 
+        /// <summary>
+        /// Activate, get the licence signed, activate again - which is what a
+        /// customer and the vendor between them do now that the private key is
+        /// not on the service's host. Every test in this class is about the
+        /// state machine rather than about the wait, so they all go through
+        /// here; <see cref="OfflineSigningTests"/> is where the wait itself is
+        /// the subject.
+        /// </summary>
         private ActivationReply Activate(string code, string serverId)
         {
-            return _service.Activations.Activate(
+            return _service.ActivateAndSign(
                 new ActivationRequest { Code = code, ServerId = serverId, PluginVersion = "1.4.0" },
                 "10.0.0.1");
         }

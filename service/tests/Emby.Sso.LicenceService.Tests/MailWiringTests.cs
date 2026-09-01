@@ -128,7 +128,7 @@ namespace Emby.Sso.LicenceService.Tests
 
         private static WebApplication Build(TestService service, PayPalTestCertificate certificate, ISmtpTransport transport)
         {
-            return Program.BuildApp(service.Options, service.Key, builder =>
+            return Program.BuildApp(service.Options, builder =>
             {
                 builder.WebHost.UseTestServer();
                 builder.Services.AddSingleton<IPayPalCertificateSource>(new FakeCertificateSource(certificate));

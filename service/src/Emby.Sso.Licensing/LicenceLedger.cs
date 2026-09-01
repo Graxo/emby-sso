@@ -139,6 +139,44 @@ namespace Emby.Sso.Licensing
             Days = (int)Math.Round((ExpiresAt - IssuedAt).TotalDays, MidpointRounding.AwayFromZero);
         }
 
+        /// <summary>
+        /// The same line, for a licence this process did not mint.
+        ///
+        /// The licence service signs nothing any more - the key is not on that
+        /// host - so it records licences that were signed elsewhere and uploaded
+        /// to it. The record is identical either way, and must be: the tool's
+        /// `list` reads both.
+        /// </summary>
+        public LedgerRecord(
+            string licensee,
+            string serverId,
+            string fingerprint,
+            DateTimeOffset issuedAt,
+            DateTimeOffset expiresAt)
+        {
+            if (string.IsNullOrWhiteSpace(licensee))
+            {
+                throw new ArgumentException("a ledger record must name its licensee", nameof(licensee));
+            }
+
+            if (string.IsNullOrWhiteSpace(serverId))
+            {
+                throw new ArgumentException("a ledger record must name the server", nameof(serverId));
+            }
+
+            if (string.IsNullOrWhiteSpace(fingerprint))
+            {
+                throw new ArgumentException("a ledger record must carry the licence fingerprint", nameof(fingerprint));
+            }
+
+            IssuedAt = issuedAt;
+            ExpiresAt = expiresAt;
+            Licensee = licensee;
+            ServerId = serverId;
+            Fingerprint = fingerprint;
+            Days = (int)Math.Round((expiresAt - issuedAt).TotalDays, MidpointRounding.AwayFromZero);
+        }
+
         public DateTimeOffset IssuedAt { get; }
 
         public DateTimeOffset ExpiresAt { get; }

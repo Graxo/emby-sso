@@ -60,7 +60,7 @@ namespace Emby.Sso.LicenceService.Tests
                 configure?.Invoke(options);
             });
 
-            var app = Program.BuildApp(service.Options, service.Key, builder =>
+            var app = Program.BuildApp(service.Options, builder =>
             {
                 builder.WebHost.UseTestServer();
 
@@ -79,6 +79,20 @@ namespace Emby.Sso.LicenceService.Tests
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
 
             Attach(request);
+
+            return await _client.SendAsync(request);
+        }
+
+        /// <summary>
+        /// A GET carrying one extra header, for the proxy-assertion the admin
+        /// gate can be told to require.
+        /// </summary>
+        public async Task<HttpResponseMessage> GetWithHeaderAsync(string path, string name, string value)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
+
+            Attach(request);
+            request.Headers.TryAddWithoutValidation(name, value);
 
             return await _client.SendAsync(request);
         }

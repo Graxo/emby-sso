@@ -290,29 +290,111 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
-        public async Task The_embedded_public_key_this_build_ships_is_either_empty_or_a_usable_rsa_public_key()
+        public async Task Every_embedded_public_key_this_build_ships_is_a_usable_rsa_public_key()
         {
             // Guards the release step described in LicencePublicKey: paste the
-            // tool's PUBLIC jwk in, rebuild. A constant that is neither empty
-            // nor a usable RSA public key is a build that refuses every sign-in
-            // for a reason nobody would look for.
-            if (string.IsNullOrWhiteSpace(LicencePublicKey.Jwk))
+            // tool's PUBLIC jwk in, rebuild. An entry that is not a usable RSA
+            // public key is a build that refuses every sign-in for a reason
+            // nobody would look for - and because the keys are read as a set,
+            // ONE bad entry refuses every licence, including ones signed by the
+            // good keys beside it. So each is checked on its own.
+            foreach (var jwk in LicencePublicKey.TrustedJwks)
             {
-                return;
+                var status = await LicenceCheck.EvaluateAsync(
+                    _factory.Issue(),
+                    jwk,
+                    LicenceFactory.ServerId,
+                    _now);
+
+                // Signed by the test's key, not the vendor's, so a bad signature
+                // is the RIGHT answer here. What must NOT happen is the key
+                // itself being rejected as unusable.
+                Assert.Equal(LicenceOutcome.BadSignature, status.Outcome);
+                Assert.DoesNotContain("embedded licence key", status.Detail);
+                Assert.DoesNotContain("no licence public key", status.Detail);
             }
+        }
+
+        [Fact]
+        public void This_build_trusts_at_least_one_licence_key()
+        {
+            // An empty set is fail-closed and deliberate - see LicencePublicKey
+            // - but it is never what a SHIPPED build should be in, and it fails
+            // in a way an operator reads as "my licence is wrong". A release
+            // that trusts nothing should fail here instead.
+            Assert.NotEmpty(LicencePublicKey.TrustedJwks);
+
+            foreach (var jwk in LicencePublicKey.TrustedJwks)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(jwk));
+
+                // The one mistake that would give the whole scheme away: the
+                // private key file pasted where the public half belongs, and
+                // shipped inside every copy of the plugin.
+                Assert.DoesNotContain("\"d\"", jwk, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public async Task A_licence_signed_by_a_key_that_is_not_trusted_is_refused()
+        {
+            // What retiring a key means. There is no revocation list and no
+            // callback; a key is revoked by not being in the trusted set, and
+            // this is the property that makes that true.
+            var stranger = new LicenceFactory();
 
             var status = await LicenceCheck.EvaluateAsync(
-                _factory.Issue(),
-                LicencePublicKey.Jwk,
+                stranger.Issue(),
+                new[] { _factory.PublicKeyJwk },
                 LicenceFactory.ServerId,
                 _now);
 
-            // Signed by the test's key, not the vendor's, so a bad signature is
-            // the RIGHT answer here. What must NOT happen is the key itself
-            // being rejected as unusable.
             Assert.Equal(LicenceOutcome.BadSignature, status.Outcome);
-            Assert.DoesNotContain("embedded licence key", status.Detail);
-            Assert.DoesNotContain("no licence public key", status.Detail);
+        }
+
+        [Fact]
+        public async Task A_licence_is_valid_when_any_one_of_the_trusted_keys_signed_it()
+        {
+            // The other half of rotation: a build can be given the new key while
+            // the old one is still trusted, so customers are reissued at their
+            // own pace instead of all at once.
+            var other = new LicenceFactory();
+
+            var status = await LicenceCheck.EvaluateAsync(
+                other.Issue(),
+                new[] { _factory.PublicKeyJwk, other.PublicKeyJwk },
+                LicenceFactory.ServerId,
+                _now);
+
+            Assert.Equal(LicenceOutcome.Valid, status.Outcome);
+        }
+
+        [Fact]
+        public async Task One_unusable_key_in_the_set_refuses_everything_rather_than_being_skipped()
+        {
+            // Documents the deliberate choice in ReadPublicKeys. A build that
+            // quietly trusted three of the four keys it was given would behave
+            // in a way nobody could predict from reading it.
+            var status = await LicenceCheck.EvaluateAsync(
+                _factory.Issue(),
+                new[] { _factory.PublicKeyJwk, "{\"kty\":\"oct\",\"k\":\"AAAA\"}" },
+                LicenceFactory.ServerId,
+                _now);
+
+            Assert.Equal(LicenceOutcome.BadSignature, status.Outcome);
+            Assert.Contains("unusable", status.Detail, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task An_empty_trusted_set_refuses_every_licence()
+        {
+            var status = await LicenceCheck.EvaluateAsync(
+                _factory.Issue(),
+                new string[0],
+                LicenceFactory.ServerId,
+                _now);
+
+            Assert.Equal(LicenceOutcome.BadSignature, status.Outcome);
         }
     }
 }

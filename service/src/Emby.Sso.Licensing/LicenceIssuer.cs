@@ -30,6 +30,19 @@ namespace Emby.Sso.Licensing
             {
                 throw new ArgumentException("this JWK carries no private key material and cannot sign", nameof(key));
             }
+
+            if (string.IsNullOrEmpty(_key.Kid))
+            {
+                // Every licence has to name the key that signed it, or it can
+                // never be rotated away from: see LicenceFormat.KeyId. Loading
+                // the key through SigningKeyFile sets this; constructing one by
+                // hand has to as well, and finding out here beats finding out
+                // when a customer's plugin refuses a licence for having no kid.
+                throw new ArgumentException(
+                    "this signing key has no key id. Set Kid to LicenceFormat.KeyId of its public half, or load it "
+                    + "through SigningKeyFile, which does.",
+                    nameof(key));
+            }
         }
 
         /// <summary>
@@ -72,7 +85,14 @@ namespace Emby.Sso.Licensing
 
             var token = _handler.CreateToken(payload, new SigningCredentials(_key, LicenceFormat.Algorithm));
 
-            return new IssuedLicence(token, LicenceFormat.Fingerprint(token), licensee, serverId, issuedAt, expiresAt);
+            return new IssuedLicence(
+                token,
+                LicenceFormat.Fingerprint(token),
+                licensee,
+                serverId,
+                issuedAt,
+                expiresAt,
+                _key.Kid);
         }
     }
 
@@ -85,7 +105,8 @@ namespace Emby.Sso.Licensing
             string licensee,
             string serverId,
             DateTimeOffset issuedAt,
-            DateTimeOffset expiresAt)
+            DateTimeOffset expiresAt,
+            string keyId)
         {
             Token = token;
             Fingerprint = fingerprint;
@@ -93,6 +114,7 @@ namespace Emby.Sso.Licensing
             ServerId = serverId;
             IssuedAt = issuedAt;
             ExpiresAt = expiresAt;
+            KeyId = keyId;
         }
 
         /// <summary>The licence itself. A live credential: it goes to the buyer and nowhere else.</summary>
@@ -108,5 +130,8 @@ namespace Emby.Sso.Licensing
         public DateTimeOffset IssuedAt { get; }
 
         public DateTimeOffset ExpiresAt { get; }
+
+        /// <summary>Which key signed it - the licence's `kid` header.</summary>
+        public string KeyId { get; }
     }
 }

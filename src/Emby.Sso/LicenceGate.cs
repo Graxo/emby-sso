@@ -63,7 +63,7 @@ namespace Emby.Sso
             var configuration = SsoRuntime.Configuration;
             var status = await LicenceCheck.EvaluateAsync(
                 configuration?.LicenceKey,
-                LicencePublicKey.Jwk,
+                LicencePublicKey.TrustedJwks,
                 SsoRuntime.ServerId,
                 now).ConfigureAwait(false);
 

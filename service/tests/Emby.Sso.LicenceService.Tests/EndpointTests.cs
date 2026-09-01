@@ -48,7 +48,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             _certificate = new PayPalTestCertificate();
 
-            _app = Program.BuildApp(_service.Options, _service.Key, builder =>
+            _app = Program.BuildApp(_service.Options, builder =>
             {
                 builder.WebHost.UseTestServer();
                 builder.Services.AddSingleton<IPayPalCertificateSource>(new FakeCertificateSource(_certificate));
@@ -77,6 +77,21 @@ namespace Emby.Sso.LicenceService.Tests
         public async Task A_successful_activation_answers_exactly_the_fields_the_contract_names()
         {
             var code = _service.GiveOutACode();
+
+            // The first attempt is answered 202: this service cannot sign, so it
+            // records the request and says so. The vendor signs, and the next
+            // attempt carries the licence. See Signing.SigningDesk.
+            var pending = await Activate(code, ServerA);
+
+            Assert.Equal(HttpStatusCode.Accepted, pending.StatusCode);
+
+            using (var waiting = JsonDocument.Parse(await pending.Content.ReadAsStringAsync()))
+            {
+                Assert.Equal("pending_signature", waiting.RootElement.GetProperty("error").GetString());
+                Assert.False(waiting.RootElement.TryGetProperty("licence", out _));
+            }
+
+            Assert.Equal(1, _service.Sign());
 
             var response = await Activate(code, ServerA);
 
@@ -149,7 +164,7 @@ namespace Emby.Sso.LicenceService.Tests
                 options.PayPal.ClientId = null;
             });
 
-            var app = Program.BuildApp(service.Options, service.Key, builder => builder.WebHost.UseTestServer());
+            var app = Program.BuildApp(service.Options, builder => builder.WebHost.UseTestServer());
 
             try
             {
@@ -228,13 +243,18 @@ namespace Emby.Sso.LicenceService.Tests
 
             using var outbox = JsonDocument.Parse(File.ReadAllLines(_service.Options.OutboxPath)[0]);
 
-            var activation = await Activate(outbox.RootElement.GetProperty("code").GetString(), ServerA);
+            var bought = outbox.RootElement.GetProperty("code").GetString();
+
+            Assert.Equal(HttpStatusCode.Accepted, (await Activate(bought, ServerA)).StatusCode);
+            Assert.Equal(1, _service.Sign());
+
+            var activation = await Activate(bought, ServerA);
 
             Assert.Equal(HttpStatusCode.OK, activation.StatusCode);
         }
 
         [Fact]
-        public async Task Health_says_which_key_is_loaded_without_saying_anything_secret()
+        public async Task Health_says_which_keys_are_trusted_without_saying_anything_secret()
         {
             var response = await _client.GetAsync("/healthz");
 
@@ -245,10 +265,15 @@ namespace Emby.Sso.LicenceService.Tests
             using var body = JsonDocument.Parse(text);
 
             Assert.Equal("ok", body.RootElement.GetProperty("status").GetString());
-            Assert.Equal(_service.Key.Thumbprint, body.RootElement.GetProperty("signingKey").GetString());
             Assert.Equal("sandbox", body.RootElement.GetProperty("paypal").GetString());
 
+            // Which PUBLIC keys a signed licence may come from, so an operator
+            // can compare this to the plugin build without a shell on the box.
+            Assert.Equal(_service.Key.Thumbprint, body.RootElement.GetProperty("trustedKeys").GetString());
+
             // Nothing from the private half, and nothing from the environment.
+            // The private half is not even loaded by the service - this is the
+            // test's own copy, standing in for the offline signing machine.
             Assert.DoesNotContain(_service.Key.Key.D, text, StringComparison.Ordinal);
             Assert.DoesNotContain(_service.KeyPath, text, StringComparison.Ordinal);
         }

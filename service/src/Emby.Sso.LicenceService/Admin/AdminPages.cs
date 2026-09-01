@@ -511,6 +511,134 @@ namespace Emby.Sso.LicenceService.Admin
         // ------------------------------------------------------------ notice
 
         /// <summary>A refusal, a dead end, or a message. Used for every error the operator can cause.</summary>
+        // ----------------------------------------------------------- signing
+
+        /// <summary>
+        /// Where licences are got signed.
+        ///
+        /// The page explains the arrangement rather than just presenting two
+        /// buttons, because the arrangement is unusual and an operator who does
+        /// not understand it will conclude the service is broken - a customer
+        /// pays, presses Activate, and is told to come back later. It is worth a
+        /// paragraph on the one page where that is being dealt with.
+        /// </summary>
+        public static string Signing(SigningModel model)
+        {
+            var page = Head("Signing", model);
+
+            page.Append("<h1>Licences waiting to be signed</h1>");
+
+            if (model.Notice != null)
+            {
+                page.Append("<p class=\"").Append(model.Bad ? "bad" : "good").Append("\">")
+                    .Append(E(model.Notice)).Append("</p>");
+            }
+
+            if (model.Problems.Count > 0)
+            {
+                page.Append("<ul class=\"bad\">");
+
+                foreach (var problem in model.Problems)
+                {
+                    page.Append("<li>").Append(E(problem)).Append("</li>");
+                }
+
+                page.Append("</ul>");
+            }
+
+            page.Append("<p class=\"muted\">This service cannot sign licences: the private key is not on this ");
+            page.Append("machine, so that breaking into this machine cannot mint one. Download what is waiting, ");
+            page.Append("run <code>licencetool sign</code> where the key lives, and upload the result. ");
+            page.Append("Until you do, a customer who activates is told their licence is being issued.</p>");
+
+            page.Append("<p class=\"muted\">Keys this service will accept a signature from: <code>")
+                .Append(E(model.TrustedKeys)).Append("</code></p>");
+
+            if (model.Rows.Count == 0)
+            {
+                page.Append("<p class=\"good\">Nothing is waiting. Everybody who has activated has their licence.</p>");
+            }
+            else
+            {
+                page.Append("<table><thead><tr><th>Requested</th><th>Licensee</th><th>Server</th>");
+                page.Append("<th>Expires</th></tr></thead><tbody>");
+
+                foreach (var row in model.Rows)
+                {
+                    page.Append("<tr><td>").Append(E(row.IssuedAt)).Append("</td>");
+                    page.Append("<td>").Append(E(row.Licensee)).Append("</td>");
+                    page.Append("<td>").Append(E(row.ServerId)).Append("</td>");
+                    page.Append("<td>").Append(E(row.Expires)).Append("</td></tr>");
+                }
+
+                page.Append("</tbody></table>");
+
+                page.Append("<form method=\"post\" action=\"/admin/signing/download\">");
+                Csrf(page, model);
+                page.Append("<button type=\"submit\">Download ")
+                    .Append(model.Rows.Count.ToString(CultureInfo.InvariantCulture))
+                    .Append(" request(s)</button>");
+                page.Append("</form>");
+            }
+
+            page.Append("<h2>Upload signed licences</h2>");
+            page.Append("<form method=\"post\" action=\"/admin/signing/upload\" enctype=\"multipart/form-data\">");
+            Csrf(page, model);
+            page.Append("<label for=\"file\">The file <code>licencetool sign</code> wrote</label>");
+            page.Append("<input id=\"file\" name=\"file\" type=\"file\" accept=\".json,application/json\" required>");
+            page.Append("<button type=\"submit\">Upload</button>");
+            page.Append("</form>");
+
+            page.Append("<p class=\"muted\">Each licence is checked before it is stored: signed by a key above, ");
+            page.Append("for the server that was recorded, expiring exactly when the purchase says. A file that ");
+            page.Append("disagrees is refused row by row and nothing partial is kept.</p>");
+
+            return Tail(page, model);
+        }
+
+        // ------------------------------------------------------------ backup
+
+        public static string Backup(BackupModel model)
+        {
+            var page = Head("Backup", model);
+
+            page.Append("<h1>Encrypted backup</h1>");
+
+            if (model.Notice != null)
+            {
+                page.Append("<p class=\"bad\">").Append(E(model.Notice)).Append("</p>");
+            }
+
+            if (!model.Configured)
+            {
+                page.Append("<p class=\"bad\">No backup passphrase is set, so there is nothing to encrypt a ");
+                page.Append("backup with. Set <code>LICENCE_BACKUP_PASSPHRASE</code> to something long and ");
+                page.Append("generated, restart, and keep it somewhere other than beside the backups.</p>");
+
+                return Tail(page, model);
+            }
+
+            page.Append("<p>This is everything that cannot be rebuilt: who bought what, which servers each ");
+            page.Append("code is activated on, every licence signed so far, the outbox and the audit trail. ");
+            page.Append("It is encrypted with the passphrase in <code>LICENCE_BACKUP_PASSPHRASE</code>; ");
+            page.Append("without that exact passphrase the file is worthless, including to you.</p>");
+
+            page.Append("<form method=\"post\" action=\"/admin/backup/download\">");
+            Csrf(page, model);
+            page.Append("<button type=\"submit\">Download an encrypted backup</button>");
+            page.Append("</form>");
+
+            page.Append("<p class=\"muted\">Put it somewhere that is not this machine. To read one back: ");
+            page.Append("<code>dotnet Emby.Sso.LicenceService.dll restore --in &lt;file&gt; --out &lt;empty ");
+            page.Append("directory&gt;</code>, with the passphrase in the environment. It restores into a new ");
+            page.Append("directory and never over a live store.</p>");
+
+            page.Append("<p class=\"muted\">The licence signing key is NOT in here - it is not on this machine ");
+            page.Append("at all. Back that up separately, where it lives.</p>");
+
+            return Tail(page, model);
+        }
+
         public static string Notice(ChromeModel chrome, string title, string heading, IEnumerable<string> paragraphs)
         {
             var page = Head(title, chrome);
@@ -548,7 +676,23 @@ namespace Emby.Sso.LicenceService.Admin
             if (chrome != null && chrome.SignedIn)
             {
                 page.Append("<nav><a href=\"/admin/codes\">Codes</a><a href=\"/admin/issue\">Issue a code</a>");
+                page.Append("<a href=\"/admin/signing\">Signing");
+
+                // The one number on the nav bar, because every one of them is a
+                // customer who has paid and is being told to try again later.
+                if (chrome.Waiting > 0)
+                {
+                    page.Append(" (").Append(chrome.Waiting.ToString(CultureInfo.InvariantCulture)).Append(')');
+                }
+
+                page.Append("</a>");
                 page.Append("<a href=\"/admin/outbox\">Outbox</a><a href=\"/admin/audit\">Audit</a>");
+
+                if (chrome.BackupsOn)
+                {
+                    page.Append("<a href=\"/admin/backup\">Backup</a>");
+                }
+
                 page.Append("<form method=\"post\" action=\"/admin/logout\">");
                 Csrf(page, chrome);
                 page.Append("<button type=\"submit\">Sign out</button></form></nav>");
@@ -688,6 +832,36 @@ namespace Emby.Sso.LicenceService.Admin
         public bool SignedIn { get; set; }
 
         public string CsrfToken { get; set; }
+
+        /// <summary>How many licences are waiting to be signed. Shown on every page.</summary>
+        public int Waiting { get; set; }
+
+        /// <summary>Whether LICENCE_BACKUP_PASSPHRASE is set, so the link is offered.</summary>
+        public bool BackupsOn { get; set; }
+    }
+
+    internal sealed class SigningModel : ChromeModel
+    {
+        /// <summary>
+        /// Exactly the rows that go into the download, so what the operator
+        /// reads on screen and what they sign cannot be two different lists.
+        /// </summary>
+        public IReadOnlyList<Licensing.SigningRequest> Rows { get; set; } = Array.Empty<Licensing.SigningRequest>();
+
+        public string TrustedKeys { get; set; }
+
+        public string Notice { get; set; }
+
+        public IReadOnlyList<string> Problems { get; set; } = Array.Empty<string>();
+
+        public bool Bad { get; set; }
+    }
+
+    internal sealed class BackupModel : ChromeModel
+    {
+        public bool Configured { get; set; }
+
+        public string Notice { get; set; }
     }
 
     internal sealed class LoginModel

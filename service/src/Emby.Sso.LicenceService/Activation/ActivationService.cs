@@ -38,9 +38,16 @@ namespace Emby.Sso.LicenceService.Activation
 
         public const int MaximumPluginVersionLength = 64;
 
+        /// <summary>
+        /// What a plugin waiting on a signature is asked to wait. Long enough
+        /// that a client retrying on a timer does not become a load, short
+        /// enough that an operator who signs promptly is not made to look slow.
+        /// It is advice, not a lock: the code is not consumed by the wait, and
+        /// trying earlier costs nothing but one rate-limiter token.
+        /// </summary>
+        public static readonly TimeSpan PendingRetryAfter = TimeSpan.FromMinutes(5);
+
         private readonly LicenceStore _store;
-        private readonly LicenceIssuer _issuer;
-        private readonly LicenceLedger _ledger;
         private readonly ActivationRateLimiter _limiter;
         private readonly ServiceOptions _options;
         private readonly TimeProvider _time;
@@ -48,16 +55,12 @@ namespace Emby.Sso.LicenceService.Activation
 
         public ActivationService(
             LicenceStore store,
-            LicenceIssuer issuer,
-            LicenceLedger ledger,
             ActivationRateLimiter limiter,
             ServiceOptions options,
             TimeProvider time,
             ILogger<ActivationService> log)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
-            _issuer = issuer ?? throw new ArgumentNullException(nameof(issuer));
-            _ledger = ledger ?? throw new ArgumentNullException(nameof(ledger));
             _limiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _time = time ?? throw new ArgumentNullException(nameof(time));
@@ -134,7 +137,7 @@ namespace Emby.Sso.LicenceService.Activation
                     serverId.ToLowerInvariant(),
                     pluginVersion,
                     now,
-                    expires => _issuer.Issue(LicenseeFor(hash), serverId, now, expires));
+                    SigningRequestId.New);
             }
             catch (Exception ex)
             {
@@ -185,66 +188,55 @@ namespace Emby.Sso.LicenceService.Activation
                             + " servers, which is its limit.",
                         TimeSpan.Zero);
 
+                case ActivationStatus.AwaitingSignature:
+                    // NOT A FAILURE, and the customer's activation IS recorded -
+                    // the allowance has been spent and the terms are fixed. What
+                    // is missing is a signature, and this service cannot produce
+                    // one: the private key is not on this host, deliberately, so
+                    // that compromising this host cannot mint licences. A person
+                    // with the key signs the request and uploads the result, and
+                    // the next attempt returns it.
+                    _log.LogInformation(
+                        "activate WAITING code={Tag} server={Server} client={Client} request={Request} "
+                        + "used={Used}/{Allowed} expires={Expires} plugin={Plugin}",
+                        tag,
+                        serverId,
+                        clientKey,
+                        outcome.Request.RequestId,
+                        outcome.ActivationsUsed,
+                        outcome.ActivationsAllowed,
+                        outcome.Request.Expires,
+                        pluginVersion ?? "(not sent)");
+
+                    return ActivationReply.Failure(
+                        ActivationError.PendingSignature,
+                        "Your licence has been requested and is being signed. This is not an error and your code "
+                        + "has not been used up. Press Activate again shortly.",
+                        PendingRetryAfter);
+
                 default:
                     break;
             }
 
-            Record(outcome.Licence, tag);
-
             _log.LogInformation(
                 "activate OK code={Tag} server={Server} client={Client} {Kind} used={Used}/{Allowed} "
-                + "expires={Expires} fingerprint={Fingerprint} plugin={Plugin}",
+                + "expires={Expires} fingerprint={Fingerprint} key={Key} plugin={Plugin}",
                 tag,
                 serverId,
                 clientKey,
                 outcome.Status == ActivationStatus.NewActivation ? "NEW" : "REPEAT",
                 outcome.ActivationsUsed,
                 outcome.ActivationsAllowed,
-                LicenceFormat.Iso(outcome.Licence.ExpiresAt),
-                outcome.Licence.Fingerprint,
+                outcome.Request.Expires,
+                outcome.Request.Fingerprint,
+                outcome.Request.KeyId,
                 pluginVersion ?? "(not sent)");
 
             return ActivationReply.Success(
-                outcome.Licence.Token,
-                outcome.Licence.ExpiresAt,
+                outcome.Request.Licence,
+                outcome.ExpiresUtc ?? default,
                 outcome.ActivationsUsed,
                 outcome.ActivationsAllowed);
-        }
-
-        /// <summary>
-        /// What goes in the licence's `sub` claim.
-        ///
-        /// The buyer's email is in the store, and it is NOT used here. `sub` ends
-        /// up in a token that sits in a config file on somebody else's server,
-        /// gets pasted into support threads and forum posts, and is readable by
-        /// anyone who can decode base64 - which is everyone. The code tag
-        /// identifies the customer to the vendor, against the store and the
-        /// outbox, without putting a customer's email address in a string that
-        /// travels.
-        /// </summary>
-        private static string LicenseeFor(string hash)
-        {
-            return "code:" + RedemptionCode.LogTag(hash);
-        }
-
-        private void Record(IssuedLicence licence, string tag)
-        {
-            if (_ledger.TryAppend(new LedgerRecord(licence), out var error))
-            {
-                return;
-            }
-
-            // Not fatal, and not silent. The activation is already committed to
-            // the store, which is the authority; what has been lost is the
-            // vendor's `licencetool list` view of it.
-            _log.LogWarning(
-                "activate: the ledger at {Path} could not be appended to ({Error}). The activation IS recorded in "
-                + "{Store}; `licencetool list` will not show it. code={Tag} fingerprint={Fingerprint}",
-                _ledger.Path,
-                error,
-                _store.Path,
-                tag,
-                licence.Fingerprint);
         }
 
         private ActivationReply Malformed(string clientKey, string reason, string message)
@@ -316,6 +308,15 @@ namespace Emby.Sso.LicenceService.Activation
         public const string MalformedRequest = "malformed_request";
         public const string RateLimited = "rate_limited";
         public const string ServerError = "server_error";
+
+        /// <summary>
+        /// Added when signing moved off this host. It is NOT a refusal of the
+        /// code: the activation is recorded and the licence is coming. A plugin
+        /// too old to know this code treats it as an unrecognised error and says
+        /// so, which is wrong but harmless - it stores nothing and the next
+        /// attempt after the licence is signed succeeds.
+        /// </summary>
+        public const string PendingSignature = "pending_signature";
     }
 
     public sealed class ActivationReply

@@ -12,10 +12,16 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Emby.Sso.LicenceService.Tests
 {
     /// <summary>
-    /// A whole service in a temporary directory: real signing key, real SQLite
-    /// store, real ledger and outbox files. Nothing is mocked except the clock
-    /// and, where the test is about the crypto rather than the network, PayPal's
-    /// certificate.
+    /// A whole service in a temporary directory: real SQLite store, real ledger
+    /// and outbox files, and a real keypair standing in for the vendor's offline
+    /// signing machine. Nothing is mocked except the clock and, where the test is
+    /// about the crypto rather than the network, PayPal's certificate.
+    ///
+    /// THE KEY IS NOT THE SERVICE'S. The service under test holds only the
+    /// PUBLIC half, because that is all the real one holds - see
+    /// Signing.SigningDesk. <see cref="Key"/> and <see cref="Sign"/> play the
+    /// part of the person with the private key, so a test that wants an
+    /// activated licence does what an operator does: activate, sign, activate.
     ///
     /// Using the real store rather than an in-memory fake is deliberate. Half of
     /// what the activation cap relies on IS the database - a UNIQUE index and an
@@ -28,9 +34,11 @@ namespace Emby.Sso.LicenceService.Tests
             Directory = TestKeys.TempDirectory();
             KeyPath = TestKeys.WritePrivateKey(Directory);
 
+            Key = SigningKeyFile.Load(KeyPath);
+
             Options = new ServiceOptions
             {
-                SigningKeyPath = KeyPath,
+                PublicKeys = Key.PublicJwk,
                 DataDirectory = Directory,
                 ActivationsAllowed = 3,
                 LicenceDays = 365,
@@ -52,7 +60,6 @@ namespace Emby.Sso.LicenceService.Tests
             configure?.Invoke(Options);
 
             Clock = new TestClock(new DateTimeOffset(2026, 1, 5, 12, 0, 0, TimeSpan.Zero));
-            Key = SigningKeyFile.Load(KeyPath);
             Store = new LicenceStore(Options.DatabasePath);
             Store.Initialise();
 
@@ -62,12 +69,18 @@ namespace Emby.Sso.LicenceService.Tests
 
             Activations = new ActivationService(
                 Store,
-                new LicenceIssuer(Key.Key),
-                Ledger,
                 Limiter,
                 Options,
                 Clock,
                 NullLogger<ActivationService>.Instance);
+
+            Desk = new Signing.SigningDesk(
+                Store,
+                Ledger,
+                Configuration.TrustedKeys.Parse(Key.PublicJwk),
+                Options,
+                Clock,
+                NullLogger<Signing.SigningDesk>.Instance);
         }
 
         public string Directory { get; }
@@ -89,6 +102,64 @@ namespace Emby.Sso.LicenceService.Tests
         public ActivationRateLimiter Limiter { get; }
 
         public ActivationService Activations { get; }
+
+        public Signing.SigningDesk Desk { get; }
+
+        /// <summary>
+        /// Plays the vendor: takes everything waiting, signs it with the private
+        /// key, and uploads the result exactly as the admin page would. Returns
+        /// how many licences were stored.
+        ///
+        /// This is the whole offline-signing round trip, and tests go through it
+        /// rather than reaching into the store, so that a change which breaks the
+        /// exchange format breaks the tests that depend on licences existing.
+        /// </summary>
+        public int Sign()
+        {
+            var requests = Desk.Download();
+
+            if (requests.Requests.Count == 0)
+            {
+                return 0;
+            }
+
+            var issuer = new LicenceIssuer(Key.Key);
+            var signed = new SignedLicenceFile
+            {
+                SignedUtc = LicenceFormat.Iso(Clock.GetUtcNow()),
+                KeyId = Key.Thumbprint,
+            };
+
+            foreach (var request in requests.Requests)
+            {
+                signed.Licences.Add(new SignedLicence
+                {
+                    RequestId = request.RequestId,
+                    Licence = issuer.Issue(
+                        request.Licensee,
+                        request.ServerId,
+                        request.IssuedAtUtc,
+                        request.ExpiresUtc).Token,
+                });
+            }
+
+            var report = Desk.UploadAsync(SigningExchange.Write(signed)).GetAwaiter().GetResult();
+
+            return report.Stored;
+        }
+
+        /// <summary>
+        /// Activate, sign what that asked for, activate again - which is what a
+        /// customer and the vendor between them actually do. Returns the second
+        /// reply, the one that carries the licence.
+        /// </summary>
+        public Activation.ActivationReply ActivateAndSign(Activation.ActivationRequest request, string clientKey)
+        {
+            Activations.Activate(request, clientKey);
+            Sign();
+
+            return Activations.Activate(request, clientKey);
+        }
 
         /// <summary>
         /// The webhook handler. <paramref name="mail"/> is null by default, which

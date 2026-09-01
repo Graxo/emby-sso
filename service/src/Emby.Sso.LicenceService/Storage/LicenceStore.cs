@@ -202,6 +202,41 @@ CREATE TABLE IF NOT EXISTS activations (
     UNIQUE (code_id, server_key)
 );");
 
+            // WHAT A LICENCE IS WAITING FOR. This service cannot sign: the
+            // private key that mints licences is not on this host and is not
+            // reachable from it, because a key that signs for every customer
+            // has no business sitting behind a port on the internet. So an
+            // activation records what has to be signed, and a person with the
+            // key signs it elsewhere and uploads the result.
+            //
+            // One row per activation, created when the activation is first
+            // allowed and never afterwards: the licensee, server id, issue date
+            // and expiry are decided HERE, once, and the signing machine is only
+            // asked to sign exactly them. That is what stops an operator - or
+            // anyone who reaches the admin page - from quietly signing a longer
+            // licence or one for a different server than was paid for; the
+            // upload is checked against this row and refused if it disagrees.
+            Execute(connection, @"
+CREATE TABLE IF NOT EXISTS signing_requests (
+    id             INTEGER PRIMARY KEY,
+    request_id     TEXT    NOT NULL UNIQUE,
+    activation_id  INTEGER NOT NULL UNIQUE REFERENCES activations(id),
+    code_id        INTEGER NOT NULL REFERENCES codes(id),
+    licensee       TEXT    NOT NULL,
+    server_id      TEXT    NOT NULL,
+    issued_at_utc  TEXT    NOT NULL,
+    expires_utc    TEXT    NOT NULL,
+    requested_utc  TEXT    NOT NULL,
+    licence        TEXT,
+    key_id         TEXT,
+    fingerprint    TEXT,
+    signed_utc     TEXT
+);");
+
+            Execute(connection, @"
+CREATE INDEX IF NOT EXISTS ix_signing_requests_waiting
+    ON signing_requests (requested_utc) WHERE signed_utc IS NULL;");
+
             Execute(connection, @"
 CREATE TABLE IF NOT EXISTS webhook_events (
     event_id         TEXT PRIMARY KEY,
@@ -212,6 +247,46 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     code_id          INTEGER
 );");
             }
+        }
+
+        /// <summary>
+        /// Writes a consistent copy of the whole database to
+        /// <paramref name="path"/>, which must not exist.
+        ///
+        /// VACUUM INTO rather than File.Copy. This database runs in WAL mode, so
+        /// at any instant the .db file alone is an old snapshot and the committed
+        /// truth is spread across it and the -wal beside it. Copying just the .db
+        /// silently loses recent activations; copying all three while a write is
+        /// in flight can produce a set that do not agree. VACUUM INTO takes a
+        /// read transaction and writes one self-contained, already-checkpointed
+        /// file - which is the only cheap way to get a backup that is certain to
+        /// open.
+        /// </summary>
+        public void SnapshotTo(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("a snapshot needs a destination", nameof(path));
+            }
+
+            var full = System.IO.Path.GetFullPath(path);
+
+            if (File.Exists(full))
+            {
+                // VACUUM INTO refuses an existing file, and so does this, with a
+                // sentence instead of a SQLite error code.
+                throw new InvalidOperationException("There is already a file at " + full + ". A snapshot never overwrites.");
+            }
+
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            // Parameterised: the path is ours, but VACUUM INTO takes an
+            // expression and building SQL by concatenating a file path is a
+            // habit worth not having.
+            command.CommandText = "VACUUM INTO $path;";
+            command.Parameters.AddWithValue("$path", full);
+            command.ExecuteNonQuery();
         }
 
         /// <summary>Cheap proof that the volume is mounted and writable, for /healthz.</summary>
@@ -243,25 +318,37 @@ CREATE TABLE IF NOT EXISTS webhook_events (
         /// waits rather than reading a stale count, and UNIQUE (code_id,
         /// server_key) is the backstop if that reasoning is ever wrong.
         ///
-        /// <paramref name="mint"/> is called INSIDE the transaction, and is given
-        /// the expiry the code carries. Signing an RS3072 token takes a couple of
-        /// milliseconds and holds the write lock for that long, which at any
-        /// volume this vendor will see is nothing - and it buys atomicity: there
-        /// is no window in which an activation is recorded but no licence was
-        /// produced, or a licence was produced against a count that then rolled
-        /// back.
+        /// IT NO LONGER MINTS ANYTHING. It used to be handed a signing function
+        /// and call it inside the transaction, which was atomic and neat and
+        /// required the private key to be on this host. It is not any more. What
+        /// happens instead is that the terms of the licence - who, which server,
+        /// from when, until when - are decided here, once, written to
+        /// signing_requests, and never changed. A person with the key signs
+        /// exactly those terms elsewhere and uploads the result, which is checked
+        /// back against this row.
+        ///
+        /// The consequence is visible to the customer and is not hidden: the
+        /// first activation of a code returns AwaitingSignature, not a licence.
+        /// A repeat activation of a server whose licence has since been signed
+        /// returns it immediately. That is the price of the key not being here,
+        /// and it is the right price.
         /// </summary>
+        /// <param name="newRequestId">
+        /// Makes the opaque id the exchange file is matched on. Passed in rather
+        /// than generated here so the randomness has one source and the tests can
+        /// be deterministic.
+        /// </param>
         public ActivationOutcome Activate(
             string codeHash,
             string serverId,
             string serverKey,
             string pluginVersion,
             DateTimeOffset now,
-            Func<DateTimeOffset, IssuedLicence> mint)
+            Func<string> newRequestId)
         {
-            if (mint == null)
+            if (newRequestId == null)
             {
-                throw new ArgumentNullException(nameof(mint));
+                throw new ArgumentNullException(nameof(newRequestId));
             }
 
             using var connection = Open();
@@ -290,7 +377,7 @@ CREATE TABLE IF NOT EXISTS webhook_events (
             var existing = ReadActivation(connection, transaction, code.Id, serverKey);
 
             // The expiry is fixed at the code's first activation and every
-            // licence minted from it afterwards carries the same one. Re-issuing
+            // licence signed from it afterwards carries the same one. Re-issuing
             // therefore cannot extend a licence, and the second server a customer
             // activates does not get a longer one than the first.
             var expires = code.ExpiresUtc ?? now.AddDays(code.LicenceDays);
@@ -299,8 +386,6 @@ CREATE TABLE IF NOT EXISTS webhook_events (
             {
                 return ActivationOutcome.Refused(ActivationStatus.Exhausted, used, code.ActivationsAllowed, expires);
             }
-
-            var licence = mint(expires);
 
             if (code.ExpiresUtc == null)
             {
@@ -313,41 +398,265 @@ CREATE TABLE IF NOT EXISTS webhook_events (
                     ("$id", code.Id));
             }
 
-            if (existing == null)
+            long activationId;
+            var first = existing == null;
+
+            if (first)
             {
                 Update(
                     connection,
                     transaction,
                     @"INSERT INTO activations
                         (code_id, server_key, server_id, first_seen_utc, last_seen_utc, issue_count, plugin_version, last_fingerprint)
-                      VALUES ($c, $k, $s, $t, $t, 1, $v, $f);",
+                      VALUES ($c, $k, $s, $t, $t, 1, $v, NULL);",
                     ("$c", code.Id),
                     ("$k", serverKey),
                     ("$s", serverId),
                     ("$t", LicenceFormat.Iso(now)),
-                    ("$v", (object)pluginVersion ?? DBNull.Value),
-                    ("$f", licence.Fingerprint));
+                    ("$v", (object)pluginVersion ?? DBNull.Value));
 
+                activationId = ReadActivation(connection, transaction, code.Id, serverKey).Value;
                 used++;
-                transaction.Commit();
+            }
+            else
+            {
+                activationId = existing.Value;
 
-                return ActivationOutcome.Issued(ActivationStatus.NewActivation, licence, used, code.ActivationsAllowed, expires);
+                Update(
+                    connection,
+                    transaction,
+                    @"UPDATE activations
+                         SET last_seen_utc = $t, issue_count = issue_count + 1, plugin_version = $v
+                       WHERE id = $id;",
+                    ("$t", LicenceFormat.Iso(now)),
+                    ("$v", (object)pluginVersion ?? DBNull.Value),
+                    ("$id", activationId));
+            }
+
+            // One request per activation, created once. A second activation of
+            // the same server does NOT create a second request: it is the same
+            // licence, and asking for it to be signed twice would put two live
+            // credentials for one server into circulation.
+            var request = ReadSigningRequest(connection, transaction, activationId);
+
+            if (request == null)
+            {
+                var requestId = newRequestId();
+
+                Update(
+                    connection,
+                    transaction,
+                    @"INSERT INTO signing_requests
+                        (request_id, activation_id, code_id, licensee, server_id, issued_at_utc, expires_utc, requested_utc)
+                      VALUES ($r, $a, $c, $l, $s, $i, $e, $i);",
+                    ("$r", requestId),
+                    ("$a", activationId),
+                    ("$c", code.Id),
+                    ("$l", LicenseeFor(codeHash)),
+                    ("$s", serverId),
+                    ("$i", LicenceFormat.Iso(now)),
+                    ("$e", LicenceFormat.Iso(expires)));
+
+                request = ReadSigningRequest(connection, transaction, activationId);
+            }
+
+            transaction.Commit();
+
+            if (request.Licence == null)
+            {
+                return ActivationOutcome.Waiting(request, used, code.ActivationsAllowed, expires, first);
+            }
+
+            return ActivationOutcome.Issued(
+                first ? ActivationStatus.NewActivation : ActivationStatus.AlreadyActivated,
+                request,
+                used,
+                code.ActivationsAllowed,
+                expires);
+        }
+
+        /// <summary>
+        /// What goes in a licence's `sub` claim.
+        ///
+        /// The buyer's email is in this store and is NOT used. `sub` ends up in a
+        /// token that sits in a config file on somebody else's server, gets
+        /// pasted into support threads, and is readable by anyone who can decode
+        /// base64 - which is everyone. The code tag identifies the customer to
+        /// the vendor, against this store and the outbox, without putting a
+        /// customer's email address in a string that travels. It is also written
+        /// into the exchange file that goes to the signing machine, which is a
+        /// second reason for it to say as little as it can.
+        /// </summary>
+        public static string LicenseeFor(string codeHash)
+        {
+            return "code:" + RedemptionCode.LogTag(codeHash);
+        }
+
+        /// <summary>
+        /// Everything waiting to be signed, oldest first, for the file the admin
+        /// page hands the operator.
+        /// </summary>
+        public IReadOnlyList<SigningRequestRow> WaitingToBeSigned(int limit)
+        {
+            using var connection = Open();
+
+            using var command = connection.CreateCommand();
+
+            command.CommandText = @"
+SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_utc, requested_utc
+  FROM signing_requests
+ WHERE signed_utc IS NULL
+ ORDER BY requested_utc, id
+ LIMIT $limit;";
+            command.Parameters.AddWithValue("$limit", limit);
+
+            var rows = new List<SigningRequestRow>();
+
+            using var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                rows.Add(new SigningRequestRow(
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetString(6),
+                    null,
+                    null,
+                    null,
+                    null));
+            }
+
+            return rows;
+        }
+
+        public int CountWaitingToBeSigned()
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            command.CommandText = "SELECT COUNT(*) FROM signing_requests WHERE signed_utc IS NULL;";
+
+            return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>The one row an upload claims to answer, or null if there is no such request.</summary>
+        public SigningRequestRow FindSigningRequest(string requestId)
+        {
+            using var connection = Open();
+
+            return ReadSigningRequestById(connection, null, requestId);
+        }
+
+        /// <summary>
+        /// Stores a signed licence against the request it answers.
+        ///
+        /// Refuses a request that is already signed rather than overwriting it.
+        /// A customer's licence is a live credential that has already been
+        /// handed out; replacing it would silently invalidate the one they are
+        /// using, and doing that by re-uploading yesterday's file by mistake is
+        /// far too easy. Reissuing is a deliberate act - see the admin page.
+        /// </summary>
+        public StoreSignedResult StoreSignedLicence(
+            string requestId,
+            string licence,
+            string keyId,
+            string fingerprint,
+            DateTimeOffset now)
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            var row = ReadSigningRequestById(connection, transaction, requestId);
+
+            if (row == null)
+            {
+                return StoreSignedResult.NoSuchRequest;
+            }
+
+            if (row.Licence != null)
+            {
+                return string.Equals(row.Licence, licence, StringComparison.Ordinal)
+                    ? StoreSignedResult.AlreadyTheSame
+                    : StoreSignedResult.AlreadySigned;
             }
 
             Update(
                 connection,
                 transaction,
-                @"UPDATE activations
-                     SET last_seen_utc = $t, issue_count = issue_count + 1, plugin_version = $v, last_fingerprint = $f
-                   WHERE id = $id;",
+                @"UPDATE signing_requests
+                     SET licence = $l, key_id = $k, fingerprint = $f, signed_utc = $t
+                   WHERE request_id = $r AND signed_utc IS NULL;",
+                ("$l", licence),
+                ("$k", keyId),
+                ("$f", fingerprint),
                 ("$t", LicenceFormat.Iso(now)),
-                ("$v", (object)pluginVersion ?? DBNull.Value),
-                ("$f", licence.Fingerprint),
-                ("$id", existing.Value));
+                ("$r", requestId));
+
+            Update(
+                connection,
+                transaction,
+                "UPDATE activations SET last_fingerprint = $f WHERE id = $id;",
+                ("$f", fingerprint),
+                ("$id", row.ActivationId));
 
             transaction.Commit();
 
-            return ActivationOutcome.Issued(ActivationStatus.AlreadyActivated, licence, used, code.ActivationsAllowed, expires);
+            return StoreSignedResult.Stored;
+        }
+
+        private static SigningRequestRow ReadSigningRequest(SqliteConnection connection, SqliteTransaction transaction, long activationId)
+        {
+            using var command = connection.CreateCommand();
+
+            command.Transaction = transaction;
+            command.CommandText = @"
+SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_utc, requested_utc,
+       licence, key_id, fingerprint, signed_utc
+  FROM signing_requests WHERE activation_id = $a;";
+            command.Parameters.AddWithValue("$a", activationId);
+
+            return ReadOneSigningRequest(command);
+        }
+
+        private static SigningRequestRow ReadSigningRequestById(SqliteConnection connection, SqliteTransaction transaction, string requestId)
+        {
+            using var command = connection.CreateCommand();
+
+            command.Transaction = transaction;
+            command.CommandText = @"
+SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_utc, requested_utc,
+       licence, key_id, fingerprint, signed_utc
+  FROM signing_requests WHERE request_id = $r;";
+            command.Parameters.AddWithValue("$r", requestId ?? string.Empty);
+
+            return ReadOneSigningRequest(command);
+        }
+
+        private static SigningRequestRow ReadOneSigningRequest(SqliteCommand command)
+        {
+            using var reader = command.ExecuteReader();
+
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new SigningRequestRow(
+                reader.GetString(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10));
         }
 
         /// <summary>
@@ -1044,27 +1353,47 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         Exhausted,
         AlreadyActivated,
         NewActivation,
+
+        /// <summary>
+        /// The activation is allowed and recorded, and there is no licence to
+        /// hand over yet because nothing on this host can sign one. Somebody
+        /// with the key has to. See <see cref="LicenceStore.Activate"/>.
+        /// </summary>
+        AwaitingSignature,
     }
 
     public sealed class ActivationOutcome
     {
         private ActivationOutcome(
             ActivationStatus status,
-            IssuedLicence licence,
+            SigningRequestRow request,
             int used,
             int allowed,
-            DateTimeOffset? expires)
+            DateTimeOffset? expires,
+            bool first)
         {
             Status = status;
-            Licence = licence;
+            Request = request;
             ActivationsUsed = used;
             ActivationsAllowed = allowed;
             ExpiresUtc = expires;
+            IsFirstActivation = first;
         }
 
         public ActivationStatus Status { get; }
 
-        public IssuedLicence Licence { get; }
+        /// <summary>
+        /// The row this activation is answered by, whether or not it has been
+        /// signed yet. Null on every refusal.
+        /// </summary>
+        public SigningRequestRow Request { get; }
+
+        /// <summary>
+        /// The licence itself, and ONLY when one has been signed and stored. A
+        /// caller that hands out whatever is here cannot hand out a placeholder
+        /// by mistake.
+        /// </summary>
+        public string Licence => Request?.Licence;
 
         public int ActivationsUsed { get; }
 
@@ -1072,25 +1401,133 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
 
         public DateTimeOffset? ExpiresUtc { get; }
 
+        /// <summary>Whether this activation used up one of the code's allowance.</summary>
+        public bool IsFirstActivation { get; }
+
         public static ActivationOutcome Unknown(ActivationStatus status)
         {
-            return new ActivationOutcome(status, null, 0, 0, null);
+            return new ActivationOutcome(status, null, 0, 0, null, false);
         }
 
         public static ActivationOutcome Refused(ActivationStatus status, int used, int allowed, DateTimeOffset expires)
         {
-            return new ActivationOutcome(status, null, used, allowed, expires);
+            return new ActivationOutcome(status, null, used, allowed, expires, false);
+        }
+
+        public static ActivationOutcome Waiting(
+            SigningRequestRow request,
+            int used,
+            int allowed,
+            DateTimeOffset expires,
+            bool first)
+        {
+            return new ActivationOutcome(ActivationStatus.AwaitingSignature, request, used, allowed, expires, first);
         }
 
         public static ActivationOutcome Issued(
             ActivationStatus status,
-            IssuedLicence licence,
+            SigningRequestRow request,
             int used,
             int allowed,
             DateTimeOffset expires)
         {
-            return new ActivationOutcome(status, licence, used, allowed, expires);
+            if (request?.Licence == null)
+            {
+                throw new ArgumentException("an issued activation must carry a signed licence", nameof(request));
+            }
+
+            return new ActivationOutcome(status, request, used, allowed, expires, status == ActivationStatus.NewActivation);
         }
+    }
+
+    /// <summary>One row of signing_requests: what has to be signed, and what came back.</summary>
+    public sealed class SigningRequestRow
+    {
+        public SigningRequestRow(
+            string requestId,
+            long activationId,
+            string licensee,
+            string serverId,
+            string issuedAt,
+            string expires,
+            string requested,
+            string licence,
+            string keyId,
+            string fingerprint,
+            string signed)
+        {
+            RequestId = requestId;
+            ActivationId = activationId;
+            Licensee = licensee;
+            ServerId = serverId;
+            IssuedAt = issuedAt;
+            Expires = expires;
+            Requested = requested;
+            Licence = licence;
+            KeyId = keyId;
+            Fingerprint = fingerprint;
+            Signed = signed;
+        }
+
+        public string RequestId { get; }
+
+        public long ActivationId { get; }
+
+        public string Licensee { get; }
+
+        public string ServerId { get; }
+
+        public string IssuedAt { get; }
+
+        public string Expires { get; }
+
+        public string Requested { get; }
+
+        /// <summary>Null until somebody with the key has signed and uploaded it.</summary>
+        public string Licence { get; }
+
+        public string KeyId { get; }
+
+        public string Fingerprint { get; }
+
+        public string Signed { get; }
+
+        public bool IsSigned => Licence != null;
+
+        /// <summary>The shape this row takes in the file the signing machine reads.</summary>
+        public SigningRequest ToExchange()
+        {
+            return new SigningRequest
+            {
+                RequestId = RequestId,
+                Licensee = Licensee,
+                ServerId = ServerId,
+                IssuedAt = IssuedAt,
+                Expires = Expires,
+            };
+        }
+    }
+
+    /// <summary>What happened when a signed licence was uploaded.</summary>
+    public enum StoreSignedResult
+    {
+        /// <summary>The upload names a request this service has never made. Refused.</summary>
+        NoSuchRequest = 0,
+
+        /// <summary>Stored, and the customer gets it on their next activation.</summary>
+        Stored = 1,
+
+        /// <summary>
+        /// This request already holds a DIFFERENT licence. Refused rather than
+        /// overwritten: the customer is already using the one that is there.
+        /// </summary>
+        AlreadySigned = 2,
+
+        /// <summary>
+        /// The same licence again - the operator uploaded the same file twice.
+        /// Not an error; nothing changed and nothing is broken.
+        /// </summary>
+        AlreadyTheSame = 3,
     }
 
     public enum PaymentOutcome

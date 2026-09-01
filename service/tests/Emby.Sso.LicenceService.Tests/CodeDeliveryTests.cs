@@ -84,7 +84,7 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Contains(code, transport.Sent[0].Body, StringComparison.Ordinal);
             Assert.Equal("buyer@example.com", transport.Sent[0].ToAddress);
 
-            var reply = _service.Activations.Activate(
+            var reply = _service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1");
 
@@ -131,7 +131,7 @@ namespace Emby.Sso.LicenceService.Tests
             // from today.
             Assert.Single(lines);
 
-            var reply = _service.Activations.Activate(
+            var reply = _service.ActivateAndSign(
                 new Activation.ActivationRequest { Code = OutboxCode(), ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1");
 

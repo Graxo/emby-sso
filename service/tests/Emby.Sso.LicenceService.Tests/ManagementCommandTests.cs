@@ -522,7 +522,10 @@ namespace Emby.Sso.LicenceService.Tests
 
         private ActivationReply Activate(string code, string serverId)
         {
-            return _service.Activations.Activate(
+            // Through the whole round trip - activate, sign, activate - because
+            // these tests care whether a code still works, and a code that works
+            // is one that ends in a licence.
+            return _service.ActivateAndSign(
                 new ActivationRequest { Code = code, ServerId = serverId },
                 "10.0.0.1");
         }

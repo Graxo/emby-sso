@@ -98,7 +98,7 @@ namespace Emby.Sso.LicenceService.Tests
         [Fact]
         public void A_plugin_version_is_optional_and_an_absurd_one_does_not_stop_an_activation()
         {
-            var reply = _service.Activations.Activate(
+            var reply = _service.ActivateAndSign(
                 new ActivationRequest
                 {
                     Code = _service.GiveOutACode(),

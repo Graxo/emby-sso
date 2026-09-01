@@ -32,13 +32,48 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
-        public void Without_a_signing_key_path_it_refuses_to_start()
+        public void A_signing_key_still_mounted_refuses_to_start()
         {
+            // The point of the whole offline-signing change: the private key
+            // must not be on this host. If the variable is still set, the
+            // operator believes it signs things and the key is still sitting on
+            // an internet-facing box waiting to be stolen. Refuse, loudly,
+            // rather than ignoring the variable and leaving it there.
             var environment = Complete();
 
-            environment.Remove("LICENCE_SIGNING_KEY_PATH");
+            environment["LICENCE_SIGNING_KEY_PATH"] = "/run/secrets/licence-signing-key.private.json";
 
-            Assert.Contains(Read(environment).Problems(), p => p.Contains("LICENCE_SIGNING_KEY_PATH", StringComparison.Ordinal));
+            Assert.Contains(
+                Read(environment).Problems(),
+                p => p.Contains("LICENCE_SIGNING_KEY_PATH", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void Without_trusted_public_keys_it_refuses_to_start()
+        {
+            // With none, nothing signed could ever be checked before it is
+            // stored, and the first anyone would know is a customer's server
+            // refusing a licence.
+            var environment = Complete();
+
+            environment.Remove("LICENCE_PUBLIC_KEYS");
+
+            Assert.Contains(Read(environment).Problems(), p => p.Contains("LICENCE_PUBLIC_KEYS", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void A_private_key_pasted_into_the_public_key_list_refuses_to_start()
+        {
+            // The one mistake that would put a signing key back on this host,
+            // in a variable rather than a mount. Caught by name.
+            var environment = Complete();
+
+            environment["LICENCE_PUBLIC_KEYS"] =
+                "{\"kty\":\"RSA\",\"n\":\"AQAB\",\"e\":\"AQAB\",\"d\":\"AQAB\"}";
+
+            Assert.Contains(
+                Read(environment).Problems(),
+                p => p.Contains("PRIVATE", StringComparison.Ordinal));
         }
 
         [Fact]
@@ -181,7 +216,7 @@ namespace Emby.Sso.LicenceService.Tests
         {
             return new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["LICENCE_SIGNING_KEY_PATH"] = "/run/secrets/licence-signing-key.private.json",
+                ["LICENCE_PUBLIC_KEYS"] = TestKeys.SamplePublicJwk,
                 ["LICENCE_DATA_DIR"] = "/data",
                 ["PAYPAL_ENV"] = "sandbox",
                 ["PAYPAL_WEBHOOK_ID"] = "WH-1",

@@ -32,7 +32,7 @@ namespace Emby.Sso.LicenceService.Tests
                 options.PayPal.Price = "19.00";
             });
 
-            _app = Program.BuildApp(_service.Options, _service.Key, builder => builder.WebHost.UseTestServer());
+            _app = Program.BuildApp(_service.Options, builder => builder.WebHost.UseTestServer());
 
             await _app.StartAsync();
 
@@ -150,7 +150,7 @@ namespace Emby.Sso.LicenceService.Tests
                 options.PayPal.ClientSecret = null;
             });
 
-            var app = Program.BuildApp(unconfigured.Options, unconfigured.Key, builder => builder.WebHost.UseTestServer());
+            var app = Program.BuildApp(unconfigured.Options, builder => builder.WebHost.UseTestServer());
 
             try
             {
@@ -187,7 +187,7 @@ namespace Emby.Sso.LicenceService.Tests
                 options.RateLimit.PerClientPerMinute = 1;
             });
 
-            var app = Program.BuildApp(throttled.Options, throttled.Key, builder => builder.WebHost.UseTestServer());
+            var app = Program.BuildApp(throttled.Options, builder => builder.WebHost.UseTestServer());
 
             try
             {

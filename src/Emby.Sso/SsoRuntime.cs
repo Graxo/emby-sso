@@ -165,7 +165,7 @@ namespace Emby.Sso
                 code,
                 ServerId,
                 PluginVersion,
-                LicencePublicKey.Jwk,
+                LicencePublicKey.TrustedJwks,
                 DateTimeOffset.UtcNow,
                 cancellationToken);
         }

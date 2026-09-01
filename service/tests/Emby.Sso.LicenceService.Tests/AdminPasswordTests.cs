@@ -205,7 +205,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             var options = ServiceOptions.FromEnvironment(name => name switch
             {
-                "LICENCE_SIGNING_KEY_PATH" => "/run/secrets/key.json",
+                "LICENCE_PUBLIC_KEYS" => TestKeys.SamplePublicJwk,
                 "LICENCE_DATA_DIR" => "/data",
                 "PAYPAL_WEBHOOK_ID" => "WH-1",
                 "PAYPAL_PRICE" => "19.00",

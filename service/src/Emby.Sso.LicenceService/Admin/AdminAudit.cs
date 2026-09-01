@@ -54,6 +54,21 @@ namespace Emby.Sso.LicenceService.Admin
         public const string SessionMoved = "session_client_changed";
 
         /// <summary>
+        /// The list of everyone waiting for a licence left the machine. Server
+        /// ids and all: worth a line, even though it holds no credential.
+        /// </summary>
+        public const string SigningDownloaded = "signing_download";
+
+        /// <summary>Signed licences came back in, and what was stored or refused.</summary>
+        public const string SigningUploaded = "signing_upload";
+
+        /// <summary>
+        /// An encrypted copy of the entire store was downloaded. The single most
+        /// sensitive act available on this page.
+        /// </summary>
+        public const string BackupTaken = "backup";
+
+        /// <summary>
         /// A redemption code, in either shape it is ever written: thirty
         /// symbols, or six hyphenated groups of five. The alphabet is Crockford
         /// base32 as <see cref="RedemptionCode.Alphabet"/> defines it - no I, L,

@@ -125,7 +125,7 @@ namespace Emby.Sso.Tests
                 code,
                 serverId,
                 "1.5.0",
-                publicKeyJwk ?? _licences.PublicKeyJwk,
+                new[] { publicKeyJwk ?? _licences.PublicKeyJwk },
                 now ?? DateTimeOffset.UtcNow,
                 CancellationToken.None);
         }
@@ -481,7 +481,7 @@ namespace Emby.Sso.Tests
                         Code,
                         LicenceFactory.ServerId,
                         "1.5.0",
-                        _licences.PublicKeyJwk,
+                        new[] { _licences.PublicKeyJwk },
                         DateTimeOffset.UtcNow,
                         CancellationToken.None);
 

@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -28,10 +31,12 @@ namespace Emby.Sso.Protocol
         Malformed = 1,
 
         /// <summary>
-        /// The signature did not verify against the embedded public key, or the
-        /// token asked for an algorithm this build does not accept, or the build
-        /// carries no public key to check against. Every one of those means the
-        /// same thing: nothing here was signed by the licence issuer.
+        /// The signature did not verify against ANY of the embedded public
+        /// keys, or the token asked for an algorithm this build does not accept,
+        /// or the build carries no public key to check against. Every one of
+        /// those means the same thing: nothing here was signed by a key this
+        /// build trusts. A licence signed by a key that has since been retired
+        /// lands here too, which is what retiring a key means.
         /// </summary>
         BadSignature = 2,
 
@@ -191,12 +196,28 @@ namespace Emby.Sso.Protocol
         /// of its four arguments.
         /// </summary>
         /// <param name="licence">The licence string an operator pasted into the configuration.</param>
-        /// <param name="publicKeyJwk">The vendor's public key, as a JWK. <see cref="LicencePublicKey.Jwk"/> in the shipped build.</param>
+        /// <param name="publicKeyJwk">One trusted public key, as a JWK. The overload taking a set is what the shipped build uses.</param>
         /// <param name="serverId">This Emby server's <c>IApplicationHost.SystemId</c>.</param>
         /// <param name="now">The current time. The only clock this decision reads.</param>
-        public static async Task<LicenceStatus> EvaluateAsync(
+        public static Task<LicenceStatus> EvaluateAsync(
             string licence,
             string publicKeyJwk,
+            string serverId,
+            DateTimeOffset now)
+        {
+            return EvaluateAsync(licence, new[] { publicKeyJwk }, serverId, now);
+        }
+
+        /// <summary>
+        /// The same decision against the SET of keys this build trusts - see
+        /// <see cref="LicencePublicKey.TrustedJwks"/>. A licence is valid if one
+        /// of them signed it; a licence signed by a key that is not in the set
+        /// is refused exactly like a forgery, which is how a compromised key is
+        /// retired without a revocation list or a callback.
+        /// </summary>
+        public static async Task<LicenceStatus> EvaluateAsync(
+            string licence,
+            IReadOnlyList<string> publicKeyJwks,
             string serverId,
             DateTimeOffset now)
         {
@@ -216,17 +237,17 @@ namespace Emby.Sso.Protocol
                     "this server did not report a system id, so the licence could not be checked against it");
             }
 
-            SecurityKey key;
+            IReadOnlyList<SecurityKey> keys;
 
             try
             {
-                key = ReadPublicKey(publicKeyJwk);
+                keys = ReadPublicKeys(publicKeyJwks);
             }
             catch (Exception ex)
             {
                 return new LicenceStatus(
                     LicenceOutcome.BadSignature,
-                    "the licence public key embedded in this build is unusable: " + ex.Message);
+                    "the licence public keys embedded in this build are unusable: " + ex.Message);
             }
 
             // Set by the lifetime delegate below, which is the only thing that
@@ -236,7 +257,16 @@ namespace Emby.Sso.Protocol
 
             var parameters = new TokenValidationParameters
             {
-                IssuerSigningKey = key,
+                IssuerSigningKeys = keys,
+
+                // Explicit rather than left to the library's default. A licence
+                // whose `kid` names no key here - one issued before key ids
+                // existed, or by a build whose canonical JWK spelling differs by
+                // a byte - must still be tried against every trusted key, or a
+                // cosmetic difference would read as a forgery. It costs one
+                // extra RSA verification in a case that should not arise.
+                TryAllIssuerSigningKeys = true,
+
                 ValidIssuer = Issuer,
                 ValidAudience = serverId.Trim(),
 
@@ -407,15 +437,37 @@ namespace Emby.Sso.Protocol
         }
 
         /// <summary>
-        /// Reads the embedded key, and refuses anything that is not an RSA
+        /// Reads every embedded key, and refuses anything that is not an RSA
         /// PUBLIC key.
         ///
         /// The private-material check is not paranoia about a hostile input -
-        /// this string is a compile-time constant. It is a guard against the one
-        /// mistake that would give the whole scheme away: pasting the output of
-        /// the issuing tool's private key file into the public constant, and
+        /// these strings are compile-time constants. It is a guard against the
+        /// one mistake that would give the whole scheme away: pasting the output
+        /// of the issuing tool's private key file into the public constant, and
         /// shipping the licence signing key inside every copy of the plugin.
+        ///
+        /// One bad entry fails the whole set rather than being skipped. A build
+        /// that quietly trusts three of the four keys it was given is a build
+        /// whose behaviour nobody can predict from reading it, and the fix - a
+        /// corrected constant and a rebuild - is the same either way.
         /// </summary>
+        private static IReadOnlyList<SecurityKey> ReadPublicKeys(IReadOnlyList<string> publicKeyJwks)
+        {
+            if (publicKeyJwks == null || publicKeyJwks.Count == 0)
+            {
+                throw new ArgumentException("this build has no licence public keys embedded; see LicencePublicKey");
+            }
+
+            var keys = new List<SecurityKey>(publicKeyJwks.Count);
+
+            foreach (var jwk in publicKeyJwks)
+            {
+                keys.Add(ReadPublicKey(jwk));
+            }
+
+            return keys;
+        }
+
         private static SecurityKey ReadPublicKey(string publicKeyJwk)
         {
             if (string.IsNullOrWhiteSpace(publicKeyJwk))
@@ -446,7 +498,40 @@ namespace Emby.Sso.Protocol
                 throw new ArgumentException("the embedded licence key is missing its RSA modulus or exponent");
             }
 
+            // The name the issuer put in the licence's `kid` header, derived the
+            // same way on both sides so neither has to be told it. Setting it
+            // lets the handler go straight to the right key out of several; it
+            // is not what admits the licence - the signature is - and
+            // TryAllIssuerSigningKeys above means a `kid` that matches nothing
+            // still gets checked against every key.
+            key.KeyId = KeyIdOf(key.N, key.E);
+
             return key;
+        }
+
+        /// <summary>
+        /// The first 16 hex characters of the SHA-256 of the canonical public
+        /// JWK. This has to agree character for character with
+        /// <c>Emby.Sso.Licensing.LicenceFormat.KeyId</c>, which is what the
+        /// issuing tool writes into the `kid` header - hence the fixed member
+        /// order and the absence of any whitespace below.
+        /// </summary>
+        private static string KeyIdOf(string modulus, string exponent)
+        {
+            var canonical = "{\"kty\":\"RSA\",\"n\":\"" + modulus + "\",\"e\":\"" + exponent + "\"}";
+
+            using (var sha = SHA256.Create())
+            {
+                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(canonical));
+                var text = new StringBuilder(16);
+
+                for (var i = 0; i < 8; i++)
+                {
+                    text.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+                }
+
+                return text.ToString();
+            }
         }
 
         /// <summary>

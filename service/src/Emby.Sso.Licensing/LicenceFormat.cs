@@ -36,6 +36,77 @@ namespace Emby.Sso.Licensing
         public const string LedgerFileName = "licences-issued.jsonl";
 
         /// <summary>
+        /// The `format` field of the file the admin page hands the operator:
+        /// the licences that have been paid for and are waiting to be signed on
+        /// a machine this service cannot reach.
+        /// </summary>
+        public const string RequestsFormat = "emby-sso.signing-requests";
+
+        /// <summary>The `format` field of the file the offline tool hands back.</summary>
+        public const string SignedFormat = "emby-sso.signed-licences";
+
+        /// <summary>
+        /// Bumped only when a reader written for the old shape would misread the
+        /// new one. Both sides refuse a version they do not know rather than
+        /// guessing, because the thing being exchanged is a signing instruction.
+        /// </summary>
+        public const int FileVersion = 1;
+
+        /// <summary>
+        /// The canonical public half of an RSA JWK: three members, in this
+        /// order, no whitespace.
+        ///
+        /// It is canonical because <see cref="KeyId"/> hashes it. Two programs
+        /// that serialise "the same key" differently would derive two different
+        /// key ids for it, and a licence would then name a key the verifier
+        /// believes it does not have. Everything that needs the public half -
+        /// the startup log, the key id, what gets pasted into the plugin - goes
+        /// through this one function.
+        /// </summary>
+        public static string PublicJwk(string modulus, string exponent)
+        {
+            if (string.IsNullOrEmpty(modulus))
+            {
+                throw new ArgumentException("an RSA JWK needs a modulus", nameof(modulus));
+            }
+
+            if (string.IsNullOrEmpty(exponent))
+            {
+                throw new ArgumentException("an RSA JWK needs an exponent", nameof(exponent));
+            }
+
+            return "{\"kty\":\"RSA\",\"n\":\"" + modulus + "\",\"e\":\"" + exponent + "\"}";
+        }
+
+        /// <summary>
+        /// The name a licence carries for the key that signed it, in the JWT's
+        /// `kid` header.
+        ///
+        /// WHY THIS EXISTS AT ALL. A build that trusts exactly one public key
+        /// cannot survive that key being compromised: the only remedy is a new
+        /// keypair and a new build, which invalidates every licence in the field
+        /// at once. A build that trusts a SET of named keys can be given the new
+        /// one before the old one is dropped, so a rotation is a release rather
+        /// than an outage - and dropping a key from that set is what revoking it
+        /// means. See <c>Emby.Sso.Protocol.LicencePublicKey</c> in the plugin.
+        ///
+        /// Derived from the key rather than chosen, so that nobody has to keep a
+        /// registry of which name meant which key: the same key always produces
+        /// the same id, on both sides, without either having been told.
+        /// </summary>
+        public static string KeyId(string publicJwk)
+        {
+            if (string.IsNullOrWhiteSpace(publicJwk))
+            {
+                throw new ArgumentException("no public key to name", nameof(publicJwk));
+            }
+
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(publicJwk));
+
+            return Convert.ToHexString(hash).ToLowerInvariant().Substring(0, 16);
+        }
+
+        /// <summary>
         /// One timestamp format everywhere: UTC, seconds, no offset. The tool's
         /// <c>list</c> parses the ledger back with <c>ParseExact</c> on exactly
         /// this format, so it has to be exact rather than whatever the machine's

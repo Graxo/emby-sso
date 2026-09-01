@@ -83,7 +83,7 @@ namespace Emby.Sso.LicenceService.Tests
             // And the code in the outbox is the code that activates.
             var code = root.GetProperty("code").GetString();
 
-            var reply = _service.Activations.Activate(
+            var reply = _service.ActivateAndSign(
                 new ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1");
 
@@ -190,7 +190,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             var code = OutboxCode();
 
-            Assert.True(_service.Activations.Activate(
+            Assert.True(_service.ActivateAndSign(
                 new ActivationRequest { Code = code, ServerId = "c5bc6e91458540caa295c4efdda1a58a" },
                 "10.0.0.1").IsSuccess);
 
@@ -202,7 +202,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             Assert.Equal(WebhookStatus.Ignored, outcome.Status);
 
-            var afterwards = _service.Activations.Activate(
+            var afterwards = _service.ActivateAndSign(
                 new ActivationRequest { Code = code, ServerId = "aaaa1111bbbb2222cccc3333dddd4444" },
                 "10.0.0.1");
 
@@ -248,7 +248,7 @@ namespace Emby.Sso.LicenceService.Tests
 
             // ...and binds nothing: the code activates on a completely different
             // server, because a code is server-agnostic until it is activated.
-            var reply = _service.Activations.Activate(
+            var reply = _service.ActivateAndSign(
                 new ActivationRequest { Code = OutboxCode(), ServerId = "9999aaaa8888bbbb7777cccc6666dddd" },
                 "10.0.0.1");
 

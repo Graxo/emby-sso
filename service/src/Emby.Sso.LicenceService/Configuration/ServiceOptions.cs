@@ -20,8 +20,26 @@ namespace Emby.Sso.LicenceService.Configuration
     {
         public const string DefaultDataDirectory = "/data";
 
-        /// <summary>Where the read-only mounted private key is.</summary>
-        public string SigningKeyPath { get; set; }
+        /// <summary>
+        /// LICENCE_SIGNING_KEY_PATH, kept ONLY so that a host still mounting a
+        /// private key is refused rather than ignored.
+        ///
+        /// This service used to load a private key here and mint licences with
+        /// it. It does not any more: see Signing.SigningDesk. If the variable is
+        /// still set, the operator believes this host signs things, and the key
+        /// is still sitting on a machine with a port open to the internet where
+        /// it does nothing but wait to be stolen. That is worth refusing to
+        /// start over.
+        /// </summary>
+        public string RetiredSigningKeyPath { get; set; }
+
+        /// <summary>
+        /// LICENCE_PUBLIC_KEYS - one JWK or a JSON array of them. The PUBLIC
+        /// halves the plugin build trusts, used to check licences uploaded from
+        /// the signing machine before they are stored. Never a private key; the
+        /// service refuses to start if one is given.
+        /// </summary>
+        public string PublicKeys { get; set; }
 
         /// <summary>The mounted volume: SQLite store, ledger, outbox.</summary>
         public string DataDirectory { get; set; } = DefaultDataDirectory;
@@ -65,6 +83,20 @@ namespace Emby.Sso.LicenceService.Configuration
         /// </summary>
         public string PublicBaseUrl { get; set; }
 
+        /// <summary>
+        /// LICENCE_BACKUP_PASSPHRASE. With it set, the admin page can hand the
+        /// operator an ENCRYPTED copy of everything on the volume that cannot be
+        /// rebuilt: who bought what, which servers are activated, which licences
+        /// were issued, the outbox and the audit trail.
+        ///
+        /// Encrypted, not plain, because a backup of this store is the customer
+        /// list plus every signed licence, and the whole point of taking it off
+        /// the box is that it then lives somewhere less careful than the box -
+        /// a laptop, a cloud drive, an email to yourself. Unset means the backup
+        /// download does not exist; there is no unencrypted option.
+        /// </summary>
+        public string BackupPassphrase { get; set; }
+
         public RateLimitOptions RateLimit { get; } = new RateLimitOptions();
 
         public PayPalOptions PayPal { get; } = new PayPalOptions();
@@ -106,12 +138,18 @@ namespace Emby.Sso.LicenceService.Configuration
 
             var options = new ServiceOptions
             {
-                SigningKeyPath = Text(read, "LICENCE_SIGNING_KEY_PATH"),
+                RetiredSigningKeyPath = Text(read, "LICENCE_SIGNING_KEY_PATH"),
+                PublicKeys = Text(read, "LICENCE_PUBLIC_KEYS"),
                 DataDirectory = Text(read, "LICENCE_DATA_DIR") ?? DefaultDataDirectory,
                 ActivationsAllowed = Number(read, "LICENCE_ACTIVATIONS_ALLOWED", 3),
                 LicenceDays = Number(read, "LICENCE_DAYS", 365),
                 TrustedProxyHops = Number(read, "LICENCE_TRUSTED_PROXY_HOPS", 0),
                 PublicBaseUrl = Text(read, "LICENCE_PUBLIC_BASE_URL"),
+
+                // Not trimmed, for the same reason the passwords are not: a
+                // passphrase may legitimately begin or end with a space, and
+                // eating one makes a backup nobody can open.
+                BackupPassphrase = read("LICENCE_BACKUP_PASSPHRASE"),
             };
 
             options.RateLimit.PerClientPerMinute = Number(read, "LICENCE_RATE_PER_CLIENT_PER_MINUTE", 10);
@@ -175,6 +213,12 @@ namespace Emby.Sso.LicenceService.Configuration
             options.Admin.LoginMaxDelaySeconds =
                 Number(read, "ADMIN_LOGIN_MAX_DELAY_SECONDS", AdminOptions.DefaultLoginMaxDelaySeconds);
 
+            // Defence in depth in front of the password. Both optional, both
+            // fail closed when set: see AdminOptions.
+            options.Admin.AllowedNetworks = Text(read, "ADMIN_ALLOWED_CIDRS");
+            options.Admin.RequiredHeaderName = Text(read, "ADMIN_REQUIRED_HEADER");
+            options.Admin.RequiredHeaderValue = read("ADMIN_REQUIRED_HEADER_VALUE");
+
             // Derived rather than required twice. An operator who has told the
             // service its own address should not also have to spell out two URLs
             // underneath it, and getting them subtly wrong is how a buyer ends up
@@ -201,11 +245,34 @@ namespace Emby.Sso.LicenceService.Configuration
         {
             var problems = new List<string>();
 
-            if (string.IsNullOrWhiteSpace(SigningKeyPath))
+            if (!string.IsNullOrWhiteSpace(RetiredSigningKeyPath))
             {
                 problems.Add(
-                    "LICENCE_SIGNING_KEY_PATH is not set. It must point at the "
-                    + Licensing.LicenceFormat.PrivateKeyFileName + " mounted read-only into this container.");
+                    "LICENCE_SIGNING_KEY_PATH is set, and this service does not sign anything any more. The private "
+                    + "licence key mints a licence for any Emby server, forever, and there is no revocation - so it "
+                    + "does not belong on a host that answers requests from the internet. Remove the variable AND "
+                    + "the volume that mounts the key, and delete the key from this machine: signing now happens "
+                    + "with `licencetool sign` on a machine of your choosing. See service/docs/first-run.md.");
+            }
+
+            if (string.IsNullOrWhiteSpace(PublicKeys))
+            {
+                problems.Add(
+                    "LICENCE_PUBLIC_KEYS is not set. It is the PUBLIC key or keys the plugin build trusts, as one "
+                    + "JWK or a JSON array of them, and it is what lets this service check a signed licence before "
+                    + "storing it. `licencetool keygen` printed it; it is the same value that is in the plugin's "
+                    + "LicencePublicKey.cs. It is not a secret.");
+            }
+            else
+            {
+                try
+                {
+                    TrustedKeys.Parse(PublicKeys);
+                }
+                catch (FormatException ex)
+                {
+                    problems.Add("LICENCE_PUBLIC_KEYS is not usable: " + ex.Message);
+                }
             }
 
             if (string.IsNullOrWhiteSpace(DataDirectory))
@@ -237,6 +304,15 @@ namespace Emby.Sso.LicenceService.Configuration
                         "LICENCE_PUBLIC_BASE_URL must be an absolute https URL, e.g. https://licence.example.com. "
                         + "It is the address the plugin has compiled in and the address PayPal sends buyers back to.");
                 }
+            }
+
+            if (!string.IsNullOrEmpty(BackupPassphrase) && BackupPassphrase.Length < 16)
+            {
+                problems.Add(
+                    "LICENCE_BACKUP_PASSPHRASE is shorter than 16 characters. It is the only thing between a copy of "
+                    + "the whole customer store and whoever finds the backup file; a short one is worse than no "
+                    + "backup, because it looks like protection. Use a generated passphrase and store it somewhere "
+                    + "other than beside the backups.");
             }
 
             problems.AddRange(RateLimit.Problems());
@@ -739,6 +815,52 @@ namespace Emby.Sso.LicenceService.Configuration
         public int LoginMaxDelaySeconds { get; set; } = DefaultLoginMaxDelaySeconds;
 
         /// <summary>
+        /// ADMIN_ALLOWED_CIDRS - a comma-separated list of networks the admin
+        /// page may be reached from, e.g. "203.0.113.4/32, 10.0.0.0/8". Empty
+        /// means no network restriction, which is the default and is what the
+        /// password alone protects.
+        ///
+        /// WHY IT IS WORTH SETTING. The admin page is on the public internet
+        /// behind one password. That password is a good one and the login is
+        /// throttled, but it is a single factor and a single mistake - a
+        /// reused password, a keylogger, a screenshot - away from being the
+        /// whole story. A network restriction is a second, independent thing an
+        /// attacker has to have, it costs nothing on a machine you already own,
+        /// and unlike the password it cannot be phished.
+        ///
+        /// IT DEPENDS ON LICENCE_TRUSTED_PROXY_HOPS BEING RIGHT. Behind a proxy
+        /// with the hop count set to 0, every request appears to come from the
+        /// proxy, and either everyone is allowed or nobody is. See
+        /// Admin.AdminAccessGate, which refuses rather than guesses.
+        /// </summary>
+        public string AllowedNetworks { get; set; }
+
+        /// <summary>
+        /// ADMIN_REQUIRED_HEADER and ADMIN_REQUIRED_HEADER_VALUE - a header the
+        /// request must carry, with exactly this value, before the admin page
+        /// exists at all.
+        ///
+        /// This is the hook for whatever the operator already has in front of
+        /// the service: a Cloudflare Access or oauth2-proxy assertion, a client
+        /// certificate the proxy verified and forwarded, or simply a long shared
+        /// secret the proxy adds and the internet cannot. It is checked in
+        /// constant time and before the password, so an attacker who cannot
+        /// produce it never reaches a PBKDF2 verification at all.
+        ///
+        /// THE PROXY MUST STRIP IT FROM INCOMING REQUESTS. A header a client can
+        /// set is not a check. That cannot be enforced from here, and it is said
+        /// plainly in the documentation instead.
+        /// </summary>
+        public string RequiredHeaderName { get; set; }
+
+        public string RequiredHeaderValue { get; set; }
+
+        /// <summary>Whether anything beyond the password guards the admin page.</summary>
+        public bool HasNetworkRestriction => !string.IsNullOrWhiteSpace(AllowedNetworks);
+
+        public bool HasRequiredHeader => !string.IsNullOrWhiteSpace(RequiredHeaderName);
+
+        /// <summary>
         /// The one switch. There is an admin page if and only if this is true,
         /// and there is no second way to turn one on.
         /// </summary>
@@ -758,10 +880,20 @@ namespace Emby.Sso.LicenceService.Configuration
                 return "off (no ADMIN_PASSWORD_HASH); /admin does not exist on this service";
             }
 
+            var guards = HasNetworkRestriction || HasRequiredHeader
+                ? (HasNetworkRestriction ? "network allow-list" : null)
+                : "PASSWORD ONLY - consider ADMIN_ALLOWED_CIDRS or ADMIN_REQUIRED_HEADER";
+
+            if (HasRequiredHeader)
+            {
+                guards = guards == null ? "required header" : guards + " and required header";
+            }
+
             return "on at /admin, "
                 + (UsesPlaintext ? "ADMIN_PASSWORD (plaintext in the environment)" : "ADMIN_PASSWORD_HASH")
                 + ", idle timeout " + IdleMinutes.ToString(CultureInfo.InvariantCulture)
-                + "m, absolute " + AbsoluteMinutes.ToString(CultureInfo.InvariantCulture) + "m";
+                + "m, absolute " + AbsoluteMinutes.ToString(CultureInfo.InvariantCulture) + "m"
+                + "; in front of it: " + guards;
         }
 
         public IReadOnlyList<string> Problems()
@@ -799,6 +931,26 @@ namespace Emby.Sso.LicenceService.Configuration
                         + "`hash-password` and put the result in ADMIN_PASSWORD_HASH so the environment holds a "
                         + "verifier rather than the credential itself.");
                 }
+            }
+
+            if (HasNetworkRestriction && !Admin.AdminAccessGate.TryParseNetworks(AllowedNetworks, out _, out var networkProblem))
+            {
+                problems.Add("ADMIN_ALLOWED_CIDRS is not usable: " + networkProblem);
+            }
+
+            if (HasRequiredHeader && string.IsNullOrEmpty(RequiredHeaderValue))
+            {
+                problems.Add(
+                    "ADMIN_REQUIRED_HEADER is set but ADMIN_REQUIRED_HEADER_VALUE is empty. A header check against "
+                    + "an empty value would pass for any request that sets the header to nothing, which is worse "
+                    + "than not having one.");
+            }
+
+            if (HasRequiredHeader && RequiredHeaderValue != null && RequiredHeaderValue.Length < 16)
+            {
+                problems.Add(
+                    "ADMIN_REQUIRED_HEADER_VALUE is shorter than 16 characters. It is a shared secret sitting in "
+                    + "front of the admin page; make it long enough that guessing it is not a strategy.");
             }
 
             if (IdleMinutes < 1 || IdleMinutes > 1440)

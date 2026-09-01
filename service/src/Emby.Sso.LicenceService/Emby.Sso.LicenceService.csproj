@@ -28,6 +28,22 @@
     <!-- The whole store. See README.md, "Why SQLite". -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
 
+    <!-- The native SQLite engine, pinned FORWARD of what Microsoft.Data.Sqlite
+         8.0.10 asks for.
+         
+         That package still resolves SQLitePCLRaw 2.1.6, which carries a High
+         advisory (GHSA-2m69-gcr7-jv3q) against the SQLite build inside it. The
+         advisory is real for us: this is the engine the licence store runs on.
+         Naming the package directly here promotes it over the transitive
+         resolution, which is the supported way to move a dependency you do not
+         reference yourself.
+
+         ci/audit-packages.sh is what found it, and is what will find the next
+         one - it fails the pipeline rather than printing a warning, because the
+         plugin ships as one merged DLL and the service as one image, so nobody
+         downstream can patch a dependency without a new build from here. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+
     <!-- SMTP. Chosen over System.Net.Mail.SmtpClient, which Microsoft's own
          documentation marks as not recommended for new development, and which
          cannot do implicit TLS at all: its EnableSsl is STARTTLS only, so a

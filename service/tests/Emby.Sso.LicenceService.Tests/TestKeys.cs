@@ -19,6 +19,23 @@ namespace Emby.Sso.LicenceService.Tests
     /// </summary>
     internal static class TestKeys
     {
+        /// <summary>
+        /// A fixed RSA PUBLIC key in the canonical shape LICENCE_PUBLIC_KEYS
+        /// takes, for the tests that build a configuration out of environment
+        /// strings and never sign anything. Generating one per test would cost
+        /// seconds across the suite and prove nothing more.
+        ///
+        /// It is a public key with no private half anywhere, so it is not a
+        /// secret and nothing can be signed with it.
+        /// </summary>
+        public const string SamplePublicJwk =
+            "{\"kty\":\"RSA\",\"n\":\"4MRfQ1GfRQHBCePuyRQs_4SrzClGhThYs4od4YOWSffORiWjQhpm0vJXtDVbRYu1d0kzE-xt"
+            + "CIzwM5GJJzNtyYvoldijecmwuBfM1XVEdmVZIdx38EWWxoYQVwrvTB_cC8fb1uziHes0Msu_VlGf59cJSTiqHUL8oWS-0ZA63OUv"
+            + "6ULclFr49pHsWJJZVaRXm2ADjnidxMkreMm30kD_0dvG8K83F197dXgDMqbXr_af9B25X1eLncgikadZDW-rjGxPLg8r2Rs5aoF-"
+            + "XWqZQiwToJsbLBTgSM4uBHnEjDOS-RdmtfooYdas-a1n34AuXLj2dxqOsLsG93Wc0jE0d6sDK6nNpy4K1MPcRuyqvrHSIC_sXUxE"
+            + "PlLMdhVBGKKZpLVYO0LAzXPelN_AErYCw21CNaVxTY3mlsx5T1O3vTaoRjG0O_ySW54PXt8hhAznWKckrf6MC0KCsAoW9K45gWZc"
+            + "NP4PuwLaY4dSh6mDBv2XWnDDfsXHb-jTditdyYyn\",\"e\":\"AQAB\"}";
+
         public static string WritePrivateKey(string directory, bool ownerOnly = true)
         {
             Directory.CreateDirectory(directory);

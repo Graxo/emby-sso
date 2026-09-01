@@ -21,7 +21,7 @@ namespace Emby.Sso.Protocol
     /// spoof the service (or compromise it, or point an override at your own)
     /// and you mint yourself a licence. So the token that comes back is put
     /// through the SAME <see cref="LicenceCheck"/> that guards every sign-in,
-    /// against the SAME embedded <see cref="LicencePublicKey"/>, against THIS
+    /// against the SAME embedded <see cref="LicencePublicKey"/> set, against THIS
     /// server's id, and it is stored only if that passes. A service that
     /// answers 200 with a forged licence gets
     /// <see cref="ActivationOutcome.LicenceRejected"/> and nothing is written.
@@ -58,7 +58,7 @@ namespace Emby.Sso.Protocol
             string code,
             string serverId,
             string pluginVersion,
-            string publicKeyJwk,
+            System.Collections.Generic.IReadOnlyList<string> publicKeyJwks,
             DateTimeOffset now,
             CancellationToken cancellationToken)
         {
@@ -164,7 +164,7 @@ namespace Emby.Sso.Protocol
             // said. Nothing above it has been believed. The check below is what
             // makes any of it safe to store.
             // ---------------------------------------------------------------
-            var licenceStatus = await LicenceCheck.EvaluateAsync(licence, publicKeyJwk, serverId, now).ConfigureAwait(false);
+            var licenceStatus = await LicenceCheck.EvaluateAsync(licence, publicKeyJwks, serverId, now).ConfigureAwait(false);
 
             if (!LicenceCheck.Permits(licenceStatus.Outcome))
             {

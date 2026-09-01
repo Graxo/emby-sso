@@ -285,7 +285,7 @@ namespace Emby.Sso.LicenceService.Tests
         {
             return new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["LICENCE_SIGNING_KEY_PATH"] = "/run/secrets/licence-signing-key.private.json",
+                ["LICENCE_PUBLIC_KEYS"] = TestKeys.SamplePublicJwk,
                 ["LICENCE_DATA_DIR"] = "/data",
                 ["PAYPAL_ENV"] = "sandbox",
                 ["PAYPAL_WEBHOOK_ID"] = "WH-1",

@@ -26,4 +26,13 @@
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The signing half, shared with the licence service so the two cannot
+         drift. The service does NOT sign any more - it has no private key - but
+         it reads and writes the same exchange files this tool does, and both
+         verify licences the same way. Referencing it is also what makes `sign`
+         possible at all: the file formats are defined there, once. -->
+    <ProjectReference Include="../../service/src/Emby.Sso.Licensing/Emby.Sso.Licensing.csproj" />
+  </ItemGroup>
+
 </Project>

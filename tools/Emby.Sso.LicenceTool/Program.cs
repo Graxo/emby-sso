@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Emby.Sso.Licensing;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
@@ -79,6 +80,14 @@ namespace Emby.Sso.LicenceTool
       customer's own server has started warning them). --all lists
       superseded records too.
 
+  sign --requests <file> --key <private key file> [--out <file>]
+       [--ledger <file>] [--allow-git]
+      THE NORMAL WAY LICENCES ARE MADE. Signs every request in the file the
+      licence service's admin page handed you, and writes a file to upload
+      back to it. Run this on the machine the key lives on - the service
+      cannot sign, because it does not have the key. --out defaults to the
+      requests file with -signed before its extension.
+
   show --key <key file> [--licence <file>] [--server-id <id>]
       Reads a licence from --licence or stdin, VERIFIES ITS SIGNATURE against
       the public half of --key, and prints what it says. Prints nothing out of
@@ -107,6 +116,9 @@ See README.md in this directory for where the private key and the ledger live.";
 
                     case "list":
                         return List(Parse(args));
+
+                    case "sign":
+                        return Sign(Parse(args));
 
                     case "show":
                         return await Show(Parse(args)).ConfigureAwait(false);
@@ -187,8 +199,18 @@ See README.md in this directory for where the private key and the ledger live.";
             Console.WriteLine("Private key written to " + path);
             Console.WriteLine("  Back it up. Losing it means no further licence can ever be issued");
             Console.WriteLine("  for the builds that carry the matching public key.");
+            Console.WriteLine("  Keep it OFF any machine that serves traffic. Nothing on the internet");
+            Console.WriteLine("  needs this file: the licence service signs nothing.");
             Console.WriteLine();
-            Console.WriteLine("Paste this PUBLIC key into src/Emby.Sso/Protocol/LicencePublicKey.cs:");
+            Console.WriteLine("Key id   : " + LicenceFormat.KeyId(publicKey));
+            Console.WriteLine("  Every licence this key signs carries that name in its `kid` header, so a");
+            Console.WriteLine("  build can trust several keys at once and retire one without invalidating");
+            Console.WriteLine("  licences signed by the others. That is how a rotation is survivable.");
+            Console.WriteLine();
+            Console.WriteLine("ADD this PUBLIC key to the trusted set in");
+            Console.WriteLine("src/Emby.Sso/Protocol/LicencePublicKey.cs, and to LICENCE_PUBLIC_KEYS on");
+            Console.WriteLine("the licence service. ADD - removing the key that is there is what revokes");
+            Console.WriteLine("it, and every licence it signed dies with it.");
             Console.WriteLine();
             Console.WriteLine(publicKey);
             Console.WriteLine();
@@ -220,6 +242,11 @@ See README.md in this directory for where the private key and the ledger live.";
                 throw new ArgumentException(
                     keyFile + " carries no private key material - this is the PUBLIC half, which cannot sign.");
             }
+
+            // Names the key in the licence's `kid` header. Without it the
+            // licence cannot be told apart from one signed by any other key the
+            // plugin trusts, and retiring a key would mean guessing.
+            key.Kid = LicenceFormat.KeyId(LicenceFormat.PublicJwk(key.N, key.E));
 
             var now = DateTime.UtcNow;
             var expires = now.AddDays(days);
@@ -263,6 +290,7 @@ See README.md in this directory for where the private key and the ledger live.";
 
             Console.Error.WriteLine("Licensee : " + licensee);
             Console.Error.WriteLine("Server   : " + serverId);
+            Console.Error.WriteLine("Key      : " + key.Kid);
             Console.Error.WriteLine("Expires  : " + expires.ToString("u", CultureInfo.InvariantCulture));
             Console.Error.WriteLine("Ledger   : " + (recorded ? ledgerPath : "NOT RECORDED - see above"));
             Console.Error.WriteLine();
@@ -272,6 +300,142 @@ See README.md in this directory for where the private key and the ledger live.";
             Console.WriteLine(licence);
 
             return 0;
+        }
+
+        /// <summary>
+        /// Signs a batch of licences the service asked for, on a machine the
+        /// service cannot reach.
+        ///
+        /// WHY THIS COMMAND EXISTS. The licence service used to hold the private
+        /// key and mint licences itself, which meant the key that signs for
+        /// every customer sat on a host with a port open to the internet: one
+        /// container escape, one dependency CVE, one stolen deploy token, and
+        /// the whole scheme is gone with no way to tell which licences were
+        /// genuine. It does not hold the key any more. It records what was paid
+        /// for and hands out a file of requests; this turns that file into
+        /// licences; the operator uploads the result. The service can be
+        /// compromised completely without a single forgeable licence coming out
+        /// of it, because there is nothing there to forge with.
+        ///
+        /// The cost is honest and worth stating: a customer's activation is no
+        /// longer instant. It waits for a person to run this.
+        ///
+        /// Every request is signed or the file is refused. A partial batch would
+        /// mean an operator uploading a file they believe is complete while some
+        /// customers keep waiting with nothing on screen to say which.
+        /// </summary>
+        private static int Sign(IDictionary<string, string> options)
+        {
+            var requestsPath = Path.GetFullPath(Required(options, "requests"));
+            var keyFile = Required(options, "key");
+
+            if (!File.Exists(requestsPath))
+            {
+                throw new FileNotFoundException(
+                    "No requests file at " + requestsPath + "." + Environment.NewLine
+                    + "It is the file the licence service's admin page downloads, under Signing.");
+            }
+
+            // The same loader the service used to use at startup: owner-only
+            // permissions, private half present, and never inside a git working
+            // tree. A signing machine deserves those checks more than a server
+            // did, not less.
+            var key = SigningKeyFile.Load(keyFile);
+            var requests = SigningExchange.ReadRequests(File.ReadAllText(requestsPath));
+
+            if (requests.Requests.Count == 0)
+            {
+                Console.Error.WriteLine("That file asks for nothing. Nobody is waiting.");
+
+                return 0;
+            }
+
+            var issuer = new LicenceIssuer(key.Key);
+            var signed = new SignedLicenceFile
+            {
+                SignedUtc = LicenceFormat.Iso(DateTimeOffset.UtcNow),
+                KeyId = key.Thumbprint,
+            };
+
+            var ledgerPath = LedgerPathFor(options, keyFile);
+            // Fully qualified: this file has its own LedgerRecord, read by
+            // `list`, and the two are different types for the same lines.
+            var ledger = new Emby.Sso.Licensing.LicenceLedger(ledgerPath);
+            var recorded = 0;
+
+            foreach (var request in requests.Requests)
+            {
+                var licence = issuer.Issue(
+                    request.Licensee,
+                    request.ServerId,
+                    request.IssuedAtUtc,
+                    request.ExpiresUtc);
+
+                signed.Licences.Add(new SignedLicence
+                {
+                    RequestId = request.RequestId,
+                    Licence = licence.Token,
+                });
+
+                // Not fatal. The licence is already made and the customer is
+                // waiting for it; what is lost if this fails is the vendor's own
+                // `list` view, and that is worth a warning rather than a refusal
+                // to hand over what somebody paid for.
+                if (ledger.TryAppend(new Emby.Sso.Licensing.LedgerRecord(licence), out var error))
+                {
+                    recorded++;
+                }
+                else
+                {
+                    Console.Error.WriteLine("WARNING: the ledger at " + ledgerPath + " was not appended to: " + error);
+                }
+            }
+
+            var outPath = options.TryGetValue("out", out var given) && !string.IsNullOrWhiteSpace(given)
+                ? Path.GetFullPath(given)
+                : DefaultSignedPath(requestsPath);
+
+            RefuseToWriteInsideAGitRepository(
+                outPath,
+                options.ContainsKey("allow-git"),
+                "signed licences",
+                "Every licence in it is a live credential.");
+
+            File.WriteAllText(outPath, SigningExchange.Write(signed));
+
+            if (!OperatingSystem.IsWindows())
+            {
+                // Owner-only: this file is a stack of live credentials until it
+                // has been uploaded, and it usually lands in a downloads folder.
+                File.SetUnixFileMode(outPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            Console.Error.WriteLine("Signed   : " + signed.Licences.Count.ToString(CultureInfo.InvariantCulture)
+                + " licence(s) with key " + key.Thumbprint);
+            Console.Error.WriteLine("Ledger   : " + recorded.ToString(CultureInfo.InvariantCulture) + " recorded in " + ledgerPath);
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Upload this file on the service's admin page, under Signing:");
+            Console.Error.WriteLine();
+            Console.WriteLine(outPath);
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Then delete it. Until it is uploaded it is the only copy of those licences;");
+            Console.Error.WriteLine("afterwards it is a stack of somebody else's credentials in your downloads.");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// <c>requests.json</c> becomes <c>requests-signed.json</c>, beside it.
+        /// Never the same name: overwriting the requests with the answer to them
+        /// loses the only record of what was asked for if the upload fails.
+        /// </summary>
+        private static string DefaultSignedPath(string requestsPath)
+        {
+            var directory = Path.GetDirectoryName(requestsPath);
+            var name = Path.GetFileNameWithoutExtension(requestsPath);
+            var extension = Path.GetExtension(requestsPath);
+
+            return Path.Combine(directory ?? ".", name + "-signed" + (string.IsNullOrEmpty(extension) ? ".json" : extension));
         }
 
         private static int List(IDictionary<string, string> options)
