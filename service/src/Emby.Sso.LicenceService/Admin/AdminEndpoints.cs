@@ -77,6 +77,7 @@ namespace Emby.Sso.LicenceService.Admin
             var clock = app.Services.GetRequiredService<TimeProvider>();
             var desk = app.Services.GetRequiredService<Signing.SigningDesk>();
             var backups = app.Services.GetRequiredService<Backup.BackupService>();
+            var releases = app.Services.GetRequiredService<Release.ReleaseStore>();
             var facts = new ChromeFacts(desk, backups.IsConfigured);
 
             string Client(HttpContext context) => Program.ClientKey(context, options.TrustedProxyHops);
@@ -800,6 +801,54 @@ namespace Emby.Sso.LicenceService.Admin
                     problems)));
             });
 
+            // ------------------------------------------------------- release
+
+            app.MapGet("/admin/release", (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                return Html(AdminPages.Release(ReleasePage(session, facts, releases)));
+            });
+
+            app.MapPost("/admin/release", async (HttpContext context) =>
+            {
+                var session = Authenticate(context, sessions, audit, Client(context));
+
+                if (session == null)
+                {
+                    return SeeOther(context, "/admin");
+                }
+
+                var form = await ReadFormAsync(context).ConfigureAwait(false);
+
+                if (!Csrf(form, session))
+                {
+                    return Refused(session, facts, "That was refused and nothing was published.");
+                }
+
+                var problem = await releases.PublishAsync(form["manifest"].ToString()).ConfigureAwait(false);
+
+                // Recorded either way. This is the one control on this page that
+                // causes code to run on other people's machines.
+                audit.Record(
+                    AdminAudit.ReleasePublished,
+                    Client(context),
+                    session,
+                    problem ?? ("published " + (releases.PublishedVersion() ?? "?")));
+
+                return Html(AdminPages.Release(ReleasePage(
+                    session,
+                    facts,
+                    releases,
+                    problem ?? ("Published " + releases.PublishedVersion() + "."),
+                    problem != null)));
+            });
+
             // -------------------------------------------------------- backup
 
             app.MapGet("/admin/backup", (HttpContext context) =>
@@ -1075,6 +1124,28 @@ namespace Emby.Sso.LicenceService.Admin
                 Bad = bad,
                 Problems = problems ?? Array.Empty<string>(),
                 Rows = desk.Download().Requests,
+            };
+        }
+
+        private static ReleaseModel ReleasePage(
+            AdminSession session,
+            ChromeFacts facts,
+            Release.ReleaseStore releases,
+            string notice = null,
+            bool bad = false)
+        {
+            var chrome = Chrome(session, facts);
+
+            return new ReleaseModel
+            {
+                SignedIn = true,
+                CsrfToken = chrome.CsrfToken,
+                Waiting = chrome.Waiting,
+                BackupsOn = chrome.BackupsOn,
+                PublishedVersion = releases.PublishedVersion(),
+                CanAccept = releases.CanAccept,
+                Notice = notice,
+                Bad = bad,
             };
         }
 

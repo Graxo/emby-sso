@@ -46,5 +46,14 @@ namespace Emby.Sso
         /// what this server is licensed to do.
         /// </summary>
         public const string ActivatePath = "/sso/activate";
+
+        /// <summary>
+        /// The configuration page's update controls: GET asks what is
+        /// available, POST installs it. Both admin-only - see Api/UpdateRequests
+        /// - because POST writes an assembly Emby will load.
+        /// </summary>
+        public const string UpdateInfoPath = "/sso/update";
+
+        public const string UpdateInstallPath = "/sso/update/install";
     }
 }

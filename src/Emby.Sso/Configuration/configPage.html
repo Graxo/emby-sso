@@ -15,6 +15,39 @@
         </div>
       </div>
 
+      <!-- ================================================== PLUGIN VERSION -->
+
+      <div class="inputContainer">
+        <label>Plugin version</label>
+        <p id="currentVersion" style="font-family: monospace;"></p>
+      </div>
+
+      <!-- Hidden until the vendor has signed for something newer. An update
+           control that is always visible and usually says "up to date" is a
+           control people stop reading. -->
+      <div id="updateAvailable" style="display: none;">
+        <div class="inputContainer">
+          <label>Update available</label>
+          <p id="availableVersion" style="font-weight: 600;"></p>
+          <div class="fieldDescription">
+            Downloaded and checked against the vendor&#39;s signature before anything is written.
+          </div>
+        </div>
+
+        <div class="inputContainer">
+          <button is="emby-button" type="button" id="updateButton" class="raised block">
+            <span>Download and install</span>
+          </button>
+          <div class="fieldDescription" id="updateResult"></div>
+        </div>
+      </div>
+
+      <div class="inputContainer" id="restartPending" style="display: none;">
+        <div class="fieldDescription">
+          An update is installed. <strong>Restart Emby when convenient</strong> to start using it.
+        </div>
+      </div>
+
       <!-- =============================================== LICENCE INFORMATION -->
 
       <h2>Licence information</h2>

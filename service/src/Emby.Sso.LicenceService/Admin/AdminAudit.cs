@@ -69,6 +69,13 @@ namespace Emby.Sso.LicenceService.Admin
         public const string BackupTaken = "backup";
 
         /// <summary>
+        /// A plugin release was published. The only act on this page that makes
+        /// code run on somebody else's machine, so it is recorded whether it
+        /// succeeded or was refused.
+        /// </summary>
+        public const string ReleasePublished = "release_published";
+
+        /// <summary>
         /// A redemption code, in either shape it is ever written: thirty
         /// symbols, or six hyphenated groups of five. The alphabet is Crockford
         /// base32 as <see cref="RedemptionCode.Alphabet"/> defines it - no I, L,

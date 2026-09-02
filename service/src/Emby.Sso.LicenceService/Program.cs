@@ -204,6 +204,21 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(store);
             builder.Services.AddSingleton(trusted);
 
+            // The release key's PUBLIC half, when configured. Used only to check
+            // a manifest before publishing it; the plugin checks again, and that
+            // check is the one that matters.
+            TrustedKeys releaseKeys = null;
+
+            if (!string.IsNullOrWhiteSpace(options.ReleasePublicKeys))
+            {
+                releaseKeys = TrustedKeys.Parse(options.ReleasePublicKeys);
+            }
+
+            builder.Services.AddSingleton(provider => new Release.ReleaseStore(
+                options,
+                releaseKeys,
+                provider.GetRequiredService<ILogger<Release.ReleaseStore>>()));
+
             // Null when this deployment does not sign for itself. The status
             // service then reports that it cannot answer, and the plugin - which
             // refuses an unsigned answer anyway - carries on unaffected.
@@ -431,6 +446,23 @@ namespace Emby.Sso.LicenceService
                 }
 
                 return Error(context, reply.Error, reply.Message, StatusFor(reply.Error), reply.RetryAfter);
+            });
+
+            // The current release manifest, for the plugin's update check.
+            //
+            // UNAUTHENTICATED AND UNRATE-LIMITED, deliberately. It is a single
+            // signed, public statement - the same bytes for everybody - and it
+            // is exactly what a plugin needs before it can be told an update
+            // exists. Putting a credential in front of it would mean a plugin
+            // whose licence had lapsed could never learn about the fix for the
+            // bug that lapsed it.
+            app.MapGet("/v1/release", (Release.ReleaseStore releases) =>
+            {
+                var manifest = releases.Current();
+
+                return manifest == null
+                    ? Results.StatusCode(404)
+                    : Results.Json(new { manifest }, statusCode: 200);
             });
 
             // The daily "is my licence still good?" call. See

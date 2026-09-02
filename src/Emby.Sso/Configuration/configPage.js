@@ -10,6 +10,57 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#pinUrl').value = base + '/sso/pin';
     }
 
+    // The update area. Hidden unless the vendor has signed for something newer,
+    // because a control that is always there and usually says "up to date" is a
+    // control people stop reading.
+    //
+    // FAILS TOWARDS SHOWING NOTHING. If the check cannot be made - no network,
+    // a stale session, no manifest published - the area stays hidden. The one
+    // thing it must never do is offer an update it has not verified.
+    function showUpdate(page) {
+        var available = page.querySelector('#updateAvailable');
+        var pending = page.querySelector('#restartPending');
+
+        function show(info) {
+            page.querySelector('#currentVersion').textContent = info.CurrentVersion || '';
+            page.querySelector('#availableVersion').textContent = info.AvailableVersion || '';
+            available.style.display = info.UpdateAvailable === true ? '' : 'none';
+            pending.style.display = info.RestartPending === true ? '' : 'none';
+        }
+
+        ApiClient.getJSON(ApiClient.getUrl('sso/update')).then(show, function () {
+            show({});
+        });
+    }
+
+    function installUpdate(page) {
+        var result = page.querySelector('#updateResult');
+
+        result.textContent = 'Downloading and verifying...';
+        loading.show();
+
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('sso/update/install'),
+            dataType: 'json'
+        }).then(function (response) {
+            loading.hide();
+
+            // textContent, not innerHTML: a sentence, not markup.
+            result.textContent = response.Message || '';
+
+            if (response.Installed) {
+                // Ask again rather than assuming: the answer now includes the
+                // pending-restart banner, and the offer should disappear.
+                showUpdate(page);
+            }
+        }).catch(function (err) {
+            loading.hide();
+            result.textContent = 'The update could not be completed. Nothing has been changed.';
+            Dashboard.processErrorResponse(err);
+        });
+    }
+
     // Admin-only endpoint on this plugin's own service.
     //
     // TWO STATES, and the licensed one is deliberately almost empty: an
@@ -131,6 +182,7 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
         page.querySelector('#activationResult').textContent = '';
         showUrls(page, config.EmbyPublicBaseUrl);
         showActivation(page);
+        showUpdate(page);
 
         loading.hide();
     }
@@ -244,6 +296,10 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
                 document.body.removeChild(scratch);
                 done(ok);
             });
+        });
+
+        view.querySelector('#updateButton').addEventListener('click', function () {
+            installUpdate(view);
         });
 
         view.querySelector('#buyButton').addEventListener('click', function () {

@@ -169,6 +169,15 @@ services:
       # to go back to signing offline; the service does not need it to run.
       LICENCE_SIGNING_KEY_PATH: /run/secrets/licence-signing-key.private.json
 
+      # The PUBLIC half of the RELEASE key, which signs plugin updates. NOT the
+      # licence key: that one is on this host, and if it could sign releases too
+      # then breaking in here would mean shipping a backdoored DLL to every
+      # customer. The release key stays on the vendor's own machine.
+      #
+      # Only used to check a manifest before publishing it at /admin/release.
+      # Not a secret.
+      LICENCE_RELEASE_PUBLIC_KEYS: '{"kty":"RSA","n":"...","e":"AQAB"}'
+
       # The PUBLIC key or keys the plugin build trusts - one JWK, or a JSON
       # array of them. NOT a secret: it is the same value that is compiled into
       # src/Emby.Sso/Protocol/LicencePublicKey.cs, and `licencetool keygen`

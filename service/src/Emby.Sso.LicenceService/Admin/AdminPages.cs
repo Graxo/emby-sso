@@ -596,6 +596,64 @@ namespace Emby.Sso.LicenceService.Admin
             return Tail(page, model);
         }
 
+        // ----------------------------------------------------------- release
+
+        /// <summary>
+        /// Publishing a plugin release.
+        ///
+        /// The page is blunt about what this does, because it is the one control
+        /// here that causes code to run on somebody else's machine. Everything
+        /// else on this admin page affects licences; this affects servers.
+        /// </summary>
+        public static string Release(ReleaseModel model)
+        {
+            var page = Head("Release", model);
+
+            page.Append("<h1>Plugin release</h1>");
+
+            if (model.Notice != null)
+            {
+                page.Append("<p class=\"").Append(model.Bad ? "bad" : "good").Append("\">")
+                    .Append(E(model.Notice)).Append("</p>");
+            }
+
+            page.Append("<p>Currently published: <strong>");
+            page.Append(E(model.PublishedVersion ?? "nothing"));
+            page.Append("</strong></p>");
+
+            if (!model.CanAccept)
+            {
+                page.Append("<p class=\"bad\">This service has no release public key configured, so it cannot ");
+                page.Append("check a manifest before publishing it. Set <code>LICENCE_RELEASE_PUBLIC_KEYS</code> ");
+                page.Append("to the PUBLIC half of your release key - the same value that is compiled into the ");
+                page.Append("plugin.</p>");
+
+                return Tail(page, model);
+            }
+
+            page.Append("<p class=\"muted\">Sign a build on the machine that holds your RELEASE key:</p>");
+            page.Append("<pre>licencetool sign-release --dll Emby.Sso.dll \\\n");
+            page.Append("  --version 1.0.3 --url https://.../Emby.Sso.dll \\\n");
+            page.Append("  --key /keys/licence-signing-key.private.json</pre>");
+            page.Append("<p class=\"muted\">Then paste what it printed here. It is checked against the release ");
+            page.Append("key before it is stored, so a manifest signed with the wrong key is refused now rather ");
+            page.Append("than by every customer later.</p>");
+
+            page.Append("<form method=\"post\" action=\"/admin/release\">");
+            Csrf(page, model);
+            page.Append("<label for=\"manifest\">Release manifest</label>");
+            page.Append("<textarea id=\"manifest\" name=\"manifest\" rows=\"6\" required ");
+            page.Append("style=\"width: 100%; font-family: monospace;\"></textarea>");
+            page.Append("<button type=\"submit\">Publish</button>");
+            page.Append("</form>");
+
+            page.Append("<p class=\"muted\">Publishing does not install anything. Each server is offered the ");
+            page.Append("update on its next daily check and installs it when its administrator chooses, after ");
+            page.Append("checking the download against the SHA-256 you signed for.</p>");
+
+            return Tail(page, model);
+        }
+
         // ------------------------------------------------------------ backup
 
         public static string Backup(BackupModel model)
@@ -686,6 +744,7 @@ namespace Emby.Sso.LicenceService.Admin
                 }
 
                 page.Append("</a>");
+                page.Append("<a href=\"/admin/release\">Release</a>");
                 page.Append("<a href=\"/admin/outbox\">Outbox</a><a href=\"/admin/audit\">Audit</a>");
 
                 if (chrome.BackupsOn)
@@ -853,6 +912,17 @@ namespace Emby.Sso.LicenceService.Admin
         public string Notice { get; set; }
 
         public IReadOnlyList<string> Problems { get; set; } = Array.Empty<string>();
+
+        public bool Bad { get; set; }
+    }
+
+    internal sealed class ReleaseModel : ChromeModel
+    {
+        public string PublishedVersion { get; set; }
+
+        public bool CanAccept { get; set; }
+
+        public string Notice { get; set; }
 
         public bool Bad { get; set; }
     }

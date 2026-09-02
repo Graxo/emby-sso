@@ -172,6 +172,54 @@ namespace Emby.Sso
         }
 
         /// <summary>
+        /// The HTTP client the vendor-facing calls use - activation, the daily
+        /// licence check, and update downloads. Exposed so the update path uses
+        /// the SAME outbound guard as everything else: a service address
+        /// pointing at a private or loopback address is refused unless the
+        /// operator has explicitly allowed it.
+        /// </summary>
+        public static HttpClient ActivationHttpClient => ActivationHttp;
+
+        /// <summary>
+        /// The version of the plugin actually running, from the assembly Emby
+        /// loaded. Taken from the assembly rather than from configuration or a
+        /// constant, because it is what an update has to be newer THAN and a
+        /// number that could drift from the running code would make the
+        /// downgrade guard meaningless.
+        /// </summary>
+        public static Version RunningVersion
+        {
+            get
+            {
+                var name = typeof(SsoRuntime).Assembly.GetName();
+
+                return name?.Version;
+            }
+        }
+
+        /// <summary>
+        /// The newest signed release that is newer than the running build, or
+        /// null.
+        ///
+        /// Everything that makes an update safe happens inside this call and in
+        /// ReleaseDownload: it can only ever return a release named by a
+        /// manifest signed with the RELEASE key - never the licence key - and
+        /// never one that is not strictly newer than what is running.
+        /// </summary>
+        public static Task<SignedRelease> FindUpdateAsync(CancellationToken cancellationToken)
+        {
+            var configuration = Configuration;
+
+            return ReleaseClient.FetchAsync(
+                ActivationHttp,
+                ActivationEndpoint.Resolve(configuration?.ActivationServiceUrl),
+                RunningVersion,
+                ReleasePublicKey.TrustedJwks,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+        }
+
+        /// <summary>
         /// The daily licence check. Returns true when something was written to
         /// the configuration, so the caller can log the change rather than the
         /// no-op.

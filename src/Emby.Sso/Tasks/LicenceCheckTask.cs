@@ -9,7 +9,8 @@ using MediaBrowser.Model.Tasks;
 namespace Emby.Sso.Tasks
 {
     /// <summary>
-    /// Asks the vendor once a day whether this server's licence is still good.
+    /// Asks the vendor once a day whether this server's licence is still good,
+    /// and whether there is a newer plugin release.
     ///
     /// A SCHEDULED TASK RATHER THAN A TIMER, deliberately. It appears in
     /// Dashboard -> Scheduled Tasks, where an operator can see when it last ran,
@@ -39,13 +40,15 @@ namespace Emby.Sso.Tasks
             _logger = logManager.GetLogger("AuthentikSso");
         }
 
-        public string Name => "Check the SSO plugin licence";
+        public string Name => "Check the SSO plugin licence and for updates";
 
         public string Key => "AuthentikSsoLicenceCheck";
 
         public string Description =>
-            "Asks the licensing service once a day whether this server's licence is still valid. "
-            + "If it cannot be reached, nothing changes and sign-ins carry on as normal.";
+            "Asks the licensing service once a day whether this server's licence is still valid, and whether a "
+            + "newer version of the plugin has been published. If it cannot be reached, nothing changes. "
+            + "NOTHING IS EVER INSTALLED BY THIS TASK - an update is only installed when an administrator presses "
+            + "the button on the plugin's configuration page.";
 
         public string Category => "Authentik SSO";
 
@@ -139,6 +142,32 @@ namespace Emby.Sso.Tasks
                         "SSO licence check: no usable answer. Nothing has changed; it will try again tomorrow.");
 
                     break;
+            }
+
+            progress?.Report(50);
+
+            // The update check. Deliberately only a CHECK: it fetches the
+            // vendor's signed manifest so the configuration page can offer an
+            // update, and installs nothing. Code arriving on somebody's server
+            // unattended, overnight, is not a thing this plugin does - an
+            // administrator presses a button, or nothing happens.
+            try
+            {
+                var release = await SsoRuntime.FindUpdateAsync(cancellationToken).ConfigureAwait(false);
+
+                if (release != null)
+                {
+                    _logger.Info(
+                        "SSO update check: version {0} is available. Install it from Dashboard -> Plugins -> "
+                        + "Authentik SSO when convenient; nothing has been downloaded or changed.",
+                        Protocol.LogSafeText.Flatten(release.VersionText));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(
+                    "SSO update check: no usable answer ({0}). Nothing has changed.",
+                    ex.GetType().Name);
             }
 
             progress?.Report(100);

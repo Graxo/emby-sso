@@ -56,6 +56,14 @@ namespace Emby.Sso.Protocol
         public const string StatusPath = "/v1/licence/status";
 
         /// <summary>
+        /// Where the signed release manifest is published. Unauthenticated by
+        /// design - it is one public statement, the same for everybody, and a
+        /// server whose licence has lapsed still has to be able to learn that a
+        /// fix exists.
+        /// </summary>
+        public const string ReleasePath = "/v1/release";
+
+        /// <summary>
         /// Referenced from the class comment above so the reason an override is
         /// safe cannot drift away from the override itself.
         /// </summary>
@@ -88,6 +96,12 @@ namespace Emby.Sso.Protocol
         public static bool TryBuildStatusUrl(string serviceBase, out string url, out string refusal)
         {
             return TryBuild(serviceBase, StatusPath, null, out url, out refusal);
+        }
+
+        /// <summary>Builds <c>{base}/v1/release</c>, on the same terms.</summary>
+        public static bool TryBuildReleaseUrl(string serviceBase, out string url, out string refusal)
+        {
+            return TryBuild(serviceBase, ReleasePath, null, out url, out refusal);
         }
 
         /// <summary>

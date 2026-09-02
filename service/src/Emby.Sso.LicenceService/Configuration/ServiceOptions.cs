@@ -42,6 +42,18 @@ namespace Emby.Sso.LicenceService.Configuration
         public bool SignsItsOwnLicences => !string.IsNullOrWhiteSpace(SigningKeyPath);
 
         /// <summary>
+        /// LICENCE_RELEASE_PUBLIC_KEYS - the PUBLIC half of the key that signs
+        /// plugin releases. Not a secret, and NOT the licence key: see
+        /// Release.ReleaseStore.
+        ///
+        /// Only used to check a manifest before publishing it, so that one
+        /// signed with the wrong key is caught on the operator's screen rather
+        /// than by every customer. Unset means the Release page cannot accept
+        /// anything; everything else works.
+        /// </summary>
+        public string ReleasePublicKeys { get; set; }
+
+        /// <summary>
         /// LICENCE_PUBLIC_KEYS - one JWK or a JSON array of them. The PUBLIC
         /// halves the plugin build trusts, used to check licences uploaded from
         /// the signing machine before they are stored. Never a private key; the
@@ -148,6 +160,7 @@ namespace Emby.Sso.LicenceService.Configuration
             {
                 SigningKeyPath = Text(read, "LICENCE_SIGNING_KEY_PATH"),
                 PublicKeys = Text(read, "LICENCE_PUBLIC_KEYS"),
+                ReleasePublicKeys = Text(read, "LICENCE_RELEASE_PUBLIC_KEYS"),
                 DataDirectory = Text(read, "LICENCE_DATA_DIR") ?? DefaultDataDirectory,
                 ActivationsAllowed = Number(read, "LICENCE_ACTIVATIONS_ALLOWED", 3),
                 LicenceDays = Number(read, "LICENCE_DAYS", 365),
@@ -311,6 +324,18 @@ namespace Emby.Sso.LicenceService.Configuration
                     + "the whole customer store and whoever finds the backup file; a short one is worse than no "
                     + "backup, because it looks like protection. Use a generated passphrase and store it somewhere "
                     + "other than beside the backups.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(ReleasePublicKeys))
+            {
+                try
+                {
+                    TrustedKeys.Parse(ReleasePublicKeys);
+                }
+                catch (FormatException ex)
+                {
+                    problems.Add("LICENCE_RELEASE_PUBLIC_KEYS is not usable: " + ex.Message);
+                }
             }
 
             problems.AddRange(RateLimit.Problems());

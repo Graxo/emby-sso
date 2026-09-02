@@ -19,7 +19,25 @@ namespace Emby.Sso
             Instance = this;
             SubjectBindingFilePath = BuildSubjectBindingFilePath(applicationPaths);
             ServerId = applicationHost?.SystemId;
+            PluginsPath = applicationPaths?.PluginsPath;
+            Host = applicationHost;
         }
+
+        /// <summary>
+        /// Where Emby loads plugin assemblies from. The one directory the
+        /// updater is allowed to write into, and it is taken from Emby rather
+        /// than guessed or configured - a settable install path is a way to make
+        /// a server write an assembly wherever somebody likes.
+        /// </summary>
+        public string PluginsPath { get; }
+
+        /// <summary>
+        /// Emby itself, for <c>NotifyPendingRestart</c> after an update is
+        /// written. The plugin never restarts the server: a media server that
+        /// reboots itself mid-playback because an update landed is worse than
+        /// one that waits to be told.
+        /// </summary>
+        public MediaBrowser.Common.IApplicationHost Host { get; }
 
         /// <summary>
         /// This server's identity, which the licence is bound to
