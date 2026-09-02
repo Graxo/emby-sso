@@ -1,235 +1,114 @@
-# Emby OIDC SSO Plugin
+# Emby SSO — sign in to Emby with Authentik
 
-Lets existing Emby users sign in with an external OpenID Connect provider —
-in particular [Authentik](https://goauthentik.io/). Emby has no native OIDC
-support; this plugin implements the browser authorization-code flow (with
-PKCE) and, optionally, the OIDC direct-grant flow for native apps.
+Emby has no support for single sign-on. This plugin adds it, so the people who
+use your server sign in with the account they already have.
 
-**Out of the box this plugin creates no Emby users.** The Emby account must
-already exist, and an administrator must explicitly point that account's
-authentication provider at this plugin. There is one optional, off-by-default
-path that creates an account — for a user who holds a required Authentik
-group, cloned from a template user you nominate.
-
-**This is licensed software, not open source.** See `LICENSE`. A licence key
-issued for your specific Emby server has to be in the plugin configuration —
-pasted in, or bought and redeemed from the configuration page itself. Without
-a valid one the plugin refuses new sign-ons.
-
-## The documentation
-
-Everything that used to be in this file lives in
-[`docs/site/`](docs/site/index.md). It is published two ways from that one
-source, on every push to `main`:
-
-- **the project wiki**, which is where to look, and what the plugin's
-  configuration page links to;
-- **GitLab Pages**, as a searchable site with the Material theme.
-
-Both are generated, so **edits made in the wiki are overwritten**. Change the
-files in `docs/site/`. Every page is also readable here as ordinary Markdown.
-
-| | |
-|---|---|
-| [Start here](docs/site/index.md) | What it is and how it works |
-| [Read this before you install](docs/site/before-you-install.md) | The two things Emby does that are hard to undo |
-| [Installing and upgrading](docs/site/installing.md) | Download, checksum, three steps |
-| [Setting up Authentik](docs/site/authentik.md) | Provider, application, groups, scopes |
-| [Assigning each user's login provider](docs/site/login-providers.md) | Required, and easy to miss |
-| [Browser sign-in](docs/site/browser-sign-in.md) | The bookmarkable URL, and why there is no login-page button |
-| [Native apps with a password](docs/site/native-apps.md) | Direct grant, and what it costs you |
-| [Native apps with a one-time PIN](docs/site/pin-sign-in.md) | Keeps multi-factor authentication on a television |
-| [Group gating and account creation](docs/site/groups-and-account-creation.md) | Who may sign in, and who gets an account |
-| [One Emby account, one Authentik identity](docs/site/identity-binding.md) | Subject binding, trust on first use |
-| [Brute-force protection](docs/site/brute-force-protection.md) | Both brakes, and why you need both |
-| [Every setting, explained](docs/site/settings.md) | One section per field on the configuration page |
-| [Licensing](docs/site/licensing.md) | What an invalid licence does and does not stop |
-| [Buying and activating a licence](docs/site/activation.md) | Redemption codes, and the one call this plugin makes |
-| [Troubleshooting](docs/site/troubleshooting.md) | Every message a user can be shown, and what to check |
-| [What has and has not been verified](docs/site/verification-status.md) | The honesty ledger — read it |
-| [Building from source](docs/site/building.md) | Build, test, and cut a release |
-| [Signing licences offline](docs/site/offline-signing.md) | Vendor only — the key is not on the server |
-| [Rotating and revoking a signing key](docs/site/key-rotation.md) | Vendor only — how a leak is survived |
+Built for [Authentik](https://goauthentik.io/), and works with any OpenID
+Connect provider that behaves like it.
 
 ---
 
-# Read this before you install anything
+## The problem
 
-Three things below can lock people out of a working server, and one of them
-can lock out every user at once. They are kept here in full, rather than
-behind a link, because a repository is readable when a documentation site may
-not be.
+Emby keeps its own usernames and passwords, and nothing else you run knows
+about them. That means:
 
-## 1. Leaving *Required group* empty refuses everyone
+- **Everyone has one more password**, used on one site, chosen in a hurry, and
+  never rotated.
+- **No two-factor authentication.** Emby has none, so an account is one guessed
+  password away from being someone else's.
+- **Nothing is joined up.** A person joins, and you create an account here, and
+  there, and somewhere else. A person leaves, and you have to remember every
+  place they had one.
+- **You cannot see who is signing in**, or from where, or how often — not in
+  one place, and not next to everything else they use.
 
-Every single sign-on this build performs is gated on an Authentik group, and
-**until you name that group the plugin refuses everyone.** Leaving *Required
-group* empty does not mean "the group check is off". It means:
+If you already run an identity provider, Emby is the odd one out.
 
-- every existing SSO user is refused, including accounts that were signing in
-  fine a minute before the upgrade — this is not limited to the new
-  account-creation path;
-- a browser sign-in is refused at `https://<emby>/sso/start` itself,
-  before the browser is sent to Authentik;
-- a native app sign-in is refused before the password is forwarded anywhere.
+## What this fixes
 
-So, in order: **install the DLL, then immediately set *Required group* in
-Dashboard → Plugins → Authentik SSO** — or set it first, if you are upgrading
-in place and the field is already there. Keep at least one administrator on
-the default provider as a break-glass account (see the next section); that is
-what gets you back into the dashboard to fix it.
+Your Emby users sign in with your identity provider. Their password, their
+two-factor device, their session policy, and their group membership all live
+in one place, and Emby follows what that place says.
 
-**How to recognise it.** The user-facing message is the ordinary *"Single
-sign-on is not configured on this server."* — deliberately the same sentence
-an unconfigured plugin gives, because a refusal must not tell a stranger which
-of several reasons applied. What tells *you* is the server log, under category
-`AuthentikSso`:
+- Somebody joins a group → they can use Emby.
+- Somebody leaves it → they cannot, without you touching Emby at all.
+- Somebody's password is stolen → they change it once.
 
-```
-SSO: refusing to start sign-in: no required group is configured, so the callback could only refuse
-Rejecting sign-in for <user> without contacting the provider: no required group is configured
-```
-
-This is deliberate and was decided with the lockout understood: a server whose
-operator has not said which group may sign in has not said who may sign in,
-and the fail-closed answer to that is nobody.
-
-## 2. Emby stamps the provider onto a user, permanently
-
-Emby's authentication pipeline behaves in ways that are easy to get wrong
-and hard to undo. This was confirmed against a live Emby 4.9.5.0 server, not
-assumed from documentation:
-
-- **Emby stamps the provider that wins onto the user, permanently.** The
-  first time a user signs in successfully, Emby writes that provider's ID
-  into the user's `Policy.AuthenticationProviderId` on disk. From then on,
-  **only that provider is consulted** for that user. A user who signs in
-  through this plugin once can no longer use their Emby password — Emby
-  will not even try the default provider for them again. The only way back
-  is for an administrator to reset the field via the Emby API.
-- **A user with no provider assigned is offered to every enabled provider.**
-  If an account's `AuthenticationProviderId` has never been set, Emby tries
-  every provider in turn (its own built-in password check first, then this
-  plugin) and stamps whichever one succeeds. That would make every unstamped
-  Emby account reachable through Authentik the moment this plugin is
-  installed — including a newly created administrator that has never logged
-  in. **This plugin therefore refuses any existing account that is not
-  already assigned to it**, on both sign-in paths, so that adopting an
-  account into SSO is always a deliberate action. The log says so:
-  `the account has no authentication provider assigned, so this plugin will
-  not adopt it`. Note that Emby still *offers* those accounts to the plugin —
-  it is the plugin that says no — so this is a guard, not a reason to skip
-  assigning providers deliberately.
-
-**Consequences — do this before you install the plugin:**
-
-1. For every Emby account you do **not** want migrated to SSO, explicitly
-   set its authentication provider to the default one first (**Dashboard →
-   Users → select the user → Login provider → Default**, or via the API —
-   see below for why the dashboard selector doesn't work for
-   administrators). Setting it explicitly, even to the value it already
-   has, fixes it in place: Emby will no longer try this plugin for that
-   account.
-2. **Keep at least one administrator account permanently on the default
-   provider as a break-glass account.** If Authentik is ever unreachable,
-   this is the only account that can still get into Emby.
-3. The dashboard's "Login provider" dropdown is only shown for
-   **non-administrator** accounts, and only once more than one provider is
-   registered. For an administrator account, saving the profile tab in the
-   dashboard writes back the dropdown's value even though it's hidden,
-   which silently defaults to the built-in provider unless you set it
-   deliberately. To assign or fix an administrator's provider, use the API
-   directly:
-
-   ```
-   POST /emby/Users/{userId}/Policy
-   ```
-
-   with the full `UserPolicy` JSON body and
-   `"AuthenticationProviderId"` set to either
-   `Emby.Server.Implementations.Library.DefaultAuthenticationProvider`
-   (built-in password) or `Emby.Sso.Auth.SsoAuthenticationProvider` (this
-   plugin).
-
-None of this is a bug in the plugin — it is how Emby's own
-`IAuthenticationProvider` pipeline works for every third-party provider,
-including this one.
-
-## 3. *Allow plain HTTP (testing only)* switches native sign-in off
-
-Ticking *Allow plain HTTP* and *Allow native apps to sign in with a password*
-at the same time is refused: native password sign-in is disabled for as long as
-plain HTTP is allowed, and the log says so. This is deliberate, and the
-asymmetry between the two paths is the point:
-
-- the **browser** flow's insecure mode risks token substitution, but the user's
-  password goes from their own browser to Authentik and this server never sees
-  it — so the escape hatch is still honoured there;
-- a **direct grant** hands this process every native client's real password and
-  re-transmits it. There is no setting combination in which this server will
-  put a password on the wire in cleartext.
-
-If you want native sign-in in a lab, give the lab HTTPS. (The plugin also
-refuses a token endpoint that is not HTTPS, whichever path is in use, even when
-the issuer itself was HTTPS.)
+Existing Emby accounts keep working exactly as they did. Nothing is migrated
+behind your back, and you decide account by account who moves.
 
 ---
 
-## Licensing, in brief
+## Features
 
-The plugin checks a signed licence key issued for one Emby server, named by
-the `ServerId` Emby writes to its log at startup. **The check itself is
-entirely offline**: nothing is contacted when a sign-in happens, and a server
-with no internet access verifies its licence exactly as well as one with it.
+**Signing in**
 
-Two things do use the network, and neither is on a sign-in path. **Activation**
-is a single call made when an administrator presses **Activate**. A **daily
-scheduled task** asks whether the licence has been withdrawn and whether a newer
-plugin release has been published; it appears in *Dashboard → Scheduled Tasks*,
-it can be switched off, and it fails open — no answer changes nothing.
+- **Browser sign-in.** Users open one bookmarkable link and come back signed
+  in. The modern, secure flow (authorization code with PKCE) — your server
+  never sees anyone's password.
+- **Native apps with a password.** Optional, off by default. Lets the Emby apps
+  on phones and consoles sign in through your provider.
+- **Native apps with a PIN.** Sign in on a television by typing a short code
+  shown on your phone — so a device with no keyboard still gets your
+  two-factor policy instead of skipping it.
 
-**An invalid or missing licence refuses new single sign-ons and automatic
-account creation, and nothing else.** People already signed in stay signed in;
-your own Emby accounts are authenticated by Emby's own provider, so **you
-cannot be locked out of your media server by a licensing problem**; nothing is
-disabled, deleted or reconfigured.
+**Deciding who gets in**
 
-A licence can be withdrawn — for a refund or a chargeback — through the daily
-check, and doing so refuses new sign-ons exactly as an expired licence does and
-no more. It takes a correctly signed answer naming that server and that licence;
-a network failure, an unsigned answer or a stale one changes nothing, and an
-operator who turns the task off never receives one. (Retiring a *signing key*
-stops every licence it ever signed, all at once; that is the remedy for a leaked
-key, not a way to deal with one customer. See
-[Rotating and revoking a signing key](docs/site/key-rotation.md).)
+- **Group gating.** Only members of the group you name may sign in. Everyone
+  else is refused, and told nothing useful.
+- **Automatic accounts.** Optional. A group member who has never used your
+  server can get one, cloned from a template account whose libraries and
+  permissions you set.
+- **One account, one identity.** An Emby account is bound to the identity that
+  first used it, so a renamed or recreated account elsewhere cannot quietly
+  take it over.
+- **Brute-force protection**, on both the sign-in and the PIN paths.
 
-**The first activation of a code is not instant.** It answers *"your licence is
-being issued"*, and pressing **Activate** again a few minutes later returns the
-licence; the code is not spent by the wait. That is because the vendor's licence
-service does not hold the key that signs licences — a key that mints a licence
-for any Emby server, forever, has no business on a host that answers requests
-from the internet. A person signs what has been paid for on a machine that is
-kept offline. See [Signing licences offline](docs/site/offline-signing.md).
+**Running it**
 
-The licence is an RS256 JWT signed with a private key that never leaves the
-vendor. But the plugin ships as a .NET assembly, and **a .NET assembly can be
-decompiled and the check removed**; there is no obfuscation here and none is
-planned. This raises the cost of casual copying between servers. It is not DRM
-and it is not described as DRM anywhere in this repository. The enforceable
-part is `LICENSE`, not the code.
+- **One file to install.** No dependencies, no runtime to add.
+- **Updates itself, safely.** When a new version is published, the plugin
+  offers a button. It checks the download against the vendor's signature
+  before writing anything, and never restarts your server for you.
+- **Quiet by default.** Nothing about your users, your libraries or your media
+  ever leaves your server.
+- **You cannot be locked out.** Your own Emby accounts keep using Emby's own
+  password check, so a problem with the plugin, your provider, or your licence
+  never costs you the dashboard.
 
-Full detail: [Licensing](docs/site/licensing.md) and
-[Buying and activating a licence](docs/site/activation.md).
+---
+
+## Before you install: three things that can lock users out
+
+These are short. Please read them anyway — two of them are hard to undo.
+
+**1. Set *Required group* immediately.** Until you name a group, the plugin
+refuses **everyone**, including people who were signing in a minute ago. Empty
+does not mean "no group check", it means "nobody". Install, then set it, in
+that order.
+
+**2. Emby remembers the first provider that works, forever.** The first time
+an account signs in through this plugin, Emby writes that down and stops trying
+the Emby password for that account. Getting it back needs an API call. So:
+**keep one administrator on Emby's own login as a break-glass account**, and
+set the login provider deliberately for any account you do not want moved.
+
+**3. Plain HTTP turns native password sign-in off.** The two settings cannot be
+on together, on purpose — this server will not put anyone's password on the
+wire in cleartext. Give the lab HTTPS.
+
+The first two in full, including how to recognise them:
+[Read this before you install](docs/site/before-you-install.md). The third:
+[Native apps with a password](docs/site/native-apps.md).
 
 ---
 
 ## Installing
 
-The shipped artifact is a **single file**, `Emby.Sso.dll`. The current release
-and its SHA256 checksum are served by the licence service, at a fixed address
-that needs no account and no token:
+The whole plugin is one file. Download it and check it:
 
-```
+```bash
 base=https://license.koper.cloud/v1/release
 curl -fLO $base/download
 curl -fLO $base/download.sha256
@@ -237,66 +116,166 @@ mv download Emby.Sso.dll
 sha256sum -c download.sha256
 ```
 
-**Check the checksum before you copy anything onto a server.**
-
-After the first install this is rarely needed: an up-to-date plugin offers its
-own **Download and install** button once the vendor publishes a newer build,
-and checks that download against the vendor's signature before writing it.
+That address always serves the current release and needs no account.
 
 Then:
 
-1. Copy `Emby.Sso.dll` into Emby's `plugins` directory (for example
-   `/config/plugins` in the linuxserver.io Docker image), replacing any
-   earlier copy.
+1. Copy `Emby.Sso.dll` into Emby's `plugins` folder — `/config/plugins` in the
+   linuxserver.io Docker image — replacing any earlier copy.
 2. Restart Emby Server.
-3. Confirm it loaded: Dashboard → Plugins should list **Authentik SSO**, at
-   the version you downloaded. If the number is not the one you just
-   installed, the old DLL is still in place and Emby is still running it.
+3. Open **Dashboard → Plugins**. **Authentik SSO** should be listed, at the
+   version you just downloaded. A different number means the old file is still
+   there.
+4. Open it and set **Required group** before anything else.
 
-**Install exactly one DLL, and it must be the merged one.** The build produces
-`Emby.Sso.dll` by merging (ILRepack) the plugin with its dependencies and
-internalizing their types, because Emby ships its own, different copy of
-`Microsoft.IdentityModel`. Dropping unmerged dependency DLLs next to the
-plugin puts two incompatible assembly identities in one load context and fails
-at runtime.
+**Install this one file and nothing else.** It already contains everything it
+needs; adding other DLLs beside it breaks it.
 
-Upgrading is the same three steps — but set *Required group* first, above.
+Next: [Setting up Authentik](docs/site/authentik.md), then
+[assign each user's login provider](docs/site/login-providers.md) — that second
+step is required and easy to miss.
 
-Detail, including what a fresh install must do immediately afterwards:
-[Installing and upgrading](docs/site/installing.md).
+### Updating
+
+You should only ever do the above once. When a newer version is published, the
+plugin's configuration page shows **Download and install**. It verifies the
+vendor's signature and the file's checksum before it writes anything, and asks
+you to restart when it suits you.
+
+Details: [Updates and the daily check](docs/site/updates.md).
+
+---
+
+## Licensing
+
+**This is paid software, not open source.** The source is published so you can
+read what runs on your server; you may not redistribute it or run it without a
+licence. See [`LICENSE`](LICENSE).
+
+### What a licence is
+
+A licence is a key issued for **one Emby server**, identified by the server id
+Emby prints in its log at startup and shows on the plugin's configuration page.
+It is checked on your own machine, offline.
+
+### Buying one
+
+From the plugin itself. Open **Dashboard → Plugins → Authentik SSO** and press
+**Buy a licence** — you are taken to the shop with your server id already
+filled in. Pay, and a **redemption code** arrives by email at the address on
+your payment.
+
+Paste that code into the same page and press **Activate**. The first activation
+of a new code is not instant: it may answer *"your licence is being issued"*,
+and pressing Activate again a few minutes later completes it. The code is not
+used up by the wait.
+
+One code covers more than one server — how many is shown on the configuration
+page once you have activated. Re-activating a server you have already activated,
+after a rebuild or a restore or a move, does not use up another.
+
+### A licence for testing
+
+There is a proper way to get one, and it is free: **ask.** Email
+<robin@koper.cloud> with your Emby server id and say what you want to try. You
+will get a redemption code that works exactly like a bought one, for a limited
+time.
+
+Please do take one before buying, especially if you are not certain your
+provider is set up the way this plugin expects.
+
+### If a licence is missing or expired
+
+**New single sign-ons and automatic account creation are refused, and nothing
+else.** People already signed in stay signed in, your own Emby accounts are
+untouched, your media is untouched, and nothing is deleted or reconfigured. You
+cannot be locked out of your own server by a licensing problem — that is the
+one thing the design will not do.
+
+More: [Licensing](docs/site/licensing.md) and
+[Buying and activating a licence](docs/site/activation.md).
+
+### What the plugin tells the vendor
+
+Almost nothing, and never anything about your users.
+
+- **When you activate:** your redemption code and your server id, once.
+- **Once a day:** your server id and a one-way fingerprint of your licence, to
+  ask whether the licence is still valid and whether a new version exists. It
+  is an ordinary Emby scheduled task — you can see it, run it, and **switch it
+  off**. If it gets no answer, nothing changes.
+
+That is the complete list. No usernames, no libraries, no viewing habits, no
+addresses, ever.
+
+---
+
+## Getting help
+
+- **[Troubleshooting](docs/site/troubleshooting.md)** — every message a user
+  can be shown, and what to check for each one.
+- **[What has and has not been verified](docs/site/verification-status.md)** —
+  an honest list of what has been tested on a real server and what has not.
+  Worth reading before you trust anything here with a server people rely on.
+- **Email <robin@koper.cloud>** with what the plugin told you and what the
+  server log said under `AuthentikSso`. Never include your redemption code.
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [Start here](docs/site/index.md) | What it is and how it works |
+| [Read this before you install](docs/site/before-you-install.md) | The three things that can lock people out |
+| [Installing and upgrading](docs/site/installing.md) | Download, checksum, three steps |
+| [Updates and the daily check](docs/site/updates.md) | The update button, and what is sent once a day |
+| [Setting up Authentik](docs/site/authentik.md) | Provider, application, groups, scopes |
+| [Assigning each user's login provider](docs/site/login-providers.md) | Required, and easy to miss |
+| [Browser sign-in](docs/site/browser-sign-in.md) | The bookmarkable URL |
+| [Native apps with a password](docs/site/native-apps.md) | Direct grant, and what it costs you |
+| [Native apps with a one-time PIN](docs/site/pin-sign-in.md) | Two-factor, on a television |
+| [Group gating and account creation](docs/site/groups-and-account-creation.md) | Who may sign in, and who gets an account |
+| [One Emby account, one Authentik identity](docs/site/identity-binding.md) | How accounts are bound to people |
+| [Brute-force protection](docs/site/brute-force-protection.md) | Both brakes, and why you need both |
+| [Every setting, explained](docs/site/settings.md) | One section per field |
+| [Licensing](docs/site/licensing.md) | What an invalid licence does and does not stop |
+| [Buying and activating a licence](docs/site/activation.md) | Redemption codes, step by step |
+| [Troubleshooting](docs/site/troubleshooting.md) | When something is wrong |
+| [What has and has not been verified](docs/site/verification-status.md) | The honesty ledger |
+| [Building from source](docs/site/building.md) | For developers |
+
+The same pages are published to the project wiki, generated from `docs/site/`
+on every push — so **edits made in the wiki are overwritten**.
 
 ---
 
 ## Building from source
 
-Requires the .NET SDK (matching `netstandard2.0`/`net8.0` tooling).
+You do not need to build anything to use the plugin. If you want to read it and
+run its tests:
 
-```
-dotnet build -c Release
-```
-
-produces the merged, installable plugin at:
-
-```
-src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll
+```bash
+dotnet build -c Release          # produces the installable plugin
+dotnet test tests/Emby.Sso.Tests # 621 tests, no Emby server or network needed
 ```
 
-A build with no version given reports `0.0.0-dev`, deliberately: a DLL you
-built yourself should never look like a release in Emby's plugin list. Pass
-`-p:Version=1.4.0` to build one that names itself, which is all CI does, with
-the version taken from the tag.
+The build output is at
+`src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll`, and reports its
+version as `0.0.0-dev` so a copy you built yourself can never be mistaken for a
+release.
 
-```
-dotnet test tests/Emby.Sso.Tests
-```
+Details: [Building from source](docs/site/building.md).
 
-runs the protocol test suite — 565 tests, no Emby server or network required.
-It compiles the plugin's `Protocol/` layer only, so every decision is under
-test while the Emby-facing shell that calls them (`Auth/`, `Api/`) is not,
-because those types reference `MediaBrowser.*` and need a running server.
-That boundary is why so much of
-[What has and has not been verified](docs/site/verification-status.md) is
-about how Emby reacts rather than about what the plugin decides.
+---
 
-Releases are made by pushing a tag and nothing else:
-[Building from source](docs/site/building.md#cutting-a-release).
+## Honesty about what this is
+
+The licence check is a signed key verified on your own machine. The plugin is a
+.NET assembly, and **a .NET assembly can be decompiled and the check removed.**
+There is no obfuscation and none is planned. This is not DRM and is not
+described as DRM anywhere here — it raises the cost of casually copying a
+licence between servers, and the enforceable part is [`LICENSE`](LICENSE),
+not the code.
+
+Developed and tested against Emby Server 4.9.5.0.
