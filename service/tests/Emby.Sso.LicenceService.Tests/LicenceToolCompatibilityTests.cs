@@ -12,12 +12,12 @@ namespace Emby.Sso.LicenceService.Tests
     /// The drift detector between this service and tools/Emby.Sso.LicenceTool.
     ///
     /// The brief said to share the tool's signing logic and ledger format rather
-    /// than write a second subtly different one. The sharing is only half done:
-    /// Emby.Sso.Licensing IS that shared code, but the tool has not been changed
-    /// to reference it, because the task that wrote this directory was forbidden
-    /// from touching tools/. So today there really are two copies, and these
-    /// tests are what stops them drifting until the tool is pointed at this
-    /// library - a one-line ProjectReference and a deletion.
+    /// than write a second subtly different one. The sharing is half done: the
+    /// tool references Emby.Sso.Licensing for the file formats and the signing
+    /// key loader, but it still declares its own copies of the issuer, the
+    /// algorithm and the ledger field names rather than reading them from here.
+    /// So two copies of those constants exist, and these tests are what stops
+    /// them drifting until the duplicates are deleted.
     ///
     /// They read the tool's SOURCE. That is unusual and it is deliberate: the
     /// tool is an executable with an internal Program class and no seam to call,
