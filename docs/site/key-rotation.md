@@ -29,8 +29,7 @@ Do this before you have to, not after.
      tools/Emby.Sso.LicenceTool/licencetool.sh keygen --out /keys
    ```
 
-   No .NET SDK needed - `licencetool.sh` runs it in a container. See
-   `tools/Emby.Sso.LicenceTool/README.md` in the repository.
+   No .NET SDK needed - `licencetool.sh` runs it in a container.
 
    It prints the public JWK and its key id.
 

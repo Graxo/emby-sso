@@ -14,7 +14,7 @@ dist/
 /public/
 
 # Licence signing keys. The issuing tool refuses to write one inside a git
-# working tree at all (tools/Emby.Sso.LicenceTool/README.md); this is the
+# working tree at all (the licence tool refuses outright); this is the
 # second line of defence, because a private key that reaches a commit has to
 # be treated as leaked and every licence issued with it reissued.
 licence-signing-key.private.json
@@ -43,3 +43,13 @@ docs/superpowers/
 # is mirrored publicly. The same arrangement written in roles rather than host
 # names is committed, in docs/site/signing-a-release.md.
 RUNBOOK.local.md
+
+# The licence tool. It mints licences and signs releases: it is the vendor's
+# own program, it is of no use to anybody who cannot already sign, and this
+# repository is mirrored publicly. It stays on the machines that hold the keys.
+#
+# IT IS NOT BACKED UP BY BEING HERE ANY MORE. Keep it wherever the keys are
+# kept, and note that service/tests LicenceToolCompatibilityTests can only
+# check the tool for drift in a checkout that has it - elsewhere those tests
+# skip and say so.
+tools/

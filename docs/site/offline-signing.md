@@ -18,6 +18,13 @@
     Both use the same checks and the same file formats. Turning one into the
     other is one environment variable and one volume.
 
+!!! note "The licence tool is not in this repository"
+
+    Every `tools/Emby.Sso.LicenceTool/...` command below is run in the tool's
+    own checkout, on the machine that holds the key. The tool mints licences
+    and signs releases, so it is not published with the plugin - it lives with
+    the keys and nowhere else.
+
 ## Why it exists
 
 The licence service used to hold the private signing key and mint a licence

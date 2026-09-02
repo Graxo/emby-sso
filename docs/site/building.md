@@ -64,8 +64,9 @@ git push origin v1.4.0
 
 !!! danger "Before the first release, and only once: generate the licence signing keypair"
 
-    Paste its public half into `src/Emby.Sso/Protocol/LicencePublicKey.cs`. See
-    `tools/Emby.Sso.LicenceTool/README.md`.
+    Paste its public half into `src/Emby.Sso/Protocol/LicencePublicKey.cs`. The
+    licence tool that generates it is not in this repository; it lives with the
+    keys, and its own README explains it.
 
     A build whose `LicencePublicKey.Jwk` is still empty **refuses every single
     sign-on** and says so in the server log — deliberately, because a build with

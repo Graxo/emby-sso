@@ -11,6 +11,13 @@ offer, and nothing installs without one.
 Making that statement is the last step of a release, and it is the only step
 the build pipeline does not do.
 
+!!! note "The licence tool is not in this repository"
+
+    Every `tools/Emby.Sso.LicenceTool/...` command below is run in the tool's
+    own checkout, on the machine that holds the key. The tool mints licences
+    and signs releases, so it is not published with the plugin - it lives with
+    the keys and nowhere else.
+
 ## Where everything lives
 
 Four things, on purpose kept apart. The point of the arrangement is the last

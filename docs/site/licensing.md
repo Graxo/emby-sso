@@ -133,7 +133,8 @@ it is not described as DRM anywhere in this project.** The enforceable part is
 
 ## For the vendor
 
-`tools/Emby.Sso.LicenceTool/` generates signing keypairs and signs licences, and
+The vendor's own licence tool - not part of this repository - generates signing
+keypairs and signs licences, and
 its own README covers where a private key must live. Two pages cover the rest:
 
 - [Signing licences offline](offline-signing.md) — the round trip, and why the

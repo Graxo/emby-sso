@@ -24,10 +24,22 @@ namespace Emby.Sso.LicenceService.Tests
     /// so the only thing available to assert against is the text. A test that
     /// fails when somebody edits a constant in the tool is worth more than no
     /// test at all, and the failure message says exactly what to do.
+    ///
+    /// THE TOOL IS NOT IN THE PUBLIC REPOSITORY, so in CI there is nothing to
+    /// read and the source-reading tests SKIP rather than fail. Skipped is the
+    /// honest state: the guard is not running, the run says so out loud with a
+    /// reason, and nobody is told the tool has been checked when it has not.
+    /// Everything that can be asserted without the tool - that this library's
+    /// own constants are the values the tool copies, and that a ledger line
+    /// round-trips - still runs everywhere.
+    ///
+    /// The consequence is that drift is only caught where the tool actually
+    /// lives. Run this suite in that checkout before issuing licences with a
+    /// changed tool.
     /// </summary>
     public class LicenceToolCompatibilityTests
     {
-        [Theory]
+        [ToolPresentTheory]
         [InlineData("private const string Issuer = \"urn:emby-sso:licence\";")]
         [InlineData("private const string Algorithm = SecurityAlgorithms.RsaSha256;")]
         [InlineData("private const string PrivateKeyFileName = \"licence-signing-key.private.json\";")]
@@ -36,7 +48,22 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Contains(declaration, ToolSource(), StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// The half of that check which needs no tool. These four values are
+        /// what every licence this service issues carries, so a change to one
+        /// of them is a change to the format whether or not the tool is here to
+        /// be compared against.
+        /// </summary>
         [Fact]
+        public void This_librarys_constants_are_the_ones_the_format_is_defined_by()
+        {
+            Assert.Equal("urn:emby-sso:licence", LicenceFormat.Issuer);
+            Assert.Equal("licence-signing-key.private.json", LicenceFormat.PrivateKeyFileName);
+            Assert.Equal("licences-issued.jsonl", LicenceFormat.LedgerFileName);
+            Assert.Equal("RS256", LicenceFormat.Algorithm);
+        }
+
+        [ToolPresentFact]
         public void The_constants_in_this_library_are_the_tools_constants()
         {
             var source = ToolSource();
@@ -44,10 +71,9 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Contains("\"" + LicenceFormat.Issuer + "\"", source, StringComparison.Ordinal);
             Assert.Contains("\"" + LicenceFormat.PrivateKeyFileName + "\"", source, StringComparison.Ordinal);
             Assert.Contains("\"" + LicenceFormat.LedgerFileName + "\"", source, StringComparison.Ordinal);
-            Assert.Equal("RS256", LicenceFormat.Algorithm);
         }
 
-        [Theory]
+        [ToolPresentTheory]
         [InlineData("[\"iss\"] = Issuer,")]
         [InlineData("[\"sub\"] = licensee,")]
         [InlineData("[\"aud\"] = serverId,")]
@@ -56,7 +82,7 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Contains(claim, ToolSource(), StringComparison.Ordinal);
         }
 
-        [Theory]
+        [ToolPresentTheory]
         [InlineData("issued_at")]
         [InlineData("expires_at")]
         [InlineData("days")]
@@ -192,28 +218,61 @@ namespace Emby.Sso.LicenceService.Tests
 
         private static string ToolSource()
         {
-            var path = Path.Combine(RepositoryRoot(), "tools", "Emby.Sso.LicenceTool", "Program.cs");
-
-            Assert.True(
-                File.Exists(path),
-                "tools/Emby.Sso.LicenceTool/Program.cs was not found at " + path
-                + ". If the tool has moved, this test and service/src/Emby.Sso.Licensing move with it.");
-
-            return File.ReadAllText(path);
+            return File.ReadAllText(ToolProgram());
         }
 
-        private static string RepositoryRoot()
+        /// <summary>
+        /// The tool's Program.cs, or null when this checkout does not have the
+        /// tool - which is every checkout of the public repository.
+        /// </summary>
+        internal static string ToolProgram()
         {
             for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, "tools", "Emby.Sso.LicenceTool")))
+                var candidate = Path.Combine(directory.FullName, "tools", "Emby.Sso.LicenceTool", "Program.cs");
+
+                if (File.Exists(candidate))
                 {
-                    return directory.FullName;
+                    return candidate;
                 }
             }
 
-            throw new DirectoryNotFoundException(
-                "walked up from " + AppContext.BaseDirectory + " without finding tools/Emby.Sso.LicenceTool");
+            return null;
         }
+    }
+
+    /// <summary>
+    /// A theory that runs only where the licence tool is checked out.
+    ///
+    /// Setting Skip in the constructor is how xUnit expresses a condition it
+    /// can evaluate before the run. The reason is spelled out because a skipped
+    /// test with no explanation is indistinguishable from a test somebody
+    /// disabled to get a green pipeline.
+    /// </summary>
+    public sealed class ToolPresentTheoryAttribute : TheoryAttribute
+    {
+        public ToolPresentTheoryAttribute()
+        {
+            Skip = ToolPresence.Reason;
+        }
+    }
+
+    /// <summary>The same thing for a single fact.</summary>
+    public sealed class ToolPresentFactAttribute : FactAttribute
+    {
+        public ToolPresentFactAttribute()
+        {
+            Skip = ToolPresence.Reason;
+        }
+    }
+
+    internal static class ToolPresence
+    {
+        /// <summary>Null when the tool is here, which is what xUnit reads as "do not skip".</summary>
+        public static string Reason =>
+            LicenceToolCompatibilityTests.ToolProgram() == null
+                ? "tools/Emby.Sso.LicenceTool is not in this checkout - it is not published. "
+                  + "Run this suite where the tool lives to check it for drift."
+                : null;
     }
 }

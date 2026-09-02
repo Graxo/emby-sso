@@ -20,7 +20,8 @@ Licences are bound to one Emby server id, and a server id only exists at
 activation time, so nothing can be pre-generated. That is why there is a
 redemption code in the middle rather than a licence in the confirmation email.
 
-**Read `tools/Emby.Sso.LicenceTool/README.md` first if you have not.** This
+**Read the licence tool's own README first if you have not** - it is not in
+this repository; it lives with the keys. This
 service is the offline tool with a shop attached, and it deliberately shares the
 tool's signing logic and ledger format — see *One implementation, two front
 ends*, below.
