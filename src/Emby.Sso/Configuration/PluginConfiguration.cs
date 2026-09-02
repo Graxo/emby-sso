@@ -93,6 +93,30 @@ namespace Emby.Sso.Configuration
         public int ActivationsAllowed { get; set; }
 
         /// <summary>
+        /// Whether the vendor has withdrawn this licence, as of the last daily
+        /// check that got a signed answer.
+        ///
+        /// FALSE IS THE ONLY SAFE DEFAULT and it is what every failure produces.
+        /// This is set true only by a current, correctly signed answer naming
+        /// this server and this licence - see Protocol.LicenceStatusCheck - so a
+        /// server that cannot reach the vendor, or reaches something pretending
+        /// to be the vendor, keeps working.
+        ///
+        /// It is cleared by a successful activation, because activating is the
+        /// vendor issuing a licence and that settles the question.
+        /// </summary>
+        public bool LicenceRevoked { get; set; }
+
+        /// <summary>
+        /// When the last daily check got a signed answer, as
+        /// yyyy-MM-ddTHH:mm:ssZ, or empty if it never has. Only used to tell an
+        /// operator how current the answer is; nothing is enforced on it,
+        /// because enforcing on staleness would turn the vendor's downtime into
+        /// the customer's outage.
+        /// </summary>
+        public string LicenceCheckedUtc { get; set; } = string.Empty;
+
+        /// <summary>
         /// An override for the vendor's activation service, for testing a
         /// service before it is live. Empty - the normal state - means
         /// <see cref="Protocol.ActivationEndpoint.DefaultServiceBase"/>, the

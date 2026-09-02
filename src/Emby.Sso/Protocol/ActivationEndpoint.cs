@@ -48,6 +48,14 @@ namespace Emby.Sso.Protocol
         public const string BuyPath = "/buy";
 
         /// <summary>
+        /// The daily "is this licence still good?" path. See
+        /// <see cref="LicenceStatusCheck"/> for what may come back and what the
+        /// plugin does with it - which, for everything except a correctly signed
+        /// revocation, is nothing.
+        /// </summary>
+        public const string StatusPath = "/v1/licence/status";
+
+        /// <summary>
         /// Referenced from the class comment above so the reason an override is
         /// safe cannot drift away from the override itself.
         /// </summary>
@@ -74,6 +82,12 @@ namespace Emby.Sso.Protocol
         public static bool TryBuildActivateUrl(string serviceBase, out string url, out string refusal)
         {
             return TryBuild(serviceBase, ActivatePath, null, out url, out refusal);
+        }
+
+        /// <summary>Builds <c>{base}/v1/licence/status</c>, on the same terms as the activation URL.</summary>
+        public static bool TryBuildStatusUrl(string serviceBase, out string url, out string refusal)
+        {
+            return TryBuild(serviceBase, StatusPath, null, out url, out refusal);
         }
 
         /// <summary>

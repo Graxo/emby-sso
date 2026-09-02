@@ -31,6 +31,13 @@ namespace Emby.Sso.Tests
         public string PublicKeyJwk => PublicJwk(_rsa);
 
         /// <summary>
+        /// The key itself, for tests that build a token this factory has no
+        /// method for - the daily status answer, for instance, which is signed
+        /// by the same vendor key but is not a licence.
+        /// </summary>
+        public SecurityKey SigningKey => new RsaSecurityKey(_rsa);
+
+        /// <summary>
         /// The same key with its private half included - what a careless release
         /// would embed, and what the check must refuse.
         /// </summary>

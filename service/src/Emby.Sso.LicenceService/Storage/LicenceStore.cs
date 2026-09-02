@@ -628,6 +628,57 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
             return rows;
         }
 
+        /// <summary>
+        /// The state of the code a licence was signed from, found by that
+        /// licence's fingerprint.
+        ///
+        /// The fingerprint is a SHA-256 of the licence string, which is what
+        /// this store already records for every signed request - so a plugin can
+        /// ask about its licence without sending the licence itself, and this
+        /// service can answer without ever holding one it did not issue.
+        ///
+        /// Null when no signed request carries that fingerprint. That is the
+        /// honest answer for a restored backup or a rebuilt store as well as for
+        /// a licence this deployment never made, and the caller treats it as
+        /// "do not act" rather than "revoke" for exactly that reason.
+        /// </summary>
+        public CodeSummary FindCodeByLicenceFingerprint(string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint))
+            {
+                return null;
+            }
+
+            using var connection = Open();
+
+            long codeId;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT code_id FROM signing_requests WHERE fingerprint = $f LIMIT 1;";
+                command.Parameters.AddWithValue("$f", fingerprint);
+
+                var found = command.ExecuteScalar();
+
+                if (found == null || found == DBNull.Value)
+                {
+                    return null;
+                }
+
+                codeId = Convert.ToInt64(found, CultureInfo.InvariantCulture);
+            }
+
+            foreach (var summary in ListCodes())
+            {
+                if (summary.Id == codeId)
+                {
+                    return summary;
+                }
+            }
+
+            return null;
+        }
+
         public int CountWaitingToBeSigned()
         {
             using var connection = Open();

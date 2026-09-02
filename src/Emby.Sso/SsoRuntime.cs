@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -168,6 +169,60 @@ namespace Emby.Sso
                 LicencePublicKey.TrustedJwks,
                 DateTimeOffset.UtcNow,
                 cancellationToken);
+        }
+
+        /// <summary>
+        /// The daily licence check. Returns true when something was written to
+        /// the configuration, so the caller can log the change rather than the
+        /// no-op.
+        ///
+        /// FAILS OPEN IN EVERY DIRECTION. No licence, no server id, no network,
+        /// an unsigned answer, an answer about another server - all of them
+        /// leave the configuration exactly as it was. Only a correctly signed
+        /// revocation sets the flag, and only a correctly signed valid or
+        /// unknown clears it.
+        /// </summary>
+        public static async Task<LicenceStatusOutcome> CheckLicenceStatusAsync(CancellationToken cancellationToken)
+        {
+            var configuration = Configuration;
+            var licence = configuration?.LicenceKey;
+
+            if (string.IsNullOrWhiteSpace(licence))
+            {
+                // Nothing to ask about. An unlicensed server is already refusing
+                // sign-ins for a reason that has nothing to do with revocation.
+                return LicenceStatusOutcome.NoAnswer;
+            }
+
+            var outcome = await LicenceStatusClient.CheckAsync(
+                ActivationHttp,
+                ActivationEndpoint.Resolve(configuration.ActivationServiceUrl),
+                ServerId,
+                licence,
+                LicencePublicKey.TrustedJwks,
+                DateTimeOffset.UtcNow,
+                cancellationToken).ConfigureAwait(false);
+
+            if (outcome == LicenceStatusOutcome.NoAnswer)
+            {
+                return outcome;
+            }
+
+            var revoked = LicenceStatusCheck.StopsSignIns(outcome);
+            var plugin = Plugin.Instance;
+
+            if (plugin == null)
+            {
+                return outcome;
+            }
+
+            plugin.Configuration.LicenceRevoked = revoked;
+            plugin.Configuration.LicenceCheckedUtc =
+                DateTimeOffset.UtcNow.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+            plugin.SaveConfiguration();
+
+            return outcome;
         }
 
         /// <summary>

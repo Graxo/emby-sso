@@ -65,17 +65,44 @@ at most one every six hours — telling you how many days are left.
 
     It is what gives you time to renew without anybody being thrown out.
 
-## Licences cannot be revoked
+## Revocation, and what it can and cannot do
 
-!!! danger "There is no revocation, and there cannot be"
+The licence itself is still checked **entirely offline**. Nothing is contacted
+when a sign-in happens, and a server with no internet access verifies its
+licence exactly as well as one with it.
 
-    The check is offline by design: nothing is contacted when a licence is
-    checked, so there is nowhere for a revocation to come from. A licence that
-    has been issued is valid on the server it names until its own expiry date —
-    activating it was a one-time call, and there is no second one that could
-    take it away.
+Separately from that, the plugin asks the licensing service **once a day**
+whether this server's licence has been withdrawn — for a refund, a chargeback,
+or a licence issued in error. It appears in *Dashboard → Scheduled Tasks* as
+**Check the SSO plugin licence**, where you can see when it last ran, run it
+yourself, or turn it off.
 
-    An expiry date is the only lever. Issue accordingly.
+!!! warning "It fails open, deliberately"
+
+    If the licensing service cannot be reached — it is down, your server is
+    offline, a firewall is in the way — **nothing changes and sign-ins carry on
+    as normal.** The same is true of an answer that is unsigned, signed by the
+    wrong key, about a different server, about a different licence, or older
+    than two days.
+
+    Exactly one thing stops new sign-ons: a current, correctly signed answer,
+    naming this server and this licence, that says revoked.
+
+    That asymmetry is the point. The vendor's server being down must never
+    become your outage, and a hostile network must not be able to disable your
+    plugin by dropping packets.
+
+**A revocation does exactly what an expired licence does, and no more.** New
+single sign-ons and automatic account creation stop. People already signed in
+stay signed in, Emby's own accounts are unaffected, and nothing is disabled,
+deleted or reconfigured.
+
+**What is sent** is this server's id and a SHA-256 of the licence — both of
+which the vendor already has. The licence itself never leaves your server, and a
+hash cannot be turned back into one.
+
+**Turning the task off** means revocations never arrive. That is supported: an
+air-gapped server has always been a legitimate way to run this plugin.
 
 There is one thing that acts *like* a revocation and is not one: retiring a
 signing key. A licence is accepted only if one of the keys compiled into the

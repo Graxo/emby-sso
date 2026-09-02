@@ -204,6 +204,16 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(store);
             builder.Services.AddSingleton(trusted);
 
+            // Null when this deployment does not sign for itself. The status
+            // service then reports that it cannot answer, and the plugin - which
+            // refuses an unsigned answer anyway - carries on unaffected.
+            builder.Services.AddSingleton(provider => new LicenceStatusService(
+                provider.GetRequiredService<LicenceStore>(),
+                provider.GetRequiredService<ActivationRateLimiter>(),
+                signingKey?.Key,
+                provider.GetRequiredService<TimeProvider>(),
+                provider.GetRequiredService<ILogger<LicenceStatusService>>()));
+
             if (signingKey != null)
             {
                 builder.Services.AddSingleton(signingKey);
@@ -421,6 +431,49 @@ namespace Emby.Sso.LicenceService
                 }
 
                 return Error(context, reply.Error, reply.Message, StatusFor(reply.Error), reply.RetryAfter);
+            });
+
+            // The daily "is my licence still good?" call. See
+            // LicenceStatusService: the answer is signed, the plugin fails open
+            // when there is no answer, and nothing here can be used to fish for
+            // a licence - only to ask about one the caller already holds.
+            app.MapPost("/v1/licence/status", async (HttpContext context, LicenceStatusService statuses) =>
+            {
+                var body = await ReadBodyAsync(context).ConfigureAwait(false);
+                var client = ClientKey(context, options.TrustedProxyHops);
+
+                if (body == null)
+                {
+                    return Results.StatusCode(400);
+                }
+
+                LicenceStatusRequest request;
+
+                try
+                {
+                    request = JsonSerializer.Deserialize<LicenceStatusRequest>(
+                        body,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                }
+                catch (JsonException)
+                {
+                    return Results.StatusCode(400);
+                }
+
+                var reply = statuses.Check(request, client);
+
+                if (!reply.IsAnswered)
+                {
+                    if (reply.RetryAfter > TimeSpan.Zero)
+                    {
+                        context.Response.Headers.RetryAfter =
+                            ((int)Math.Ceiling(reply.RetryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+                    }
+
+                    return Results.StatusCode(reply.StatusCode);
+                }
+
+                return Results.Json(new { status = reply.Token }, statusCode: 200);
             });
 
             app.MapPost("/paypal/webhook", async (HttpContext context, PayPalWebhookHandler handler) =>

@@ -227,6 +227,13 @@ namespace Emby.Sso.Api
             {
                 plugin.Configuration.LicenceKey = licence;
 
+                // Activating is the vendor issuing a licence, which settles the
+                // question a revocation asked. Without this, somebody who was
+                // revoked and then bought again would stay refused until the
+                // next daily check happened to run.
+                plugin.Configuration.LicenceRevoked = false;
+                plugin.Configuration.LicenceCheckedUtc = string.Empty;
+
                 // Only when the service actually said. A null here means it did
                 // not report them, and overwriting a previous, real pair with
                 // zeroes would turn "2 of 3" into "0 of 0" for no reason.

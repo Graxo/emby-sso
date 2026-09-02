@@ -67,6 +67,32 @@ namespace Emby.Sso
                 SsoRuntime.ServerId,
                 now).ConfigureAwait(false);
 
+            // A licence the vendor has withdrawn. Checked BEFORE the licence
+            // itself is judged valid, because a revoked licence is still a
+            // perfectly well-formed one - the signature and the expiry say
+            // nothing about a refund.
+            //
+            // It behaves exactly like an expired licence and not one bit more:
+            // new single sign-ons stop, sessions already open carry on, and
+            // Emby's own accounts are untouched. Nothing is disabled or deleted.
+            //
+            // This flag is only ever set by a current, correctly signed answer
+            // naming this server and this licence. Every other outcome of the
+            // daily check - unreachable, unsigned, stale, about another server -
+            // leaves it alone. See Protocol.LicenceStatusCheck.
+            if (configuration?.LicenceRevoked == true && LicenceCheck.Permits(status.Outcome))
+            {
+                logger.Error(
+                    "SSO refused at {0}: this server's licence has been withdrawn by the vendor. "
+                    + "This server's id is {1}. Existing sessions are unaffected and Emby's own accounts still "
+                    + "sign in normally. If this is unexpected, contact the vendor - a refund or a chargeback is "
+                    + "the usual reason.",
+                    door,
+                    LogSafeText.Flatten(SsoRuntime.ServerId));
+
+                return SsoErrors.LicenceInvalid;
+            }
+
             if (!LicenceCheck.Permits(status.Outcome))
             {
                 // Error, and specific. This is the one refusal in the plugin

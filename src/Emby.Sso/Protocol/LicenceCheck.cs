@@ -451,6 +451,17 @@ namespace Emby.Sso.Protocol
         /// whose behaviour nobody can predict from reading it, and the fix - a
         /// corrected constant and a rebuild - is the same either way.
         /// </summary>
+        /// <summary>
+        /// Internal rather than private so the daily status check verifies
+        /// against exactly this set, read exactly this way. Two readers of the
+        /// same constant that disagreed about what it means would be a way for a
+        /// token to be trusted in one place and not the other.
+        /// </summary>
+        internal static IReadOnlyList<SecurityKey> ReadTrustedKeys(IReadOnlyList<string> publicKeyJwks)
+        {
+            return ReadPublicKeys(publicKeyJwks);
+        }
+
         private static IReadOnlyList<SecurityKey> ReadPublicKeys(IReadOnlyList<string> publicKeyJwks)
         {
             if (publicKeyJwks == null || publicKeyJwks.Count == 0)

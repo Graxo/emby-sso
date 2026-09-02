@@ -226,6 +226,24 @@ next press of **Activate** returns the licence.
 
 The full reasoning is in [Signing licences offline](offline-signing.md).
 
+## The log says the licence has been withdrawn
+
+The daily licence check received a signed answer from the vendor saying this
+server's licence has been revoked — normally a refund, a chargeback, or a
+licence issued in error.
+
+New single sign-ons stop. **People already signed in stay signed in, and Emby's
+own accounts are unaffected**, exactly as for an expired licence.
+
+If it is unexpected, the vendor is the one to ask. Nothing on this server can
+undo it, and re-activating a code you still hold will clear it if the vendor
+reinstates the licence.
+
+**It cannot be caused by a network problem.** The check fails open: an
+unreachable service, an unsigned answer, or an answer about a different server
+all leave everything exactly as it was. Only a correctly signed revocation
+naming this server and this licence does anything.
+
 ## Problems that are not an error message
 
 ### A user cannot sign in with their old Emby password after using SSO once
