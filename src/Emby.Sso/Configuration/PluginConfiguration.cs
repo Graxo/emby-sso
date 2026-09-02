@@ -11,7 +11,6 @@ namespace Emby.Sso.Configuration
         public string EmbyPublicBaseUrl { get; set; } = string.Empty;
         public string UsernameClaim { get; set; } = "preferred_username";
         public bool EnableDirectGrant { get; set; } = false;
-        public bool EnableButtonInjection { get; set; } = false;
         public bool AllowInsecureHttp { get; set; } = false;
 
         /// <summary>

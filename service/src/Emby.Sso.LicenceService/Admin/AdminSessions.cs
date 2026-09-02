@@ -166,15 +166,6 @@ namespace Emby.Sso.LicenceService.Admin
             }
         }
 
-        /// <summary>Every session, gone. Not wired to a route; here for tests and for a future panic button.</summary>
-        public void DestroyAll()
-        {
-            lock (_gate)
-            {
-                _sessions.Clear();
-            }
-        }
-
         private void SweepLocked(DateTimeOffset now)
         {
             var dead = _sessions

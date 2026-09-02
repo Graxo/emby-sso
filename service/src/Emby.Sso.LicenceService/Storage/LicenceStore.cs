@@ -1638,8 +1638,6 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
 
         public string Signed { get; }
 
-        public bool IsSigned => Licence != null;
-
         /// <summary>The shape this row takes in the file the signing machine reads.</summary>
         public SigningRequest ToExchange()
         {

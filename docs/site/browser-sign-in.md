@@ -40,11 +40,6 @@ disclaimer field — Dashboard → Settings → General → "Login disclaimer". 
 render as visible instructions on the login screen, just not as a clickable
 link.
 
-!!! note "The \"Reserve a sign-in button on the login page\" checkbox does nothing"
-
-    `EnableButtonInjection` is reserved for a future release and currently has
-    no effect. Leave it as you find it.
-
 ## Two "Emby Web" device rows for one browser, and you must not delete either
 
 The completion page authenticates as an ordinary API client identified as

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using Emby.Sso.LicenceService.Configuration;
@@ -31,21 +30,6 @@ namespace Emby.Sso.LicenceService.Delivery
         /// </summary>
         public const string CodePlaceholder = "{code}";
 
-        /// <summary>
-        /// Every substitution a template may use. Anything else is left exactly
-        /// as written rather than being blanked: an operator whose wording
-        /// contains a brace should get their brace back.
-        /// </summary>
-        public static readonly IReadOnlyList<string> Placeholders = new[]
-        {
-            "{code}",
-            "{licensee}",
-            "{product}",
-            "{licence_days}",
-            "{activations_allowed}",
-            "{support}",
-        };
-
         public const string DefaultTemplate =
 @"Thank you for buying {product}.
 
@@ -60,8 +44,10 @@ HOW TO USE IT
   3. Press Activate.
 
 Your server needs to reach the licensing service once, at that moment. After
-it has activated, the licence is checked on your own server and the plugin
-does not call home again.
+that the licence is checked on your own server, offline. The plugin does ask us
+once a day whether the licence is still valid and whether there is a newer
+version - you can see that task in Dashboard, Scheduled Tasks, and switch it
+off. If it gets no answer, nothing changes.
 
 WHAT IT IS WORTH
 

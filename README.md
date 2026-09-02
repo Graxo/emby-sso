@@ -178,12 +178,15 @@ the issuer itself was HTTPS.)
 ## Licensing, in brief
 
 The plugin checks a signed licence key issued for one Emby server, named by
-the `ServerId` Emby writes to its log at startup. **The check is entirely
-offline**: nothing is contacted when a licence is verified, and a server with
-no internet access validates its licence exactly as well as one with it. The
-one thing that does use the network is activation — a single call made when an
-administrator presses **Activate** on the configuration page, on no sign-in
-path whatsoever, and never again.
+the `ServerId` Emby writes to its log at startup. **The check itself is
+entirely offline**: nothing is contacted when a sign-in happens, and a server
+with no internet access verifies its licence exactly as well as one with it.
+
+Two things do use the network, and neither is on a sign-in path. **Activation**
+is a single call made when an administrator presses **Activate**. A **daily
+scheduled task** asks whether the licence has been withdrawn and whether a newer
+plugin release has been published; it appears in *Dashboard → Scheduled Tasks*,
+it can be switched off, and it fails open — no answer changes nothing.
 
 **An invalid or missing licence refuses new single sign-ons and automatic
 account creation, and nothing else.** People already signed in stay signed in;
@@ -191,8 +194,11 @@ your own Emby accounts are authenticated by Emby's own provider, so **you
 cannot be locked out of your media server by a licensing problem**; nothing is
 disabled, deleted or reconfigured.
 
-A licence cannot be revoked — the check is offline, so there is nowhere a
-revocation could come from. An expiry date is the only lever. (Retiring a *signing key*
+A licence can be withdrawn — for a refund or a chargeback — through the daily
+check, and doing so refuses new sign-ons exactly as an expired licence does and
+no more. It takes a correctly signed answer naming that server and that licence;
+a network failure, an unsigned answer or a stale one changes nothing, and an
+operator who turns the task off never receives one. (Retiring a *signing key*
 stops every licence it ever signed, all at once; that is the remedy for a leaked
 key, not a way to deal with one customer. See
 [Rotating and revoking a signing key](docs/site/key-rotation.md).)

@@ -11,15 +11,17 @@ you by buying a code and pressing Activate — see
 A licence names your server's id — the `ServerId` Emby writes to its log at
 startup — so it is valid on that server and no other.
 
-!!! note "The check is entirely offline"
+!!! note "The check itself is entirely offline"
 
     Nothing is sent anywhere when a licence is checked. An Emby server with no
-    internet access validates its licence exactly as well as one with it.
+    internet access verifies its licence exactly as well as one with it.
 
-    There **is** a licensing service, but only
-    [activation](activation.md) ever contacts it: once, when an administrator
-    presses Activate. No sign-in path can reach it, and a service that is
-    unreachable — or shut down for good — does not affect sign-ins at all.
+    Two things do contact the licensing service, and **no sign-in path can
+    reach either**: [activation](activation.md), once, when an administrator
+    presses Activate; and a [daily scheduled task](updates.md) that asks whether
+    the licence has been withdrawn and whether a newer release exists. A service
+    that is unreachable — or shut down for good — does not affect sign-ins at
+    all.
 
 ## What an invalid or missing licence actually does
 

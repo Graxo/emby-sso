@@ -109,6 +109,7 @@ nav:
   - Getting started:
       - Read this before you install: before-you-install.md
       - Installing and upgrading: installing.md
+      - Updates and the daily check: updates.md
       - Setting up Authentik: authentik.md
       - Assigning each user's login provider: login-providers.md
   - Signing in:

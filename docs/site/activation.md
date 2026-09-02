@@ -8,13 +8,17 @@ Activation is how a licence gets into the [Licence key](settings.md#licence-key)
 field without anybody emailing you a JWT. You buy a code, paste it in, press
 Activate once, and the plugin fetches the licence for this server and saves it.
 
-!!! note "One call, made by a person, and never again"
+!!! note "One call, made by a person"
 
-    Activation is the **only** thing in this plugin that contacts the vendor.
-    It happens when an administrator presses Activate and at no other time.
-    After it, the licence check is offline forever: it reads a string out of
-    the configuration and verifies it against a public key compiled into the
-    build. See [Licensing](licensing.md).
+    Activation happens when an administrator presses Activate and at no other
+    time. The licence check itself stays offline forever: it reads a string out
+    of the configuration and verifies it against a public key compiled into the
+    build.
+
+    The plugin does contact the vendor once a day afterwards, from a scheduled
+    task you can watch and switch off, to ask whether the licence has been
+    withdrawn and whether there is a newer release. It is on no sign-in path
+    and it fails open. See [Updates and the daily check](updates.md).
 
 ## What a redemption code is
 
@@ -149,7 +153,7 @@ refusal and **Info** for a success. Neither ever contains the code.
 | What you see | What happened | What to do |
 |---|---|---|
 | Your licence has been requested and is being issued. | `pending_signature`. **Not an error, and your code has not been used up.** The vendor signs licences on a machine that is deliberately kept offline, so it is not instant — see [Signing licences offline](offline-signing.md) for why. | Press Activate again in a few minutes. Pressing it early costs nothing. |
-| Activated. The licence for this server has been saved. | The service issued a licence, this build verified it, and it was stored. | Nothing. The check is offline from here on. |
+| Activated. The licence for this server has been saved. | The service issued a licence, this build verified it, and it was stored. | Nothing. Sign-ins check the stored licence offline from here on. |
 | That redemption code was not recognised. | `invalid_code`: the service does not know it, or the purchase has not completed. | Check for typing mistakes, then ask the vendor. |
 | That redemption code has already been activated on as many servers as it allows. | `code_exhausted`. | Ask the vendor to release an activation, or buy another licence. |
 | Too many activation attempts. | `rate_limited`. A numeric `Retry-After` is turned into a wait; an HTTP-date one is not, and you are told to wait a few minutes instead. | Wait and try again. |

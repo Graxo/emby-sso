@@ -50,8 +50,10 @@ Do this before you have to, not after.
 
 ## Revoking, because a key has leaked
 
-There is no revocation list and no callback — the plugin verifies offline and
-never contacts anything. **A key is revoked by not being in the trusted set.**
+There is no revocation list for *keys*, and the daily licence check cannot
+help: it withdraws one server's licence, not a key. Signature verification is
+offline and consults nothing. **A key is revoked by not being in the trusted
+set.**
 
 Delete its entry from `LicencePublicKey.cs`, ship, and remove it from
 `LICENCE_PUBLIC_KEYS`. Every licence it signed stops working at the moment each

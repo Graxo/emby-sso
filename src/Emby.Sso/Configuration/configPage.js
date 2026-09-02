@@ -214,12 +214,6 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             config.UsernameClaim = form.querySelector('#usernameClaim').value.trim();
             config.EnableDirectGrant = form.querySelector('#enableDirectGrant').checked;
             config.EnablePinSignIn = form.querySelector('#enablePinSignIn').checked;
-            // The sign-in button was a placeholder for something Emby's web
-            // client cannot render, so the checkbox is gone from the page.
-            // Written as false rather than left alone: a setting that can no
-            // longer be turned off must not stay on because somebody once
-            // ticked it.
-            config.EnableButtonInjection = false;
             config.AllowInsecureHttp = form.querySelector('#allowInsecureHttp').checked;
             config.AllowPrivateNetworkProvider = form.querySelector('#allowPrivateNetworkProvider').checked;
             config.RequiredGroup = form.querySelector('#requiredGroup').value.trim();

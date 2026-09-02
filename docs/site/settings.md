@@ -26,7 +26,6 @@ actually needs explaining lives below.
 | Automatically create accounts for group holders | `enableAutoCreate` | [#automatically-create-accounts-for-group-holders](#automatically-create-accounts-for-group-holders) |
 | Allow native apps to sign in with a password | `enableDirectGrant` | [#allow-native-apps-to-sign-in-with-a-password](#allow-native-apps-to-sign-in-with-a-password) |
 | Allow native apps to sign in with a one-time PIN | `enablePinSignIn` | [#allow-native-apps-to-sign-in-with-a-one-time-pin](#allow-native-apps-to-sign-in-with-a-one-time-pin) |
-| Reserve a sign-in button on the login page | `enableButtonInjection` | [#reserve-a-sign-in-button-on-the-login-page](#reserve-a-sign-in-button-on-the-login-page) |
 | Allow plain HTTP (testing only) | `allowInsecureHttp` | [#allow-plain-http-testing-only](#allow-plain-http-testing-only) |
 | Allow an identity provider on a private or loopback address | `allowPrivateNetworkProvider` | [#allow-an-identity-provider-on-a-private-or-loopback-address](#allow-an-identity-provider-on-a-private-or-loopback-address) |
 | Licence key | `licenceKey` | [#licence-key](#licence-key) |
@@ -205,16 +204,6 @@ stopping new ones.
 
 Read [Native apps with a one-time PIN](pin-sign-in.md).
 
-### Reserve a sign-in button on the login page
-
-**Reserved for a future release and currently does nothing.** Leave it as you
-find it.
-
-There cannot be a button on Emby's login page today —
-[here is why](browser-sign-in.md#there-is-no-button-on-the-login-page).
-
----
-
 ## Network and transport
 
 ### Allow plain HTTP (testing only)
@@ -283,10 +272,11 @@ sessions keep working, your own Emby accounts are unaffected, and nothing is
 disabled, deleted or reconfigured.
 
 The check is entirely offline: the licence is verified against a public key
-compiled into the build, and a server with no internet access validates it
-exactly as well as one with it. The one thing that does use the network is
-[activation](activation.md), which happens only when an administrator presses
-Activate.
+compiled into the build, and a server with no internet access verifies it
+exactly as well as one with it. What uses the network is
+[activation](activation.md), when an administrator presses Activate, and the
+[daily check](updates.md), which can be switched off and which changes nothing
+when it gets no answer.
 
 Read [Licensing](licensing.md) for what an invalid licence does and does not
 stop, and how to read the log lines it produces.

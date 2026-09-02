@@ -259,6 +259,28 @@ silently.
     does not exist yet, and `CI_JOB_TOKEN` cannot push to a wiki. The markdown
     conversion it does was run over these pages locally; the push was not.
 
+### Updates and the daily check
+
+!!! unverified "Every part is unit-tested. None of it has run inside Emby."
+
+    The scheduled task, the status check, the release check and the download are
+    covered by tests, including the refusals: an unsigned answer, an answer about
+    a different server, a stale one, a download whose hash does not match, and a
+    version that is not newer. The store on the service side refuses a manifest
+    without its file and a file that does not hash to what was signed for.
+
+    What has never happened: Emby registering the task and running it on its own
+    schedule, a real download being written into a real plugins directory, and an
+    operator restarting into the new build. **The first release published this
+    way should be checked by hand on one server before anybody else is offered
+    it** — read the version on the configuration page after restarting, not
+    before.
+
+    The plugin file has also never been served from the licence service to a real
+    Emby server. Confirm `/v1/release/download` answers `200` to a machine that
+    has never authenticated to anything of yours; a private package registry
+    fails this silently and every server would report the download unreachable.
+
 ## Anything else on a page
 
 Where a specific claim is measured, inferred or unrun, the page that makes the
