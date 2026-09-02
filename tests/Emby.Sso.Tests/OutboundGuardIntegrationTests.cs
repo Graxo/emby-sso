@@ -74,7 +74,7 @@ namespace Emby.Sso.Tests
         [Fact]
         public async Task The_same_provider_works_once_the_operator_permits_its_address()
         {
-            var client = CreateGuardedClient("10.10.140.5", allowPrivateNetworks: true);
+            var client = CreateGuardedClient("10.0.0.5", allowPrivateNetworks: true);
             var store = new PendingLoginStore(() => DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
 
             var url = await client.BuildAuthorizationUrlAsync(store.Create(), CancellationToken.None);

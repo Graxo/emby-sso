@@ -1,12 +1,14 @@
 # Documentation site for the Emby OIDC SSO plugin, published by GitLab Pages.
 #
-# docs_dir is deliberately docs/site, NOT docs/. docs/superpowers/ holds this
-# project's internal development record — specs, plans, spikes, verification
-# notes — and none of it is user documentation. Pointing docs_dir at docs/
-# would sweep every one of those files into the published site. Keeping the
-# site's sources one level down means it cannot happen by accident: MkDocs
-# only ever reads what is inside docs_dir. The pages job checks the built
-# output for the same thing again before it publishes.
+# docs_dir is deliberately docs/site, NOT docs/. This project's internal
+# development record used to live in docs/superpowers/ and was removed when the
+# repository became publicly mirrored - it was working material rather than
+# documentation, and it named hosts on the vendor's own network.
+#
+# The narrower docs_dir stays, and so do the pages job's two checks for that
+# directory. They are now a tripwire rather than a filter: if anybody puts
+# internal notes back under docs/, the site build refuses instead of publishing
+# them to the internet.
 site_name: Emby OIDC SSO
 site_description: >-
   Sign in to Emby with Authentik. Installation, group gating, native app and

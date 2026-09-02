@@ -282,11 +282,11 @@ namespace Emby.Sso.Tests
                     inner,
                     new HttpRequestMessage(HttpMethod.Get, Metadata),
                     allowPrivateNetworks: false,
-                    resolver: Resolves("10.10.140.5"));
+                    resolver: Resolves("10.0.0.5"));
 
                 var refused = Assert.IsType<OutboundRefusedException>(error);
                 Assert.Contains(OutboundAddressPolicy.AllowanceSettingName, refused.Message);
-                Assert.Contains("10.10.140.5", refused.Message);
+                Assert.Contains("10.0.0.5", refused.Message);
                 Assert.Contains(Metadata, refused.Message);
             }
         }

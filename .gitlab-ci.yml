@@ -488,11 +488,12 @@ pages:
     PIP_ROOT_USER_ACTION: "ignore"
   script:
     - python -m pip install --no-input -r docs/requirements.txt
-    # docs/superpowers/ is this project's internal development record - specs,
-    # plans, spikes, verification notes - and none of it is documentation for
-    # an operator. The site's sources live in docs/site/ precisely so that
-    # MkDocs cannot reach it: MkDocs only ever reads what is inside docs_dir.
-    # This is the tripwire for someone "tidying" that line later.
+    # docs/superpowers/ held this project's internal development record until
+    # the repository became publicly mirrored, and no longer exists. This check
+    # stays as a TRIPWIRE rather than a filter: the site's sources live in
+    # docs/site/ so that MkDocs cannot reach anything else under docs/, and if
+    # internal notes are ever put back there, the build refuses rather than
+    # publishing them.
     - |
       if ! grep -qx 'docs_dir: docs/site' mkdocs.yml; then
         echo "pages: docs_dir is no longer docs/site. Refusing to build: pointing it at docs/ would publish docs/superpowers/, which is internal." >&2

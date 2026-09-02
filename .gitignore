@@ -32,3 +32,8 @@ licences-issued.jsonl
 # Service configuration: the example is committed, a real one never is.
 service/.env
 .env
+
+# The internal development record - specs, plans, spikes, verification notes.
+# It is working material, not documentation, and it named this network's own
+# hosts. The repository is mirrored publicly, so it lives outside it now.
+docs/superpowers/
