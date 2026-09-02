@@ -88,6 +88,14 @@ namespace Emby.Sso.LicenceTool
       cannot sign, because it does not have the key. --out defaults to the
       requests file with -signed before its extension.
 
+  sign-release --dll <file> --version <x.y.z> --url <https address>
+               --key <release key file> [--out <file>] [--allow-git]
+      Signs a plugin release: this version, this file's SHA-256, at this
+      address. THE RELEASE KEY IS NOT THE LICENCE KEY - a manifest authorises
+      CODE to run on every customer's server, so it is signed with a key that
+      never goes near a server or a CI variable. Upload the result on the
+      service's admin page, under Release.
+
   show --key <key file> [--licence <file>] [--server-id <id>]
       Reads a licence from --licence or stdin, VERIFIES ITS SIGNATURE against
       the public half of --key, and prints what it says. Prints nothing out of
@@ -119,6 +127,9 @@ See README.md in this directory for where the private key and the ledger live.";
 
                     case "sign":
                         return Sign(Parse(args));
+
+                    case "sign-release":
+                        return SignRelease(Parse(args));
 
                     case "show":
                         return await Show(Parse(args)).ConfigureAwait(false);
@@ -436,6 +447,85 @@ See README.md in this directory for where the private key and the ledger live.";
             var extension = Path.GetExtension(requestsPath);
 
             return Path.Combine(directory ?? ".", name + "-signed" + (string.IsNullOrEmpty(extension) ? ".json" : extension));
+        }
+
+        /// <summary>
+        /// Signs a plugin release.
+        ///
+        /// THIS IS THE MOST DANGEROUS COMMAND IN THIS TOOL. What it signs will
+        /// be downloaded by every customer's Emby server, written into the
+        /// plugins directory, and executed. A mistake here is not a lost sale;
+        /// it is somebody else's media server running whatever was named.
+        ///
+        /// So it hashes the file ITSELF rather than taking a hash on the command
+        /// line. A hash somebody typed or pasted is a hash that can be the wrong
+        /// one - copied from a different build, from a stale release note, from
+        /// a terminal that wrapped a line - and the resulting manifest would be
+        /// signed, valid, and point at bytes nobody checked.
+        ///
+        /// The key must be the RELEASE key. Nothing here can tell one keypair
+        /// from another, so that is the operator's discipline and the reason the
+        /// two live in different directories.
+        /// </summary>
+        private static int SignRelease(IDictionary<string, string> options)
+        {
+            var dllPath = Path.GetFullPath(Required(options, "dll"));
+            var version = Required(options, "version").Trim();
+            var url = Required(options, "url").Trim();
+            var keyFile = Required(options, "key");
+
+            if (!File.Exists(dllPath))
+            {
+                throw new FileNotFoundException("No file at " + dllPath + " to sign for.");
+            }
+
+            if (!System.Version.TryParse(version, out _))
+            {
+                throw new ArgumentException(
+                    "--version must be a version the plugin can compare, like 1.0.3. It is what stops an older "
+                    + "release being offered as an update.");
+            }
+
+            var key = SigningKeyFile.Load(keyFile);
+
+            string hash;
+
+            using (var sha = SHA256.Create())
+            using (var file = File.OpenRead(dllPath))
+            {
+                hash = Convert.ToHexString(sha.ComputeHash(file)).ToLowerInvariant();
+            }
+
+            var manifest = ReleaseManifest.Issue(key.Key, version, hash, url, DateTimeOffset.UtcNow);
+
+            var outPath = options.TryGetValue("out", out var given) && !string.IsNullOrWhiteSpace(given)
+                ? Path.GetFullPath(given)
+                : null;
+
+            Console.Error.WriteLine("Version  : " + version);
+            Console.Error.WriteLine("File     : " + dllPath);
+            Console.Error.WriteLine("SHA-256  : " + hash);
+            Console.Error.WriteLine("URL      : " + url);
+            Console.Error.WriteLine("Signed by: " + key.Thumbprint + "  (this must be the RELEASE key, not the licence key)");
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Upload this on the service's admin page, under Release. Customers are");
+            Console.Error.WriteLine("offered it on their next daily check, and install it when they choose.");
+            Console.Error.WriteLine();
+
+            if (outPath == null)
+            {
+                // stdout alone, so it can be redirected or piped without the
+                // summary above coming with it.
+                Console.WriteLine(manifest);
+            }
+            else
+            {
+                RefuseToWriteInsideAGitRepository(outPath, options.ContainsKey("allow-git"), "a release manifest", "It is not secret, but it does not belong in a commit either.");
+                File.WriteAllText(outPath, manifest);
+                Console.WriteLine(outPath);
+            }
+
+            return 0;
         }
 
         private static int List(IDictionary<string, string> options)
