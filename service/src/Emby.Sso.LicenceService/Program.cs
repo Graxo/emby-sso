@@ -465,6 +465,45 @@ namespace Emby.Sso.LicenceService
                     : Results.Json(new { manifest }, statusCode: 200);
             });
 
+            // The plugin file itself, when this service is hosting it.
+            //
+            // WHY THIS SERVES A BINARY AT ALL. A manifest names an address, and
+            // that address has to answer an Emby server that has no account
+            // anywhere and sends no credential. A package registry behind a
+            // sign-in cannot do that, and the failure is silent: the manifest
+            // verifies, the admin page says published, and every customer's
+            // server reports the download unreachable. This service is already
+            // the one address every plugin is configured to reach, so it is the
+            // one place the file is certain to be fetchable from.
+            //
+            // SERVING IT GRANTS NOTHING. The bytes are checked against the
+            // SHA-256 in the signed manifest by the plugin that downloads them,
+            // and that check is the real one. Somebody who takes this host can
+            // stop serving the file or serve garbage; they cannot make an Emby
+            // server install either, because they cannot sign a manifest for
+            // what they served.
+            app.MapGet(Release.ReleaseStore.DownloadPath, (Release.ReleaseStore releases) =>
+            {
+                var file = releases.OpenFile();
+
+                return file == null
+                    ? Results.StatusCode(404)
+                    : Results.File(file, "application/octet-stream", "Emby.Sso.dll");
+            });
+
+            // The checksum, as `sha256sum -c` input, for an operator installing
+            // by hand. It is a convenience and never a security control: it
+            // comes from the same host as the file, so anybody able to change
+            // one can change the other. The guarantee is the signed manifest.
+            app.MapGet(Release.ReleaseStore.DownloadPath + ".sha256", (Release.ReleaseStore releases) =>
+            {
+                var hash = releases.PublishedHash();
+
+                return hash == null
+                    ? Results.StatusCode(404)
+                    : Results.Text(hash + "  Emby.Sso.dll" + Environment.NewLine, "text/plain");
+            });
+
             // The daily "is my licence still good?" call. See
             // LicenceStatusService: the answer is signed, the plugin fails open
             // when there is no answer, and nothing here can be used to fish for

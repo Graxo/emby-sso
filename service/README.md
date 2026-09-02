@@ -53,6 +53,13 @@ by the wait, and repeat activations are immediate.
 Full detail: [Signing licences offline](../docs/site/offline-signing.md) and
 [Rotating and revoking a signing key](../docs/site/key-rotation.md).
 
+There is a second, separate key: the **release** key, which signs the manifest
+that lets a plugin update itself. It signs code rather than licences, so it is
+never mounted here and is never in a CI variable - this service only holds the
+public half, in `LICENCE_RELEASE_PUBLIC_KEYS`, so that `/admin/release` can
+refuse a manifest signed with the wrong key. The procedure is [Signing and
+publishing a plugin update](../docs/site/signing-a-release.md).
+
 ## The one thing to understand before deploying this
 
 **This box holds the private signing key.** Until now that key lived offline, on

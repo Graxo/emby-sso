@@ -129,3 +129,4 @@ nav:
   - For the vendor:
       - Signing licences offline: offline-signing.md
       - Rotating and revoking a signing key: key-rotation.md
+      - Signing and publishing a plugin update: signing-a-release.md

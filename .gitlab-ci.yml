@@ -3,6 +3,14 @@
 # uploads that build to the package registry and creates a GitLab Release
 # pointing at it.
 #
+# WHAT THIS PIPELINE DELIBERATELY DOES NOT DO IS SIGN THAT BUILD. A signed
+# release manifest is what makes a version install itself, through the update
+# button, on every licensed customer's Emby server - so the key that signs one
+# is not in any variable here. The publish job instead prints the exact command
+# to run on the machine that does hold it (ci/release-signing.sh), and until
+# that manifest is uploaded to the licence service the build is downloadable by
+# hand and offered to nobody. docs/site/signing-a-release.md is the procedure.
+#
 # The version an operator sees in Emby's dashboard comes from the tag and
 # nowhere else: ci/version.sh turns v1.4.0 into 1.4.0, the build is handed it
 # with -p:Version, and ci/verify-artifact.sh refuses to continue unless that
@@ -165,9 +173,17 @@ publish:
       done
     - ci/release-notes.sh "$VERSION" "$CI_COMMIT_SHA" dist/Emby.Sso.dll.sha256 "$PACKAGE_URL" "$CI_COMMIT_TAG_MESSAGE" > release-notes.md
     - cat release-notes.md
+    # The last step of a release is a signature this pipeline cannot make, and
+    # the point of this file is that nobody has to remember how. It prints the
+    # exact commands - version, address and expected hash already filled in -
+    # for the machine that holds the release key. Until that manifest is
+    # uploaded, this build is downloadable but is offered to nobody.
+    - ci/release-signing.sh "$VERSION" dist/Emby.Sso.dll.sha256 > release-signing.md
+    - cat release-signing.md
   artifacts:
     paths:
       - release-notes.md
+      - release-signing.md
     expire_in: 30 days
 
 release:

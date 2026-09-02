@@ -15,6 +15,18 @@
 #   ./licencetool.sh sign --requests /work/requests.json --key /keys/licence-signing-key.private.json
 #   ./licencetool.sh list --ledger /keys/licences-issued.jsonl
 #
+# THE RELEASE KEY IS A DIFFERENT KEY IN A DIFFERENT DIRECTORY, and it has the
+# same filename, so every release command has to say which directory it means:
+#
+#   LICENCE_KEY_DIR="$HOME/emby-sso-release" ./licencetool.sh sign-release \
+#       --dll /work/Emby.Sso.dll --version 1.0.3 \
+#       --url https://.../Emby.Sso.dll \
+#       --key /keys/licence-signing-key.private.json
+#
+# Omitting it signs a release with the LICENCE key, which every plugin rejects.
+# release.sh beside this file does all of that for you and checks the key it
+# used; prefer it. docs/site/signing-a-release.md is the whole procedure.
+#
 # TWO PATHS EXIST INSIDE THE CONTAINER, and they are the only two:
 #
 #   /keys   the key directory, $HOME/emby-sso-licence by default. Override with
@@ -36,13 +48,18 @@ KEYS="${LICENCE_KEY_DIR:-$HOME/emby-sso-licence}"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 if [ "$#" -eq 0 ]; then
-    echo "usage: $0 <keygen|issue|sign|list|show> [arguments]" >&2
+    echo "usage: $0 <keygen|issue|sign|sign-release|list|show> [arguments]" >&2
     echo "" >&2
     echo "  Inside the container, the key directory is /keys and the directory you" >&2
     echo "  are standing in is /work. Use those paths in the arguments:" >&2
     echo "" >&2
     echo "    $0 keygen --out /keys" >&2
     echo "    $0 sign --requests /work/requests.json --key /keys/licence-signing-key.private.json" >&2
+    echo "" >&2
+    echo "  sign-release signs CODE, not a licence, and uses a different key:" >&2
+    echo "" >&2
+    echo "    LICENCE_KEY_DIR=\"\$HOME/emby-sso-release\" $0 sign-release --dll /work/Emby.Sso.dll \\" >&2
+    echo "      --version 1.0.3 --url https://.../Emby.Sso.dll --key /keys/licence-signing-key.private.json" >&2
     exit 2
 fi
 

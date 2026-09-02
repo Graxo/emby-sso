@@ -136,10 +136,46 @@ loud warning: losing the record of a licence is bad, and failing to issue one
 because a log file is wrong is worse. **When you see that warning, write the
 licensee, server id and expiry down by hand.** Nothing else knows them.
 
-A licence must expire; `--days` has to be a positive number. There is no
-revocation: the plugin checks the licence offline against the embedded public
-key and never calls home, so the only way a licence stops working before its
-expiry is a new keypair and a new build.
+A licence must expire; `--days` has to be a positive number. Signature
+verification is offline against the embedded public key, so a licence issued
+here cannot be un-issued cryptographically. It can be **withdrawn** through the
+service's daily status check, which refuses new sign-ons on that one server and
+which an operator is free to switch off; retiring the keypair is still the only
+thing that stops every licence at once.
+
+## Signing what the service has recorded: `sign`
+
+The command this tool exists for on most days. The licence service records what
+a customer paid for and hands you a file of requests; `sign` turns it into a
+file of licences to upload back, on a machine the service cannot reach.
+
+```
+tools/Emby.Sso.LicenceTool/licencetool.sh sign \
+  --requests /work/emby-sso-signing-requests.json \
+  --key /keys/licence-signing-key.private.json
+```
+
+The whole round trip is in
+[Signing licences offline](../../docs/site/offline-signing.md).
+
+## Signing a plugin release: `sign-release`
+
+**A different key, and the most dangerous command here.** What it signs is
+downloaded by every customer's Emby server, written into the plugins directory
+and executed, so the release key lives on its own machine and never goes near a
+server or a CI variable.
+
+Do not call it directly. `release.sh` fills in the address, the key directory
+and the hash, and refuses to hand you a manifest signed with the wrong key —
+which is the mistake worth catching, because the release key and the licence key
+have the same filename:
+
+```
+tools/Emby.Sso.LicenceTool/release.sh 1.0.3 ~/Downloads/Emby.Sso.dll <sha256>
+```
+
+The whole procedure is in
+[Signing and publishing a plugin update](../../docs/site/signing-a-release.md).
 
 ## Who holds what: `list`
 

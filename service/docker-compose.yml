@@ -194,6 +194,10 @@ services:
 
       # The address the plugin has compiled in and the address PayPal sends
       # buyers back to. Must match what the plugin ships with.
+      #
+      # It is also the address plugin updates are served from - this plus
+      # /v1/release/download - and therefore the address a release manifest has
+      # to be signed for. Changing it after a release means signing again.
       LICENCE_PUBLIC_BASE_URL: https://licence.example.com
 
       # From the PayPal developer dashboard, on the webhook you created. It is

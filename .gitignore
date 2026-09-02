@@ -37,3 +37,9 @@ service/.env
 # It is working material, not documentation, and it named this network's own
 # hosts. The repository is mirrored publicly, so it lives outside it now.
 docs/superpowers/
+
+# The operator's own runbook: which machine is which, which key is where. It is
+# not secret in the way a key is, but it maps this network, and the repository
+# is mirrored publicly. The same arrangement written in roles rather than host
+# names is committed, in docs/site/signing-a-release.md.
+RUNBOOK.local.md

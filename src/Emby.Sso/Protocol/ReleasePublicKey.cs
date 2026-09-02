@@ -33,7 +33,7 @@ namespace Emby.Sso.Protocol
         /// machine, 2026-09-02, for signing plugin releases and nothing else.
         ///
         /// It has never been on a server, is not in this repository, and is not
-        /// in CI. See docs/site/updating.md.
+        /// in CI. See docs/site/signing-a-release.md.
         /// </summary>
         public static readonly string[] TrustedJwks =
         {

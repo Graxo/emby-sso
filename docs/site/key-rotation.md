@@ -30,7 +30,7 @@ Do this before you have to, not after.
    ```
 
    No .NET SDK needed - `licencetool.sh` runs it in a container. See
-   [the tool's README](https://gitlab.koper.cloud/Graxo/emby-sso/-/blob/main/tools/Emby.Sso.LicenceTool/README.md).
+   `tools/Emby.Sso.LicenceTool/README.md` in the repository.
 
    It prints the public JWK and its key id.
 

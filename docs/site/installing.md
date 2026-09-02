@@ -10,28 +10,32 @@
 
 ## What you download
 
-The shipped artifact is a **single file**, `Emby.Sso.dll`. Every release is a
-git tag, and the release page carries that one DLL and a SHA256 checksum for
-it:
-
-```
-https://gitlab.koper.cloud/Graxo/emby-sso/-/releases
-```
-
-The same two files have a stable, version-addressed download URL, so an upgrade
-is one substitution away:
+The shipped artifact is a **single file**, `Emby.Sso.dll`. The current release
+and its SHA256 checksum are served by the licence service, at a fixed address
+that needs no account and no token:
 
 ```bash
-base=https://gitlab.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
-curl -fLO $base/Emby.Sso.dll
-curl -fLO $base/Emby.Sso.dll.sha256
-sha256sum -c Emby.Sso.dll.sha256
+base=https://license.koper.cloud/v1/release
+curl -fLO $base/download
+curl -fLO $base/download.sha256
+mv download Emby.Sso.dll
+sha256sum -c download.sha256
 ```
+
+That address always serves the **current** release, so it is what you want for
+a first install and for catching up a server that has fallen behind.
 
 !!! warning "Check the checksum before you copy anything onto a server"
 
     It is also the only way to tell two builds of the same version apart if
     you have been building locally.
+
+!!! tip "You only have to do this once"
+
+    Once the plugin is installed and licensed, it checks for a new release
+    daily and offers a **Download and install** button on its configuration
+    page. That path verifies the download against the vendor's signature
+    before writing anything, which this manual one cannot.
 
 Building from source produces the same file, at
 `src/Emby.Sso/bin/Release/netstandard2.0/merged/Emby.Sso.dll` — see

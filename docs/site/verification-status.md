@@ -179,10 +179,9 @@ silently.
 !!! unverified "Nothing here has confirmed that GitLab Pages publishes it"
 
     The site builds locally and the `pages` job follows GitLab's contract, but
-    there is no HTTPS access to `git.koper.cloud` (which is SSH only - the web
-    and API host is `gitlab.koper.cloud`) from the environment this was
-    written in. Whether Pages is enabled on the instance or the project, what
-    the resulting URL is, and whether a pipeline run actually publishes are all
+    the environment this was written in has no HTTPS access to the GitLab
+    instance. Whether Pages is enabled on the instance or the project, what the
+    resulting URL is, and whether a pipeline run actually publishes are all
     unconfirmed.
 
     If the project is **private**, GitLab Pages may be access-controlled, and

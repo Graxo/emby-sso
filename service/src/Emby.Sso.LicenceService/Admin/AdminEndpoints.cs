@@ -13,6 +13,7 @@ using Emby.Sso.LicenceService.Storage;
 using Emby.Sso.Licensing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Emby.Sso.LicenceService.Admin
@@ -66,6 +67,21 @@ namespace Emby.Sso.LicenceService.Admin
         /// memory.
         /// </summary>
         private const long MaximumUploadBytes = 4 * 1024 * 1024;
+
+        /// <summary>
+        /// The most a plugin upload may be. The merged DLL is single-figure
+        /// megabytes; this is room to grow and still small enough that the
+        /// container cannot be made to hold an unreasonable amount, because the
+        /// file is read whole in order to hash it.
+        /// </summary>
+        private const long MaximumReleaseBytes = 32 * 1024 * 1024;
+
+        /// <summary>
+        /// Multipart framing, the other fields, and the boundary markers, on top
+        /// of the file itself. Small and fixed: the limit exists to bound the
+        /// request, not to be exact about it.
+        /// </summary>
+        private const long UploadOverheadBytes = 64 * 1024;
 
         public static void Map(WebApplication app, ServiceOptions options, AdminPassword password, AdminAccessGate gate)
         {
@@ -738,6 +754,8 @@ namespace Emby.Sso.LicenceService.Admin
                     return SeeOther(context, "/admin");
                 }
 
+                AllowUploadOf(context, MaximumUploadBytes + UploadOverheadBytes);
+
                 var form = await ReadFormAsync(context).ConfigureAwait(false);
 
                 if (!Csrf(form, session))
@@ -824,6 +842,8 @@ namespace Emby.Sso.LicenceService.Admin
                     return SeeOther(context, "/admin");
                 }
 
+                AllowUploadOf(context, MaximumReleaseBytes + UploadOverheadBytes);
+
                 var form = await ReadFormAsync(context).ConfigureAwait(false);
 
                 if (!Csrf(form, session))
@@ -831,7 +851,34 @@ namespace Emby.Sso.LicenceService.Admin
                     return Refused(session, facts, "That was refused and nothing was published.");
                 }
 
-                var problem = await releases.PublishAsync(form["manifest"].ToString()).ConfigureAwait(false);
+                var plugin = form.Files.GetFile("plugin");
+
+                byte[] content = null;
+
+                if (plugin != null && plugin.Length > 0)
+                {
+                    if (plugin.Length > MaximumReleaseBytes)
+                    {
+                        return Html(AdminPages.Release(ReleasePage(
+                            session,
+                            facts,
+                            releases,
+                            "That file is larger than a plugin build can be. Nothing was published.",
+                            bad: true)));
+                    }
+
+                    // Read whole, because it has to be hashed whole before any
+                    // of it is trusted enough to keep.
+                    using var buffer = new MemoryStream();
+
+                    await plugin.OpenReadStream().CopyToAsync(buffer, context.RequestAborted).ConfigureAwait(false);
+
+                    content = buffer.ToArray();
+                }
+
+                var problem = await releases
+                    .PublishAsync(form["manifest"].ToString(), content)
+                    .ConfigureAwait(false);
 
                 // Recorded either way. This is the one control on this page that
                 // causes code to run on other people's machines.
@@ -1035,6 +1082,30 @@ namespace Emby.Sso.LicenceService.Admin
                 Encoding.UTF8.GetBytes(session.CsrfToken));
         }
 
+        /// <summary>
+        /// Raises the request body limit for THIS REQUEST ONLY.
+        ///
+        /// Kestrel is configured globally to refuse a body over 64 KB, which is
+        /// right for every public endpoint here - they take a JSON object or a
+        /// short form and nothing else. Two authenticated admin uploads are not
+        /// like that: a batch of signed licences, and a plugin DLL. Without this
+        /// they are refused by the server before any handler sees them, with a
+        /// 413 and no explanation on the page.
+        ///
+        /// It is raised per request rather than globally on purpose. The global
+        /// limit is what stops an unauthenticated caller making this process
+        /// read anything large, and it should keep doing that.
+        /// </summary>
+        private static void AllowUploadOf(HttpContext context, long bytes)
+        {
+            var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+
+            if (limit != null && !limit.IsReadOnly)
+            {
+                limit.MaxRequestBodySize = bytes;
+            }
+        }
+
         private static async Task<IFormCollection> ReadFormAsync(HttpContext context)
         {
             if (!context.Request.HasFormContentType)
@@ -1144,6 +1215,7 @@ namespace Emby.Sso.LicenceService.Admin
                 BackupsOn = chrome.BackupsOn,
                 PublishedVersion = releases.PublishedVersion(),
                 CanAccept = releases.CanAccept,
+                HostedUrl = releases.HostedUrl,
                 Notice = notice,
                 Bad = bad,
             };

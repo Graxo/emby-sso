@@ -631,21 +631,55 @@ namespace Emby.Sso.LicenceService.Admin
                 return Tail(page, model);
             }
 
-            page.Append("<p class=\"muted\">Sign a build on the machine that holds your RELEASE key:</p>");
-            page.Append("<pre>licencetool sign-release --dll Emby.Sso.dll \\\n");
-            page.Append("  --version 1.0.3 --url https://.../Emby.Sso.dll \\\n");
-            page.Append("  --key /keys/licence-signing-key.private.json</pre>");
-            page.Append("<p class=\"muted\">Then paste what it printed here. It is checked against the release ");
-            page.Append("key before it is stored, so a manifest signed with the wrong key is refused now rather ");
-            page.Append("than by every customer later.</p>");
+            // THE EXACT COMMAND, filled in, because the alternative is a vendor
+            // reconstructing it from memory once every few months.
+            //
+            // The address is printed from this service's own configuration
+            // rather than described, because the manifest has to be signed for
+            // exactly that string - a plugin compares it as an address and
+            // fetches it, and a manifest signed for a guess at it is a manifest
+            // that verifies and then downloads nothing.
+            //
+            // LICENCE_KEY_DIR is not decoration either. The release key and the
+            // licence key have the SAME FILENAME and differ only by directory,
+            // so a command that omits it signs with whichever key is in the
+            // default directory - the licence key, which every plugin rejects.
+            page.Append("<h2>1. Sign it, on the machine that holds the release key</h2>");
 
-            page.Append("<form method=\"post\" action=\"/admin/release\">");
+            if (model.HostedUrl == null)
+            {
+                page.Append("<p class=\"bad\">This service does not know its own public address, so it cannot ");
+                page.Append("tell you what to sign for or host the file. Set <code>LICENCE_PUBLIC_BASE_URL</code> ");
+                page.Append("and restart it.</p>");
+            }
+            else
+            {
+                page.Append("<pre>./release.sh 1.0.3 ~/Downloads/Emby.Sso.dll</pre>");
+                page.Append("<p class=\"muted\">That signs the build for <code>");
+                page.Append(E(model.HostedUrl));
+                page.Append("</code> - this service, which is the one address every plugin can already reach ");
+                page.Append("without a credential. Check the SHA-256 it prints against the one in the pipeline ");
+                page.Append("before going on.</p>");
+            }
+
+            page.Append("<h2>2. Publish it here</h2>");
+            page.Append("<p class=\"muted\">Both halves together: the manifest says what the file is, the file ");
+            page.Append("is what servers download. They are checked against each other - a file that does not ");
+            page.Append("hash to what the manifest was signed for is refused, and nothing is stored.</p>");
+
+            page.Append("<form method=\"post\" action=\"/admin/release\" enctype=\"multipart/form-data\">");
             Csrf(page, model);
+            page.Append("<label for=\"plugin\">Emby.Sso.dll</label>");
+            page.Append("<input type=\"file\" id=\"plugin\" name=\"plugin\" accept=\".dll\">");
             page.Append("<label for=\"manifest\">Release manifest</label>");
             page.Append("<textarea id=\"manifest\" name=\"manifest\" rows=\"6\" required ");
             page.Append("style=\"width: 100%; font-family: monospace;\"></textarea>");
             page.Append("<button type=\"submit\">Publish</button>");
             page.Append("</form>");
+
+            page.Append("<p class=\"muted\">The manifest is one long line beginning <code>eyJ</code>. Leave the ");
+            page.Append("file empty only if you are hosting the plugin somewhere else and signed for that ");
+            page.Append("address instead.</p>");
 
             page.Append("<p class=\"muted\">Publishing does not install anything. Each server is offered the ");
             page.Append("update on its next daily check and installs it when its administrator chooses, after ");
@@ -921,6 +955,14 @@ namespace Emby.Sso.LicenceService.Admin
         public string PublishedVersion { get; set; }
 
         public bool CanAccept { get; set; }
+
+        /// <summary>
+        /// The address this service will serve the plugin from, or null when it
+        /// does not know its own public name. Shown rather than assumed: the
+        /// manifest has to be signed for exactly this string, and a vendor
+        /// typing it from memory is a vendor signing for the wrong one.
+        /// </summary>
+        public string HostedUrl { get; set; }
 
         public string Notice { get; set; }
 

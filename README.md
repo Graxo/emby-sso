@@ -22,8 +22,8 @@ Everything that used to be in this file lives in
 [`docs/site/`](docs/site/index.md). It is published two ways from that one
 source, on every push to `main`:
 
-- **the project wiki** — <https://gitlab.koper.cloud/Graxo/emby-sso/-/wikis/home>,
-  which is where to look, and what the plugin's configuration page links to;
+- **the project wiki**, which is where to look, and what the plugin's
+  configuration page links to;
 - **GitLab Pages**, as a searchable site with the Material theme.
 
 Both are generated, so **edits made in the wiki are overwritten**. Change the
@@ -192,9 +192,9 @@ cannot be locked out of your media server by a licensing problem**; nothing is
 disabled, deleted or reconfigured.
 
 A licence cannot be revoked — the check is offline, so there is nowhere a
-revocation could come from. An expiry date is the only lever. (Retiring a
-*signing key* stops every licence it ever signed, all at once; that is the
-remedy for a leaked key, not a way to deal with one customer. See
+revocation could come from. An expiry date is the only lever. (Retiring a *signing key*
+stops every licence it ever signed, all at once; that is the remedy for a leaked
+key, not a way to deal with one customer. See
 [Rotating and revoking a signing key](docs/site/key-rotation.md).)
 
 **The first activation of a code is not instant.** It answers *"your licence is
@@ -219,25 +219,23 @@ Full detail: [Licensing](docs/site/licensing.md) and
 
 ## Installing
 
-The shipped artifact is a **single file**, `Emby.Sso.dll`. Every release is a
-git tag, and the release page carries that one DLL and a SHA256 checksum for
-it:
+The shipped artifact is a **single file**, `Emby.Sso.dll`. The current release
+and its SHA256 checksum are served by the licence service, at a fixed address
+that needs no account and no token:
 
 ```
-https://gitlab.koper.cloud/Graxo/emby-sso/-/releases
-```
-
-The same two files have a stable, version-addressed download URL, so an
-upgrade is one substitution away:
-
-```
-base=https://gitlab.koper.cloud/api/v4/projects/Graxo%2Femby-sso/packages/generic/emby-sso/1.4.0
-curl -fLO $base/Emby.Sso.dll
-curl -fLO $base/Emby.Sso.dll.sha256
-sha256sum -c Emby.Sso.dll.sha256
+base=https://license.koper.cloud/v1/release
+curl -fLO $base/download
+curl -fLO $base/download.sha256
+mv download Emby.Sso.dll
+sha256sum -c download.sha256
 ```
 
 **Check the checksum before you copy anything onto a server.**
+
+After the first install this is rarely needed: an up-to-date plugin offers its
+own **Download and install** button once the vendor publishes a newer build,
+and checks that download against the vendor's signature before writing it.
 
 Then:
 
