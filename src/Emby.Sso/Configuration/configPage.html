@@ -64,10 +64,22 @@
           </div>
         </div>
 
+        <!-- A REAL LINK, not a button that calls window.open. It used to be the
+             latter, and a link opened from script is a popup as far as the
+             browser is concerned: blocked silently, with the operator left
+             pressing a button that does nothing. An anchor cannot be blocked,
+             can be middle-clicked and copied, and still works if this page's
+             script never runs at all.
+
+             The href is filled in once the activation endpoint answers with
+             this server's id. rel is not optional: the shop is another origin
+             and has no business reaching back into the dashboard through
+             window.opener. -->
         <div class="inputContainer" id="buyContainer">
-          <button is="emby-button" type="button" id="buyButton" class="raised block">
+          <a is="emby-linkbutton" id="buyButton" class="raised block emby-button"
+             href="#" target="_blank" rel="noopener noreferrer">
             <span>Buy a licence</span>
-          </button>
+          </a>
         </div>
 
         <div class="inputContainer">

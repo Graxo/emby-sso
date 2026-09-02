@@ -105,9 +105,11 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             page.querySelector('#activationsUsed').textContent =
                 (info.ActivationsUsed || 0) + ' / ' + allowed;
 
-            // No buy button when there is no address to send anybody to - a
-            // button that goes nowhere is worse than no button.
-            page.querySelector('#buyButton').dataset.url = info.BuyUrl || '';
+            // No buy link when there is no address to send anybody to - a
+            // control that goes nowhere is worse than no control. The address
+            // is only known once this call answers, because it carries this
+            // server's id, which is why the href starts empty.
+            page.querySelector('#buyButton').href = info.BuyUrl || '#';
             page.querySelector('#buyContainer').style.display = info.BuyUrl ? '' : 'none';
         }
 
@@ -246,11 +248,6 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
             activate(view);
         });
 
-        // A button rather than a link, because the address is only known after
-        // the activation endpoint answers - a link rendered before that would
-        // spend a moment pointing at nothing. noopener on the opened window: the
-        // shop is another origin and has no business reaching back into the
-        // dashboard through window.opener.
         // One handler for all three copy buttons. navigator.clipboard needs a
         // secure context, which the Emby dashboard over https is; the textarea
         // fallback covers a dashboard reached over plain http, where the modern
@@ -300,14 +297,6 @@ define(['baseView', 'loading', 'globalize', 'emby-input', 'emby-button', 'emby-c
 
         view.querySelector('#updateButton').addEventListener('click', function () {
             installUpdate(view);
-        });
-
-        view.querySelector('#buyButton').addEventListener('click', function () {
-            var url = this.dataset.url;
-
-            if (url) {
-                window.open(url, '_blank', 'noopener,noreferrer');
-            }
         });
     }
 

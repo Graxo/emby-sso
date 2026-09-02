@@ -17,6 +17,16 @@
     <Compile Include="../../src/Emby.Sso/Protocol/**/*.cs" LinkBase="Protocol" />
   </ItemGroup>
 
+  <!-- The configuration page as it is actually shipped. Nothing compiles HTML
+       or JavaScript, so the only way a mistake in them is caught before an
+       operator finds it is a test that reads the real files - not a copy, which
+       would drift. Embedded rather than copied to the output directory so the
+       test cannot pass against a stale build. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../src/Emby.Sso/Configuration/configPage.html" LogicalName="configPage.html" />
+    <EmbeddedResource Include="../../src/Emby.Sso/Configuration/configPage.js" LogicalName="configPage.js" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.22.0" />
