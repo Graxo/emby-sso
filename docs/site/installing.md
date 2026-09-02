@@ -16,10 +16,9 @@ that needs no account and no token:
 
 ```bash
 base=https://license.koper.cloud/v1/release
-curl -fLO $base/download
-curl -fLO $base/download.sha256
-mv download Emby.Sso.dll
-sha256sum -c download.sha256
+curl -fLo Emby.Sso.dll $base/download
+curl -fLo Emby.Sso.dll.sha256 $base/download.sha256
+sha256sum -c Emby.Sso.dll.sha256
 ```
 
 That address always serves the **current** release, so it is what you want for

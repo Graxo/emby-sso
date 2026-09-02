@@ -3,40 +3,11 @@
 Emby has no support for single sign-on. This plugin adds it, so the people who
 use your server sign in with the account they already have.
 
+One password for everything they use, managed in one place, with whatever
+two-factor policy you already enforce.
+
 Built for [Authentik](https://goauthentik.io/), and works with any OpenID
 Connect provider that behaves like it.
-
----
-
-## The problem
-
-Emby keeps its own usernames and passwords, and nothing else you run knows
-about them. That means:
-
-- **Everyone has one more password**, used on one site, chosen in a hurry, and
-  never rotated.
-- **No two-factor authentication.** Emby has none, so an account is one guessed
-  password away from being someone else's.
-- **Nothing is joined up.** A person joins, and you create an account here, and
-  there, and somewhere else. A person leaves, and you have to remember every
-  place they had one.
-- **You cannot see who is signing in**, or from where, or how often — not in
-  one place, and not next to everything else they use.
-
-If you already run an identity provider, Emby is the odd one out.
-
-## What this fixes
-
-Your Emby users sign in with your identity provider. Their password, their
-two-factor device, their session policy, and their group membership all live
-in one place, and Emby follows what that place says.
-
-- Somebody joins a group → they can use Emby.
-- Somebody leaves it → they cannot, without you touching Emby at all.
-- Somebody's password is stolen → they change it once.
-
-Existing Emby accounts keep working exactly as they did. Nothing is migrated
-behind your back, and you decide account by account who moves.
 
 ---
 
@@ -79,54 +50,29 @@ behind your back, and you decide account by account who moves.
 
 ---
 
-## Before you install: three things that can lock users out
-
-These are short. Please read them anyway — two of them are hard to undo.
-
-**1. Set *Required group* immediately.** Until you name a group, the plugin
-refuses **everyone**, including people who were signing in a minute ago. Empty
-does not mean "no group check", it means "nobody". Install, then set it, in
-that order.
-
-**2. Emby remembers the first provider that works, forever.** The first time
-an account signs in through this plugin, Emby writes that down and stops trying
-the Emby password for that account. Getting it back needs an API call. So:
-**keep one administrator on Emby's own login as a break-glass account**, and
-set the login provider deliberately for any account you do not want moved.
-
-**3. Plain HTTP turns native password sign-in off.** The two settings cannot be
-on together, on purpose — this server will not put anyone's password on the
-wire in cleartext. Give the lab HTTPS.
-
-The first two in full, including how to recognise them:
-[Read this before you install](docs/site/before-you-install.md). The third:
-[Native apps with a password](docs/site/native-apps.md).
-
----
-
 ## Installing
 
 The whole plugin is one file. Download it and check it:
 
 ```bash
 base=https://license.koper.cloud/v1/release
-curl -fLO $base/download
-curl -fLO $base/download.sha256
-mv download Emby.Sso.dll
-sha256sum -c download.sha256
+curl -fLo Emby.Sso.dll $base/download
+curl -fLo Emby.Sso.dll.sha256 $base/download.sha256
+sha256sum -c Emby.Sso.dll.sha256
 ```
 
 That address always serves the current release and needs no account.
 
 Then:
 
-1. Copy `Emby.Sso.dll` into Emby's `plugins` folder — `/config/plugins` in the
-   linuxserver.io Docker image — replacing any earlier copy.
+1. Put `Emby.Sso.dll` in the `plugins` folder of your Emby installation,
+   replacing any earlier copy.
 2. Restart Emby Server.
 3. Open **Dashboard → Plugins**. **Authentik SSO** should be listed, at the
    version you just downloaded. A different number means the old file is still
    there.
-4. Open it and set **Required group** before anything else.
+4. Open it and fill in your provider's details. **Set *Required group*** — until
+   you name a group, nobody is allowed to sign in through the plugin.
 
 **Install this one file and nothing else.** It already contains everything it
 needs; adding other DLLs beside it breaks it.
@@ -134,6 +80,26 @@ needs; adding other DLLs beside it breaks it.
 Next: [Setting up Authentik](docs/site/authentik.md), then
 [assign each user's login provider](docs/site/login-providers.md) — that second
 step is required and easy to miss.
+
+### Nothing changes until you say so
+
+Installing the plugin does not move anyone to SSO. It refuses any account that
+has not been deliberately assigned to it, so your existing users, and your own
+administrator account, carry on signing in with their Emby passwords exactly as
+before. You move accounts across one at a time, when you are ready.
+
+Two things are worth knowing once you start:
+
+- **Emby remembers the first provider that works for an account, permanently.**
+  Once someone signs in through SSO, Emby stops offering them the Emby password
+  check. Moving them back needs an API call, so keep one administrator on Emby's
+  own login as a break-glass account.
+- **Plain HTTP and native password sign-in cannot both be on.** That is
+  deliberate: this server will not put anyone's password on the wire in
+  cleartext.
+
+Both are explained in [Read this before you install](docs/site/before-you-install.md)
+and [Native apps with a password](docs/site/native-apps.md).
 
 ### Updating
 
@@ -177,7 +143,7 @@ after a rebuild or a restore or a move, does not use up another.
 ### A licence for testing
 
 There is a proper way to get one, and it is free: **ask.** Email
-<robin@koper.cloud> with your Emby server id and say what you want to try. You
+<support@koper.cloud> with your Emby server id and say what you want to try. You
 will get a redemption code that works exactly like a bought one, for a limited
 time.
 
@@ -217,7 +183,7 @@ addresses, ever.
 - **[What has and has not been verified](docs/site/verification-status.md)** —
   an honest list of what has been tested on a real server and what has not.
   Worth reading before you trust anything here with a server people rely on.
-- **Email <robin@koper.cloud>** with what the plugin told you and what the
+- **Email <support@koper.cloud>** with what the plugin told you and what the
   server log said under `AuthentikSso`. Never include your redemption code.
 
 ---
@@ -227,7 +193,7 @@ addresses, ever.
 | | |
 |---|---|
 | [Start here](docs/site/index.md) | What it is and how it works |
-| [Read this before you install](docs/site/before-you-install.md) | The three things that can lock people out |
+| [Read this before you install](docs/site/before-you-install.md) | How Emby assigns accounts to a provider, and what that means |
 | [Installing and upgrading](docs/site/installing.md) | Download, checksum, three steps |
 | [Updates and the daily check](docs/site/updates.md) | The update button, and what is sent once a day |
 | [Setting up Authentik](docs/site/authentik.md) | Provider, application, groups, scopes |
