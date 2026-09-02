@@ -135,6 +135,28 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Equal("https://www.paypal.com/x", order.ApproveUrl);
         }
 
+        /// <summary>
+        /// The approval link becomes a Location header pointing a paying
+        /// customer's browser somewhere. Everything else in this client treats
+        /// PayPal's responses as data rather than instructions, and a link out
+        /// of a JSON body that redirects a buyer is exactly the kind of
+        /// instruction that has to be checked before it is obeyed.
+        /// </summary>
+        [Theory]
+        [InlineData("http://www.paypal.com/checkoutnow")]
+        [InlineData("https://www.paypal.com.evil.example/checkoutnow")]
+        [InlineData("https://evil.example/checkoutnow")]
+        [InlineData("javascript:alert(1)")]
+        [InlineData("/checkoutnow")]
+        public void An_approval_link_that_is_not_paypal_over_https_is_refused(string href)
+        {
+            var error = Assert.Throws<PayPalApiException>(() => PayPalOrdersClient.ReadOrder(
+                "{\"id\":\"5O1\",\"links\":[{\"rel\":\"approve\",\"href\":\"" + href + "\"}]}"));
+
+            Assert.Contains("not a paypal.com address", error.Message, StringComparison.Ordinal);
+            Assert.Contains("Nothing was charged", error.Message, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void A_response_with_no_approval_link_is_an_error_and_not_a_half_built_order()
         {

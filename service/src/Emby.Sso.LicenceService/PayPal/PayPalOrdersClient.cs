@@ -154,7 +154,42 @@ namespace Emby.Sso.LicenceService.PayPal
                 throw new PayPalApiException("PayPal's order response carried no id or no approval link.");
             }
 
+            // THE BUYER IS REDIRECTED HERE, so it is checked before it is
+            // handed back. Everything else in this file treats PayPal's
+            // responses as data rather than instructions - the webhook verifier
+            // and the certificate source both refuse a URL that is not a
+            // paypal.com name for the same reason - and a link out of a JSON
+            // body that becomes a Location header is exactly that kind of
+            // instruction. The browser refuses a non-PayPal hop anyway, because
+            // the buy page's form-action names one origin, but a refusal here
+            // says why in the log instead of only in somebody's console.
+            if (!IsPayPalCheckout(approve))
+            {
+                throw new PayPalApiException(
+                    "PayPal's order response pointed the buyer at '" + approve + "', which is not a paypal.com "
+                    + "address. Nothing was charged and the buyer was not sent there.");
+            }
+
             return new CheckoutOrder(id, approve);
+        }
+
+        /// <summary>
+        /// https, and a host that is paypal.com or below it. The same rule as
+        /// <see cref="PayPalWebhookVerifier"/> applies to the certificate URL,
+        /// and for the same reason.
+        /// </summary>
+        private static bool IsPayPalCheckout(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+                || !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var host = parsed.Host;
+
+            return string.Equals(host, "paypal.com", StringComparison.OrdinalIgnoreCase)
+                || host.EndsWith(".paypal.com", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)

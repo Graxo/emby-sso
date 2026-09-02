@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -50,6 +51,57 @@ namespace Emby.Sso.LicenceService.Tests
             }
 
             _service?.Dispose();
+        }
+
+        /// <summary>
+        /// The regression that broke checkout entirely. `form-action` is checked
+        /// against every hop a form submission takes, and POST /buy/start
+        /// answers 303 to PayPal - so a policy of `form-action 'self'` had the
+        /// browser refuse the submission and name /buy/start as the violation,
+        /// which is 'self' and looked impossible. The buyer saw a Pay button
+        /// that did nothing.
+        /// </summary>
+        [Fact]
+        public async Task The_buy_page_may_hand_a_form_to_paypal()
+        {
+            var response = await _client.GetAsync("/buy?serverId=c5bc6e91458540caa295c4efdda1a58a");
+
+            var policy = response.Headers.GetValues("Content-Security-Policy").ToArray()[0];
+
+            Assert.Contains(
+                "form-action 'self' https://www.sandbox.paypal.com",
+                policy,
+                StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// A live deployment must not let a form be posted to the sandbox, and
+        /// the PayPal allowance must not leak onto any other page - least of all
+        /// the admin pages, where form-action 'self' is what stops an injected
+        /// form posting the operator's session somewhere else.
+        /// </summary>
+        [Fact]
+        public async Task Only_the_buy_pages_may_reach_paypal_and_only_the_configured_one()
+        {
+            Assert.Contains(
+                "form-action 'self' https://www.paypal.com;",
+                Http.SecurityHeaders.BuyPolicy(live: true),
+                StringComparison.Ordinal);
+
+            Assert.DoesNotContain(
+                "sandbox",
+                Http.SecurityHeaders.BuyPolicy(live: true),
+                StringComparison.Ordinal);
+
+            Assert.DoesNotContain("paypal", Http.SecurityHeaders.PagePolicy, StringComparison.Ordinal);
+            Assert.DoesNotContain("paypal", Http.SecurityHeaders.ApiPolicy, StringComparison.Ordinal);
+
+            var admin = await _client.GetAsync("/admin");
+
+            Assert.DoesNotContain(
+                "paypal",
+                admin.Headers.GetValues("Content-Security-Policy").ToArray()[0],
+                StringComparison.Ordinal);
         }
 
         [Fact]

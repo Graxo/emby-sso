@@ -387,7 +387,7 @@ namespace Emby.Sso.LicenceService
 
             // Before any route, so that every response carries them - including
             // the ones a route never reaches, such as a 404 or a 413.
-            app.UseSecurityHeaders();
+            app.UseSecurityHeaders(options.PayPal.IsLive);
 
             MapRoutes(app, options);
 
