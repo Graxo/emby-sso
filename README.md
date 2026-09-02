@@ -22,7 +22,8 @@ Connect provider that behaves like it.
   on phones and consoles sign in through your provider.
 - **Native apps with a PIN.** Sign in on a television by typing a short code
   shown on your phone — so a device with no keyboard still gets your
-  two-factor policy instead of skipping it.
+  two-factor policy instead of skipping it. There are
+  [step-by-step instructions you can send your users](docs/site/pin-sign-in.md#instructions-to-send-your-users).
 
 **Deciding who gets in**
 

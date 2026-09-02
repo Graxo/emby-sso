@@ -37,6 +37,44 @@ token with a D-pad or giving up multi-factor authentication?
 That is it. It works with **unmodified Emby apps**, because a PIN is typed into
 the one field those apps already have.
 
+## Instructions to send your users
+
+Copy this, replace the address with your own, and send it to whoever is setting
+up a television or a console. It covers the app from a standing start, because
+someone doing this for the first time also has to get past Emby Connect.
+
+```text
+Download the Emby app from your app store.
+
+1.  Open Emby and press Next.
+2.  At the Emby Connect sign-in screen, press Skip.
+3.  Enter the following:
+        Server: https://<your-emby-server>
+        Port:   (leave empty)
+4.  Press Sign In Manually.
+5.  Enter your username.
+6.  Leave the app and open this address on your phone or laptop:
+        https://<your-emby-server>/sso/pin
+7.  Sign in there, and copy the PIN it shows you.
+8.  Go back to the Emby app and type the PIN where it asks for a password.
+
+Done.
+
+The PIN lasts five minutes and works once. If it stops working, open the
+same address again for a new one. Three wrong entries destroy a PIN, so
+type it carefully rather than guessing.
+```
+
+!!! tip "Pressing Skip is the step people get stuck on"
+
+    Emby Connect is Emby's own hosted account service and has nothing to do
+    with your server or your identity provider. The app asks for it first, and
+    a user who signs up there instead of pressing Skip ends up connected to
+    something that cannot see your libraries.
+
+The exact PIN address for your server is on the plugin's configuration page,
+under "PIN URL for users to open on a phone or laptop", with a Copy button.
+
 ## What the PIN is, exactly
 
 - **Eight characters** from a 30-character alphabet — digits 2–9 and A–Z
