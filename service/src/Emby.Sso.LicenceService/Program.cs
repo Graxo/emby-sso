@@ -391,6 +391,13 @@ namespace Emby.Sso.LicenceService
 
             MapRoutes(app, options);
 
+            // Only when a token is configured: with none there is no vendor API
+            // and no route, the same stance the admin page takes.
+            if (options.VendorApiEnabled)
+            {
+                Vendor.VendorEndpoints.Map(app, options);
+            }
+
             if (adminPassword != null)
             {
                 AdminEndpoints.Map(app, options, adminPassword, new AdminAccessGate(options.Admin, options.TrustedProxyHops));
@@ -874,7 +881,7 @@ namespace Emby.Sso.LicenceService
         /// limit is visible where the body is read, and so a body that is over it
         /// produces this service's error shape rather than the framework's.
         /// </summary>
-        private static async Task<byte[]> ReadBodyAsync(HttpContext context)
+        internal static async Task<byte[]> ReadBodyAsync(HttpContext context)
         {
             using var buffer = new MemoryStream();
             var chunk = new byte[8192];

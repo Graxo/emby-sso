@@ -1059,7 +1059,6 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
             return id;
         }
 
-        /// <summary>Read-only, for /healthz and for answering support questions.</summary>
         /// <summary>
         /// Creates or updates the code a reseller system sold, keyed by the
         /// reseller's own reference so that repeating a call changes nothing.
@@ -1335,6 +1334,7 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
             return command.ExecuteScalar() != null;
         }
 
+        /// <summary>Read-only, for /healthz and for answering support questions.</summary>
         public CodeRow FindCode(string codeHash)
         {
             using var connection = Open();

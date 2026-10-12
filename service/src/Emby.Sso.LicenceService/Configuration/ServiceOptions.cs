@@ -117,6 +117,16 @@ namespace Emby.Sso.LicenceService.Configuration
         /// </summary>
         public string BackupPassphrase { get; set; }
 
+        /// <summary>
+        /// LICENCE_VENDOR_TOKEN - the bearer token the reseller's system (the
+        /// portal) presents to /v1/vendor/*. Unset means those routes do not
+        /// exist. Not trimmed: it is compared byte for byte.
+        /// </summary>
+        public string VendorToken { get; set; }
+
+        /// <summary>Whether the vendor API is mapped at all.</summary>
+        public bool VendorApiEnabled => !string.IsNullOrEmpty(VendorToken);
+
         public RateLimitOptions RateLimit { get; } = new RateLimitOptions();
 
         public PayPalOptions PayPal { get; } = new PayPalOptions();
@@ -171,6 +181,7 @@ namespace Emby.Sso.LicenceService.Configuration
                 // passphrase may legitimately begin or end with a space, and
                 // eating one makes a backup nobody can open.
                 BackupPassphrase = read("LICENCE_BACKUP_PASSPHRASE"),
+                VendorToken = Text(read, "LICENCE_VENDOR_TOKEN"),
             };
 
             options.RateLimit.PerClientPerMinute = Number(read, "LICENCE_RATE_PER_CLIENT_PER_MINUTE", 10);
