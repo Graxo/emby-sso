@@ -199,6 +199,15 @@ CREATE TABLE IF NOT EXISTS codes (
             AddColumnIfMissing(connection, "codes", "voided_utc", "TEXT");
             AddColumnIfMissing(connection, "codes", "void_reason", "TEXT");
 
+            // Codes a reseller system (the portal) manages through the vendor
+            // API. vendor_ref is the reseller's own id for the sale; it is what
+            // makes the vendor API idempotent, so it is unique where set and
+            // NULL for every PayPal and manual code.
+            AddColumnIfMissing(connection, "codes", "vendor_ref", "TEXT");
+            Execute(connection, @"
+CREATE UNIQUE INDEX IF NOT EXISTS ux_codes_vendor_ref
+    ON codes (vendor_ref) WHERE vendor_ref IS NOT NULL;");
+
             // The second replay guard, and the one that survives PayPal sending
             // two different event ids for one payment: a capture can buy exactly
             // one code, enforced by the database rather than by a lookup that
@@ -251,6 +260,11 @@ CREATE TABLE IF NOT EXISTS signing_requests (
     fingerprint    TEXT,
     signed_utc     TEXT
 );");
+
+            // A released activation no longer holds a seat. The row stays rather
+            // than being deleted: the signing request hangs off it, and the
+            // status endpoint answers "revoked" for the licence it carried.
+            AddColumnIfMissing(connection, "activations", "released_utc", "TEXT");
 
             Execute(connection, @"
 CREATE INDEX IF NOT EXISTS ix_signing_requests_waiting
@@ -470,14 +484,22 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 
             var used = CountActivations(connection, transaction, code.Id);
             var existing = ReadActivation(connection, transaction, code.Id, serverKey);
+            var reopening = existing != null && IsReleased(connection, transaction, existing.Value);
 
             // The expiry is fixed at the code's first activation and every
             // licence signed from it afterwards carries the same one. Re-issuing
             // therefore cannot extend a licence, and the second server a customer
             // activates does not get a longer one than the first.
+            //
+            // A vendor-managed code always has expires_utc set (the vendor's
+            // paid-until), so for those this never falls through to
+            // now + licence_days: the licence runs to what was sold.
             var expires = code.ExpiresUtc ?? now.AddDays(code.LicenceDays);
 
-            if (existing == null && used >= code.ActivationsAllowed)
+            // A released activation holds no seat, so taking it back needs a free
+            // one exactly like a new server does. Without this, release-then-
+            // reactivate would be a way to exceed the seat count.
+            if ((existing == null || reopening) && used >= code.ActivationsAllowed)
             {
                 return ActivationOutcome.Refused(ActivationStatus.Exhausted, used, code.ActivationsAllowed, expires);
             }
@@ -517,11 +539,17 @@ CREATE TABLE IF NOT EXISTS webhook_events (
             {
                 activationId = existing.Value;
 
+                if (reopening)
+                {
+                    used++;
+                }
+
                 Update(
                     connection,
                     transaction,
                     @"UPDATE activations
-                         SET last_seen_utc = $t, issue_count = issue_count + 1, plugin_version = $v
+                         SET last_seen_utc = $t, issue_count = issue_count + 1, plugin_version = $v,
+                             released_utc = NULL
                        WHERE id = $id;",
                     ("$t", LicenceFormat.Iso(now)),
                     ("$v", (object)pluginVersion ?? DBNull.Value),
@@ -1032,6 +1060,281 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
         }
 
         /// <summary>Read-only, for /healthz and for answering support questions.</summary>
+        /// <summary>
+        /// Creates or updates the code a reseller system sold, keyed by the
+        /// reseller's own reference so that repeating a call changes nothing.
+        ///
+        /// Only the HASH of the code arrives; the code itself never reaches this
+        /// service. The licence is for the vendor's paid-until date, so
+        /// expires_utc is set here and first_activated_utc is left alone: an
+        /// activation must not move a date the vendor decided.
+        ///
+        /// HashConflict, not an overwrite, when the reference already has a
+        /// different hash or the hash already belongs to another code: a code
+        /// the customer holds must never be silently swapped for another.
+        /// </summary>
+        public VendorUpsertResult UpsertVendorCode(
+            string vendorRef,
+            string codeHash,
+            string licensee,
+            int seats,
+            DateTimeOffset expiresUtc,
+            bool voided,
+            string voidReason,
+            DateTimeOffset now)
+        {
+            if (string.IsNullOrWhiteSpace(vendorRef))
+            {
+                throw new ArgumentException("a vendor code needs a reference", nameof(vendorRef));
+            }
+
+            var status = voided ? CodeStatus.Void : CodeStatus.Active;
+            var reason = voided ? (object)voidReason ?? DBNull.Value : DBNull.Value;
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            string currentHash = null;
+            string currentStatus = null;
+            string currentLicensee = null;
+            string currentReason = null;
+            int currentSeats = 0;
+            string currentExpires = null;
+            var found = false;
+
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText =
+                    "SELECT code_hash, status, licensee, activations_allowed, expires_utc, void_reason "
+                    + "FROM codes WHERE vendor_ref = $r;";
+                read.Parameters.AddWithValue("$r", vendorRef);
+
+                using var reader = read.ExecuteReader();
+
+                if (reader.Read())
+                {
+                    found = true;
+                    currentHash = reader.GetString(0);
+                    currentStatus = reader.GetString(1);
+                    currentLicensee = reader.GetString(2);
+                    currentSeats = reader.GetInt32(3);
+                    currentExpires = reader.IsDBNull(4) ? null : reader.GetString(4);
+                    currentReason = reader.IsDBNull(5) ? null : reader.GetString(5);
+                }
+            }
+
+            if (!found)
+            {
+                if (Exists(connection, transaction, "SELECT 1 FROM codes WHERE code_hash = $h;", ("$h", codeHash)))
+                {
+                    return VendorUpsertResult.HashConflict;
+                }
+
+                Update(
+                    connection,
+                    transaction,
+                    @"INSERT INTO codes
+                        (code_hash, created_utc, status, licensee, activations_allowed, licence_days, expires_utc,
+                         source, vendor_ref, voided_utc, void_reason)
+                      VALUES ($h, $t, $s, $l, $a, 365, $e, 'vendor', $r, $v, $x);",
+                    ("$h", codeHash),
+                    ("$t", LicenceFormat.Iso(now)),
+                    ("$s", status),
+                    ("$l", licensee),
+                    ("$a", seats),
+                    ("$e", LicenceFormat.Iso(expiresUtc)),
+                    ("$r", vendorRef),
+                    ("$v", voided ? (object)LicenceFormat.Iso(now) : DBNull.Value),
+                    ("$x", reason));
+
+                transaction.Commit();
+
+                return VendorUpsertResult.Created;
+            }
+
+            if (!string.Equals(currentHash, codeHash, StringComparison.Ordinal))
+            {
+                return VendorUpsertResult.HashConflict;
+            }
+
+            var expires = LicenceFormat.Iso(expiresUtc);
+
+            if (currentSeats == seats
+                && string.Equals(currentExpires, expires, StringComparison.Ordinal)
+                && string.Equals(currentStatus, status, StringComparison.Ordinal)
+                && string.Equals(currentLicensee, licensee, StringComparison.Ordinal)
+                && (!voided || string.Equals(currentReason, voidReason, StringComparison.Ordinal)))
+            {
+                return VendorUpsertResult.Unchanged;
+            }
+
+            // voided_utc keeps the moment the code FIRST went void: a repeat
+            // call with a new reason must not make a refund look more recent.
+            Update(
+                connection,
+                transaction,
+                @"UPDATE codes
+                     SET activations_allowed = $a, expires_utc = $e, status = $s, licensee = $l,
+                         voided_utc = CASE WHEN $void = 0 THEN NULL ELSE COALESCE(voided_utc, $t) END,
+                         void_reason = $x
+                   WHERE vendor_ref = $r;",
+                ("$a", seats),
+                ("$e", expires),
+                ("$s", status),
+                ("$l", licensee),
+                ("$void", voided ? 1 : 0),
+                ("$t", LicenceFormat.Iso(now)),
+                ("$x", reason),
+                ("$r", vendorRef));
+
+            transaction.Commit();
+
+            return VendorUpsertResult.Updated;
+        }
+
+        /// <summary>
+        /// The vendor's view of one code: state, seats and every activation,
+        /// released ones included, so the portal can show history and which
+        /// servers can be released. Null for an unknown reference.
+        /// </summary>
+        public VendorLicenceRow FindVendorCode(string vendorRef)
+        {
+            if (string.IsNullOrWhiteSpace(vendorRef))
+            {
+                return null;
+            }
+
+            using var connection = Open();
+
+            long id;
+            string status;
+            int seats;
+            DateTimeOffset expires;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText =
+                    "SELECT id, status, activations_allowed, expires_utc FROM codes WHERE vendor_ref = $r;";
+                command.Parameters.AddWithValue("$r", vendorRef);
+
+                using var reader = command.ExecuteReader();
+
+                if (!reader.Read())
+                {
+                    return null;
+                }
+
+                id = reader.GetInt64(0);
+                status = reader.GetString(1);
+                seats = reader.GetInt32(2);
+                expires = reader.IsDBNull(3) ? DateTimeOffset.MinValue : ParseIso(reader.GetString(3));
+            }
+
+            var activations = new List<VendorActivationRow>();
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText =
+                    "SELECT server_id, plugin_version, first_seen_utc, last_seen_utc, released_utc "
+                    + "FROM activations WHERE code_id = $c ORDER BY first_seen_utc, id;";
+                command.Parameters.AddWithValue("$c", id);
+
+                using var reader = command.ExecuteReader();
+
+                while (reader.Read())
+                {
+                    activations.Add(new VendorActivationRow(
+                        reader.GetString(0),
+                        reader.IsDBNull(1) ? null : reader.GetString(1),
+                        ParseIso(reader.GetString(2)),
+                        ParseIso(reader.GetString(3)),
+                        reader.IsDBNull(4) ? (DateTimeOffset?)null : ParseIso(reader.GetString(4))));
+                }
+            }
+
+            return new VendorLicenceRow(vendorRef, status, seats, expires, activations);
+        }
+
+        /// <summary>
+        /// Frees the seat a server holds. The activation row stays, marked
+        /// released: the server's licence is then reported revoked, and the
+        /// server can only come back if a seat is free.
+        /// </summary>
+        public ReleaseResult ReleaseVendorActivation(string vendorRef, string serverId, DateTimeOffset now)
+        {
+            if (string.IsNullOrWhiteSpace(vendorRef) || string.IsNullOrWhiteSpace(serverId))
+            {
+                return ReleaseResult.NotFound;
+            }
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            long activationId;
+            var released = false;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText =
+                    @"SELECT a.id, a.released_utc IS NOT NULL
+                        FROM activations a JOIN codes c ON c.id = a.code_id
+                       WHERE c.vendor_ref = $r AND a.server_key = $k;";
+                command.Parameters.AddWithValue("$r", vendorRef);
+                command.Parameters.AddWithValue("$k", serverId.Trim().ToLowerInvariant());
+
+                using var reader = command.ExecuteReader();
+
+                if (!reader.Read())
+                {
+                    return ReleaseResult.NotFound;
+                }
+
+                activationId = reader.GetInt64(0);
+                released = reader.GetInt64(1) != 0;
+            }
+
+            if (released)
+            {
+                return ReleaseResult.AlreadyReleased;
+            }
+
+            Update(
+                connection,
+                transaction,
+                "UPDATE activations SET released_utc = $t WHERE id = $id;",
+                ("$t", LicenceFormat.Iso(now)),
+                ("$id", activationId));
+
+            transaction.Commit();
+
+            return ReleaseResult.Released;
+        }
+
+        /// <summary>
+        /// True when the activation that carries this licence fingerprint has
+        /// been released. Kept apart from <see cref="FindCodeByLicenceFingerprint"/>
+        /// because that answers per code and this is per activation.
+        /// </summary>
+        public bool IsLicenceReleased(string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint))
+            {
+                return false;
+            }
+
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            command.CommandText =
+                @"SELECT 1 FROM signing_requests s JOIN activations a ON a.id = s.activation_id
+                   WHERE s.fingerprint = $f AND a.released_utc IS NOT NULL LIMIT 1;";
+            command.Parameters.AddWithValue("$f", fingerprint);
+
+            return command.ExecuteScalar() != null;
+        }
+
         public CodeRow FindCode(string codeHash)
         {
             using var connection = Open();
@@ -1123,7 +1426,7 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
 SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_allowed, c.licence_days,
        c.expires_utc, c.first_activated_utc, c.source, c.paypal_event_id, c.paypal_capture_id,
        c.buyer_email, c.origin_server_id, c.voided_utc, c.void_reason,
-       (SELECT COUNT(*) FROM activations a WHERE a.code_id = c.id) AS activations_used
+       (SELECT COUNT(*) FROM activations a WHERE a.code_id = c.id AND a.released_utc IS NULL) AS activations_used
   FROM codes c";
 
         private static IReadOnlyList<CodeSummary> ReadSummaries(SqliteCommand command)
@@ -1209,12 +1512,21 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
             return value == null || value == DBNull.Value ? (long?)null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
         }
 
+        private static bool IsReleased(SqliteConnection connection, SqliteTransaction transaction, long activationId)
+        {
+            return Exists(
+                connection,
+                transaction,
+                "SELECT 1 FROM activations WHERE id = $id AND released_utc IS NOT NULL;",
+                ("$id", activationId));
+        }
+
         private static int CountActivations(SqliteConnection connection, SqliteTransaction transaction, long codeId)
         {
             using var command = connection.CreateCommand();
 
             command.Transaction = transaction;
-            command.CommandText = "SELECT COUNT(*) FROM activations WHERE code_id = $c;";
+            command.CommandText = "SELECT COUNT(*) FROM activations WHERE code_id = $c AND released_utc IS NULL;";
             command.Parameters.AddWithValue("$c", codeId);
 
             return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
@@ -1416,6 +1728,75 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         public bool IsManual => string.Equals(Source, "manual", StringComparison.Ordinal);
 
         public string Tag => RedemptionCode.LogTag(CodeHash);
+    }
+
+    public enum VendorUpsertResult
+    {
+        Created,
+        Updated,
+        Unchanged,
+        HashConflict,
+    }
+
+    public enum ReleaseResult
+    {
+        Released,
+        AlreadyReleased,
+        NotFound,
+    }
+
+    public sealed class VendorActivationRow
+    {
+        public VendorActivationRow(
+            string serverId,
+            string pluginVersion,
+            DateTimeOffset firstSeenUtc,
+            DateTimeOffset lastSeenUtc,
+            DateTimeOffset? releasedUtc)
+        {
+            ServerId = serverId;
+            PluginVersion = pluginVersion;
+            FirstSeenUtc = firstSeenUtc;
+            LastSeenUtc = lastSeenUtc;
+            ReleasedUtc = releasedUtc;
+        }
+
+        public string ServerId { get; }
+
+        public string PluginVersion { get; }
+
+        public DateTimeOffset FirstSeenUtc { get; }
+
+        public DateTimeOffset LastSeenUtc { get; }
+
+        public DateTimeOffset? ReleasedUtc { get; }
+    }
+
+    public sealed class VendorLicenceRow
+    {
+        public VendorLicenceRow(
+            string vendorRef,
+            string status,
+            int seats,
+            DateTimeOffset expiresUtc,
+            IReadOnlyList<VendorActivationRow> activations)
+        {
+            Ref = vendorRef;
+            Status = status;
+            Seats = seats;
+            ExpiresUtc = expiresUtc;
+            Activations = activations;
+        }
+
+        public string Ref { get; }
+
+        public string Status { get; }
+
+        public int Seats { get; }
+
+        public DateTimeOffset ExpiresUtc { get; }
+
+        public IReadOnlyList<VendorActivationRow> Activations { get; }
     }
 
     public static class CodeStatus

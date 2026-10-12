@@ -106,9 +106,13 @@ namespace Emby.Sso.LicenceService.Activation
             {
                 var code = _store.FindCodeByLicenceFingerprint(fingerprint);
 
+                // A released activation is revoked even though its code is
+                // still active: the seat went back to the customer, and the
+                // server that held it must stop signing people in.
                 status = code == null
                     ? LicenceStatusToken.Unknown
                     : string.Equals(code.Status, CodeStatus.Active, StringComparison.Ordinal)
+                      && !_store.IsLicenceReleased(fingerprint)
                         ? LicenceStatusToken.Valid
                         : LicenceStatusToken.Revoked;
             }
