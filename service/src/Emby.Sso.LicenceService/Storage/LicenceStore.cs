@@ -1413,8 +1413,12 @@ LIMIT 1;";
 
         /// <summary>
         /// Records a licence the status check renewed, and makes it the
-        /// activation's current one. See renewed_licences in
-        /// <see cref="Initialise"/> for why it is a table of its own.
+        /// activation's current one. Recording the same licence twice is fine:
+        /// RS256 PKCS#1 v1.5 is deterministic, so renewing the same licence for
+        /// the same expiry in the same second yields the same fingerprint, and
+        /// the row that is already there says everything the second would. See
+        /// renewed_licences in <see cref="Initialise"/> for why it is a table of
+        /// its own.
         /// </summary>
         public void RecordRenewedLicence(HeldLicence renewing, IssuedLicence licence)
         {
@@ -1434,7 +1438,7 @@ LIMIT 1;";
             Update(
                 connection,
                 transaction,
-                @"INSERT INTO renewed_licences (fingerprint, activation_id, code_id, key_id, issued_at_utc, expires_utc)
+                @"INSERT OR IGNORE INTO renewed_licences (fingerprint, activation_id, code_id, key_id, issued_at_utc, expires_utc)
                   VALUES ($f, $a, $c, $k, $i, $e);",
                 ("$f", licence.Fingerprint),
                 ("$a", renewing.ActivationId),
@@ -2086,7 +2090,6 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         }
     }
 
-    /// <summary>One row of signing_requests: what has to be signed, and what came back.</summary>
     /// <summary>A licence this store handed out, found by its fingerprint. See <see cref="LicenceStore.FindHeldLicence"/>.</summary>
     public sealed class HeldLicence
     {
@@ -2112,6 +2115,7 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         public DateTimeOffset ExpiresUtc { get; }
     }
 
+    /// <summary>One row of signing_requests: what has to be signed, and what came back.</summary>
     public sealed class SigningRequestRow
     {
         public SigningRequestRow(

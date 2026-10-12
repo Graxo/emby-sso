@@ -206,6 +206,15 @@ services:
       PAYPAL_ENV: sandbox
       PAYPAL_WEBHOOK_ID: WH-0000000000000000-000000000000000
 
+      # --- run for a reseller's system (the portal): OPTIONAL ---------------
+      # The bearer token for /v1/vendor/*. Unset = those routes do not exist.
+      # Keep it in .env, never in this file.
+      # LICENCE_VENDOR_TOKEN: ${LICENCE_VENDOR_TOKEN}
+      #
+      # Set to the portal's public order page and this service stops selling:
+      # /, /buy and /buy/* answer 301 there, /buy/start and /v1/checkout 410.
+      # LICENCE_PORTAL_URL: https://portal.example.com/emby-licence
+
       # --- required to sell anything ---------------------------------------
       PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
       PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}

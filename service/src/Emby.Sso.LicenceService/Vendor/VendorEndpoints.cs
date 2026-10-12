@@ -39,6 +39,8 @@ namespace Emby.Sso.LicenceService.Vendor
 
         private const int MaximumLicenseeLength = 200;
 
+        private const int MaximumVoidReasonLength = 500;
+
         private static readonly JsonSerializerOptions Web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
         public static void Map(WebApplication app, ServiceOptions options)
@@ -52,7 +54,7 @@ namespace Emby.Sso.LicenceService.Vendor
             {
                 if (!Authorised(context, token))
                 {
-                    return Results.StatusCode(401);
+                    return Refused(log);
                 }
 
                 if (!RefPattern.IsMatch(vendorRef))
@@ -114,7 +116,7 @@ namespace Emby.Sso.LicenceService.Vendor
             {
                 if (!Authorised(context, token))
                 {
-                    return Results.StatusCode(401);
+                    return Refused(log);
                 }
 
                 var row = RefPattern.IsMatch(vendorRef) ? store.FindVendorCode(vendorRef) : null;
@@ -128,7 +130,7 @@ namespace Emby.Sso.LicenceService.Vendor
             {
                 if (!Authorised(context, token))
                 {
-                    return Results.StatusCode(401);
+                    return Refused(log);
                 }
 
                 if (!RefPattern.IsMatch(vendorRef) || !ServerIdPattern.IsMatch(serverId))
@@ -144,6 +146,18 @@ namespace Emby.Sso.LicenceService.Vendor
                     ? Results.Json(new { error = "not_found" }, Web, statusCode: 404)
                     : Results.StatusCode(204);
             });
+        }
+
+        /// <summary>
+        /// The 401, and one Warning to go with it. Neither the presented token nor
+        /// the ref is logged: the first is somebody's guess at a credential and
+        /// the second is only known to a caller who has not proved they may ask.
+        /// </summary>
+        private static IResult Refused(ILogger log)
+        {
+            log.LogWarning("vendor API: request refused, the bearer token was missing or wrong");
+
+            return Results.StatusCode(401);
         }
 
         private static bool Authorised(HttpContext context, byte[] token)
@@ -179,6 +193,11 @@ namespace Emby.Sso.LicenceService.Vendor
             if (put.Licensee == null || put.Licensee.Length > MaximumLicenseeLength)
             {
                 return "licensee";
+            }
+
+            if (put.VoidReason != null && put.VoidReason.Length > MaximumVoidReasonLength)
+            {
+                return "voidReason";
             }
 
             if (put.Seats == null || put.Seats < 1 || put.Seats > MaximumSeats)

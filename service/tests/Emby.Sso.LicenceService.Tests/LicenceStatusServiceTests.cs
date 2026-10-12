@@ -227,6 +227,27 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
+        public async Task The_same_licence_renewed_twice_in_one_second_is_handed_back_both_times()
+        {
+            // RS256 PKCS#1 v1.5 is deterministic: the same claims in the same
+            // second are the same licence, with the same fingerprint, which is
+            // the renewed_licences primary key. Two status checks with the old
+            // fingerprint in one second (a retry, two servers behind one
+            // activation) must not turn the second into a failed renewal.
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var first = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence;
+            var second = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence;
+
+            Assert.NotNull(first);
+            Assert.Equal(first, second);
+            await AssertRenewed(second, held, PaidUntil.AddYears(1));
+        }
+
+        [Fact]
         public async Task A_licence_renewed_twice_keeps_every_step_recognised()
         {
             var hash = VendorCode("ref-1", PaidUntil, out var code);

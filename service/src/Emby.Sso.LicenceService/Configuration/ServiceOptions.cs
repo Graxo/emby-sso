@@ -120,7 +120,9 @@ namespace Emby.Sso.LicenceService.Configuration
         /// <summary>
         /// LICENCE_VENDOR_TOKEN - the bearer token the reseller's system (the
         /// portal) presents to /v1/vendor/*. Unset means those routes do not
-        /// exist. Not trimmed: it is compared byte for byte.
+        /// exist. Trimmed on the way in, like the other single-line settings: a
+        /// trailing newline from a mounted secret file must not make a correct
+        /// token a wrong one.
         /// </summary>
         public string VendorToken { get; set; }
 

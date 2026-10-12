@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -10,6 +11,8 @@ using Emby.Sso.Licensing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Emby.Sso.LicenceService.Tests
@@ -45,7 +48,7 @@ namespace Emby.Sso.LicenceService.Tests
             _service?.Dispose();
         }
 
-        private async Task StartAsync(string token)
+        private async Task StartAsync(string token, Action<WebApplicationBuilder> configure = null)
         {
             if (_app != null)
             {
@@ -59,7 +62,11 @@ namespace Emby.Sso.LicenceService.Tests
                 o.VendorToken = token;
             });
 
-            _app = Program.BuildApp(_service.Options, builder => builder.WebHost.UseTestServer());
+            _app = Program.BuildApp(_service.Options, builder =>
+            {
+                builder.WebHost.UseTestServer();
+                configure?.Invoke(builder);
+            });
 
             await _app.StartAsync();
 
@@ -161,6 +168,72 @@ namespace Emby.Sso.LicenceService.Tests
             var response = await Send(HttpMethod.Put, "/v1/vendor/licences/order-1", Body(Hash(), licensee: new string('a', 201)), Token);
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task A_void_reason_over_500_characters_is_400_naming_the_field()
+        {
+            var response = await Send(
+                HttpMethod.Put,
+                "/v1/vendor/licences/order-1",
+                Body(Hash(), status: "void", reason: new string('r', 501)),
+                Token);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("voidReason", (await Json(response)).GetProperty("field").GetString());
+
+            var atTheLimit = await Send(
+                HttpMethod.Put,
+                "/v1/vendor/licences/order-2",
+                Body(Hash(), status: "void", reason: new string('r', 500)),
+                Token);
+
+            Assert.Equal(HttpStatusCode.Created, atTheLimit.StatusCode);
+        }
+
+        [Fact]
+        public async Task A_refused_token_is_logged_once_as_a_warning_without_the_token()
+        {
+            var log = new RecordingLogger<object>();
+
+            await StartAsync(Token, builder => builder.Logging.AddProvider(new RecordingProvider(log)));
+
+            await Send(HttpMethod.Get, "/v1/vendor/licences/order-1", null, "wrong-token-value");
+
+            var warnings = log.At(LogLevel.Warning).ToList();
+
+            Assert.Single(warnings);
+            Assert.DoesNotContain("wrong-token-value", log.Everything);
+            Assert.DoesNotContain(Token, log.Everything);
+            Assert.DoesNotContain("order-1", log.Everything);
+
+            // An authorised call adds none.
+            await Send(HttpMethod.Get, "/v1/vendor/licences/order-1", null, Token);
+
+            Assert.Single(log.At(LogLevel.Warning));
+        }
+
+        private sealed class RecordingProvider : ILoggerProvider
+        {
+            private readonly RecordingLogger<object> _log;
+
+            public RecordingProvider(RecordingLogger<object> log)
+            {
+                _log = log;
+            }
+
+            public ILogger CreateLogger(string categoryName)
+            {
+                // Only the vendor API's own category: the host logs plenty of
+                // its own at startup and that is not what is being counted.
+                return categoryName.EndsWith(".Vendor", StringComparison.Ordinal)
+                    ? _log
+                    : NullLogger.Instance;
+            }
+
+            public void Dispose()
+            {
+            }
         }
 
         [Fact]
