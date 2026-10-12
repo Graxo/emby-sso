@@ -127,6 +127,16 @@ namespace Emby.Sso.LicenceService.Configuration
         /// <summary>Whether the vendor API is mapped at all.</summary>
         public bool VendorApiEnabled => !string.IsNullOrEmpty(VendorToken);
 
+        /// <summary>
+        /// LICENCE_PORTAL_URL - the public order page of the licence product, once
+        /// the shop has moved to the portal. Unset (the default) means this
+        /// service sells for itself. Set, its own shop is handed over: GET /,
+        /// /buy and /buy/* answer 301 to this address, and POST /buy/start and
+        /// POST /v1/checkout answer 410, so nothing here can start a payment.
+        /// Activation, status, release and vendor routes are untouched.
+        /// </summary>
+        public string PortalUrl { get; set; }
+
         public RateLimitOptions RateLimit { get; } = new RateLimitOptions();
 
         public PayPalOptions PayPal { get; } = new PayPalOptions();
@@ -182,6 +192,7 @@ namespace Emby.Sso.LicenceService.Configuration
                 // eating one makes a backup nobody can open.
                 BackupPassphrase = read("LICENCE_BACKUP_PASSPHRASE"),
                 VendorToken = Text(read, "LICENCE_VENDOR_TOKEN"),
+                PortalUrl = Text(read, "LICENCE_PORTAL_URL"),
             };
 
             options.RateLimit.PerClientPerMinute = Number(read, "LICENCE_RATE_PER_CLIENT_PER_MINUTE", 10);
@@ -325,6 +336,17 @@ namespace Emby.Sso.LicenceService.Configuration
                     problems.Add(
                         "LICENCE_PUBLIC_BASE_URL must be an absolute https URL, e.g. https://licence.example.com. "
                         + "It is the address the plugin has compiled in and the address PayPal sends buyers back to.");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(PortalUrl))
+            {
+                if (!Uri.TryCreate(PortalUrl, UriKind.Absolute, out var portal)
+                    || !string.Equals(portal.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+                {
+                    problems.Add(
+                        "LICENCE_PORTAL_URL must be an absolute https URL, e.g. https://portal.example.com/emby-licence. "
+                        + "It is where the shop pages of this service send visitors once the shop has moved.");
                 }
             }
 

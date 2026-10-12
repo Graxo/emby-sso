@@ -599,6 +599,53 @@ namespace Emby.Sso.LicenceService
                 }
             });
 
+            if (options.PortalUrl != null)
+            {
+                MapPortalHandover(app, options.PortalUrl);
+            }
+            else
+            {
+                MapShop(app, options);
+            }
+
+            MapHealth(app, options);
+        }
+
+        /// <summary>
+        /// The shop has moved to the portal (LICENCE_PORTAL_URL). Every page of
+        /// the old one says so, and nothing can start a payment.
+        ///
+        /// 301 for the pages, because the move is meant to be permanent and the
+        /// plugin's old buy links are in the field. 410 for the two POSTs: they
+        /// are not something a browser follows a redirect for (a 301 turns a
+        /// POST into a GET, and a client that does that silently is worse than
+        /// one that is told the endpoint is gone).
+        /// </summary>
+        private static void MapPortalHandover(WebApplication app, string portalUrl)
+        {
+            Task MovedPermanently(HttpContext context)
+            {
+                context.Response.Redirect(portalUrl, permanent: true);
+
+                return Task.CompletedTask;
+            }
+
+            app.MapGet("/", MovedPermanently);
+            app.MapGet("/buy", MovedPermanently);
+            app.MapGet("/buy/{**rest}", MovedPermanently);
+
+            app.MapPost("/buy/start", () => Results.StatusCode((int)HttpStatusCode.Gone));
+
+            app.MapPost(
+                "/v1/checkout",
+                () => Results.Json(
+                    new { error = "gone", message = "Orders are taken on the portal now." },
+                    statusCode: (int)HttpStatusCode.Gone));
+        }
+
+        /// <summary>This service's own shop: the buy pages and the two ways to start a PayPal order.</summary>
+        private static void MapShop(WebApplication app, ServiceOptions options)
+        {
             // The bare domain. Nothing is served here, but this host exists to
             // sell licences and its name is the thing that ends up in an email
             // or on a page, so somebody will type it. A 404 is a poor answer to
@@ -769,6 +816,10 @@ namespace Emby.Sso.LicenceService
                 }
             });
 
+        }
+
+        private static void MapHealth(WebApplication app, ServiceOptions options)
+        {
             app.MapGet("/healthz", (LicenceStore store, TrustedKeys trusted, ActivationRateLimiter limiter) =>
             {
                 try
