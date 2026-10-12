@@ -107,6 +107,152 @@ namespace Emby.Sso.LicenceService.PayPal
             return ReadOrder(text);
         }
 
+        /// <summary>
+        /// Takes the money for an order the buyer has approved. PayPal returns
+        /// the buyer to /buy/complete with the order id as <c>token</c>, and an
+        /// order created with intent CAPTURE moves no money until this call is
+        /// made: without it the buyer is never charged, PayPal never sends
+        /// PAYMENT.CAPTURE.COMPLETED, and no code is ever created.
+        ///
+        /// The order id is sent as PayPal-Request-Id, so a reload of the return
+        /// page - or a retry after a timeout whose capture did go through -
+        /// replays the first capture instead of attempting a second one.
+        ///
+        /// The capture is not what creates the code. The webhook still does,
+        /// after its signature verifies; this only gives PayPal something to
+        /// send a webhook about.
+        /// </summary>
+        public async Task<CaptureOutcome> CaptureOrderAsync(string orderId, CancellationToken cancellationToken)
+        {
+            if (!IsOrderId(orderId))
+            {
+                throw new ArgumentException("not a PayPal order id", nameof(orderId));
+            }
+
+            var token = await GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                _options.ApiBase + "/v2/checkout/orders/" + orderId + "/capture")
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            };
+
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Headers.Add("PayPal-Request-Id", "capture-" + orderId);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return ReadCapture(text);
+            }
+
+            // 422 is PayPal saying no to this order, definitively: the card was
+            // declined, the order was never approved, or it was already
+            // captured. Anything else (5xx, 429) says nothing about whether the
+            // money moved, so it is an exception and the page says "unknown".
+            if ((int)response.StatusCode == 422)
+            {
+                var issue = ReadIssue(text);
+
+                return string.Equals(issue, "ORDER_ALREADY_CAPTURED", StringComparison.Ordinal)
+                    ? CaptureOutcome.Completed
+                    : CaptureOutcome.Refused(issue ?? "UNPROCESSABLE_ENTITY");
+            }
+
+            throw new PayPalApiException("PayPal could not capture the order (" + (int)response.StatusCode + ").");
+        }
+
+        /// <summary>
+        /// PayPal order ids are short upper-case alphanumerics. The id arrives
+        /// in a query string and is put into a URL path, so anything else is
+        /// refused rather than escaped.
+        /// </summary>
+        public static bool IsOrderId(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length > 64)
+            {
+                return false;
+            }
+
+            foreach (var c in value)
+            {
+                if (!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9'))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        internal static CaptureOutcome ReadCapture(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+
+            var root = document.RootElement;
+
+            // The capture's own status is the one that says whether money
+            // moved; the order's status is COMPLETED even for a capture that is
+            // still PENDING (an eCheck, a payment held for review).
+            if (root.TryGetProperty("purchase_units", out var units)
+                && units.ValueKind == JsonValueKind.Array
+                && units.GetArrayLength() > 0
+                && units[0].ValueKind == JsonValueKind.Object
+                && units[0].TryGetProperty("payments", out var payments)
+                && payments.ValueKind == JsonValueKind.Object
+                && payments.TryGetProperty("captures", out var captures)
+                && captures.ValueKind == JsonValueKind.Array
+                && captures.GetArrayLength() > 0
+                && captures[0].ValueKind == JsonValueKind.Object
+                && captures[0].TryGetProperty("status", out var status)
+                && status.ValueKind == JsonValueKind.String)
+            {
+                var value = status.GetString();
+
+                if (string.Equals(value, "COMPLETED", StringComparison.Ordinal))
+                {
+                    return CaptureOutcome.Completed;
+                }
+
+                if (string.Equals(value, "PENDING", StringComparison.Ordinal))
+                {
+                    return CaptureOutcome.Pending;
+                }
+
+                return CaptureOutcome.Refused(value);
+            }
+
+            throw new PayPalApiException("PayPal's capture response carried no capture status.");
+        }
+
+        private static string ReadIssue(string json)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+
+                if (document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("details", out var details)
+                    && details.ValueKind == JsonValueKind.Array
+                    && details.GetArrayLength() > 0
+                    && details[0].ValueKind == JsonValueKind.Object
+                    && details[0].TryGetProperty("issue", out var issue)
+                    && issue.ValueKind == JsonValueKind.String)
+                {
+                    return issue.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+            }
+
+            return null;
+        }
+
         internal static CheckoutOrder ReadOrder(string json)
         {
             using var document = JsonDocument.Parse(json);
@@ -256,6 +402,37 @@ namespace Emby.Sso.LicenceService.PayPal
         public string OrderId { get; }
 
         public string ApproveUrl { get; }
+    }
+
+    public enum CaptureState
+    {
+        Completed,
+        Pending,
+        Refused,
+    }
+
+    /// <summary>
+    /// <see cref="Issue"/> is PayPal's issue code or capture status
+    /// (INSTRUMENT_DECLINED, ORDER_NOT_APPROVED, DECLINED...), never a
+    /// response body, for the same reason as <see cref="PayPalApiException"/>.
+    /// </summary>
+    public sealed class CaptureOutcome
+    {
+        public static readonly CaptureOutcome Completed = new CaptureOutcome(CaptureState.Completed, null);
+
+        public static readonly CaptureOutcome Pending = new CaptureOutcome(CaptureState.Pending, null);
+
+        private CaptureOutcome(CaptureState state, string issue)
+        {
+            State = state;
+            Issue = issue;
+        }
+
+        public CaptureState State { get; }
+
+        public string Issue { get; }
+
+        public static CaptureOutcome Refused(string issue) => new CaptureOutcome(CaptureState.Refused, issue);
     }
 
     /// <summary>

@@ -612,10 +612,83 @@ namespace Emby.Sso.LicenceService
                 return Results.Content(BuyPage.Render(model), "text/html; charset=utf-8");
             });
 
-            app.MapGet("/buy/complete", (HttpContext context) =>
-                Results.Content(
-                    BuyPage.RenderComplete(ModelFor(options, context.Request.Query["serverId"].ToString())),
-                    "text/html; charset=utf-8"));
+            // PayPal returns the buyer here after they approve, with the order
+            // id as ?token=. Approval moves no money: the capture below does,
+            // and it is the capture that makes PayPal send the webhook that
+            // creates the code. A reload repeats the capture harmlessly - the
+            // client sends the order id as PayPal-Request-Id.
+            app.MapGet("/buy/complete", async (
+                HttpContext context,
+                PayPalOrdersClient paypal,
+                CheckoutRateLimiter throttle,
+                ILoggerFactory logs) =>
+            {
+                var log = logs.CreateLogger("buy");
+                var model = ModelFor(options, context.Request.Query["serverId"].ToString());
+                var orderId = context.Request.Query["token"].ToString();
+                var client = ClientKey(context, options.TrustedProxyHops);
+
+                // Every request here costs two PayPal API calls, and the order
+                // id is in the query string for anybody to vary.
+                var limit = throttle.Check(client);
+
+                if (!limit.IsAllowed)
+                {
+                    log.LogWarning("buy/complete RATE LIMITED client={Client} scope={Scope}", client, limit.Scope);
+                    context.Response.Headers.RetryAfter =
+                        ((int)Math.Ceiling(limit.RetryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+
+                    return Results.StatusCode((int)HttpStatusCode.TooManyRequests);
+                }
+
+                if (!PayPalOrdersClient.IsOrderId(orderId))
+                {
+                    log.LogWarning("buy/complete without a usable order id client={Client}", client);
+
+                    return Results.Content(BuyPage.RenderNotCharged(model), "text/html; charset=utf-8", null, 400);
+                }
+
+                try
+                {
+                    var outcome = await paypal.CaptureOrderAsync(orderId, context.RequestAborted).ConfigureAwait(false);
+
+                    switch (outcome.State)
+                    {
+                        case CaptureState.Completed:
+                            log.LogInformation("buy/complete captured paypal order {Order} client={Client}", orderId, client);
+
+                            return Results.Content(BuyPage.RenderComplete(model), "text/html; charset=utf-8");
+
+                        case CaptureState.Pending:
+                            // The code is created when PayPal sends
+                            // PAYMENT.CAPTURE.COMPLETED, which for a pending
+                            // capture is when it clears - possibly days.
+                            log.LogWarning(
+                                "buy/complete paypal order {Order} captured but PENDING; the code follows when it clears",
+                                orderId);
+
+                            return Results.Content(BuyPage.RenderComplete(model), "text/html; charset=utf-8");
+
+                        default:
+                            log.LogWarning(
+                                "buy/complete paypal REFUSED to capture order {Order}: {Issue}. Nothing was charged",
+                                orderId,
+                                outcome.Issue);
+
+                            return Results.Content(BuyPage.RenderNotCharged(model), "text/html; charset=utf-8", null, 402);
+                    }
+                }
+                catch (Exception ex) when (ex is PayPalApiException || ex is HttpRequestException || ex is JsonException)
+                {
+                    log.LogError(
+                        ex,
+                        "buy/complete could not capture paypal order {Order}; whether the buyer was charged is UNKNOWN. "
+                        + "Check the order in the PayPal dashboard",
+                        orderId);
+
+                    return Results.Content(BuyPage.RenderUnconfirmed(model), "text/html; charset=utf-8", null, 502);
+                }
+            });
 
             app.MapGet("/buy/cancelled", (HttpContext context) =>
                 Results.Content(
