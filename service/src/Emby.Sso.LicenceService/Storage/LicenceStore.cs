@@ -266,6 +266,28 @@ CREATE TABLE IF NOT EXISTS signing_requests (
             // status endpoint answers "revoked" for the licence it carried.
             AddColumnIfMissing(connection, "activations", "released_utc", "TEXT");
 
+            // Licences the daily status check handed back because the code's
+            // expiry had moved past the one the server held (a vendor renewal,
+            // or an expiry an operator extended). signing_requests cannot hold
+            // these: it is one row per activation whose terms are fixed at
+            // first activation, and that row is what an upload is checked
+            // against. So every renewed licence gets a row here, and EVERY
+            // fingerprint ever handed out stays recognisable - the status check
+            // must still know the old licence (a server that failed to save the
+            // new one asks with it again tomorrow) and must still be able to
+            // revoke each one. The licence itself is not stored, for the reason
+            // LicenceFormat.Fingerprint gives; its expiry is, because that is
+            // what the next status check compares against.
+            Execute(connection, @"
+CREATE TABLE IF NOT EXISTS renewed_licences (
+    fingerprint    TEXT    PRIMARY KEY,
+    activation_id  INTEGER NOT NULL REFERENCES activations(id),
+    code_id        INTEGER NOT NULL REFERENCES codes(id),
+    key_id         TEXT    NOT NULL,
+    issued_at_utc  TEXT    NOT NULL,
+    expires_utc    TEXT    NOT NULL
+);");
+
             Execute(connection, @"
 CREATE INDEX IF NOT EXISTS ix_signing_requests_waiting
     ON signing_requests (requested_utc) WHERE signed_utc IS NULL;");
@@ -683,7 +705,11 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
 
             using (var command = connection.CreateCommand())
             {
-                command.CommandText = "SELECT code_id FROM signing_requests WHERE fingerprint = $f LIMIT 1;";
+                command.CommandText = @"
+SELECT code_id FROM signing_requests WHERE fingerprint = $f
+UNION ALL
+SELECT code_id FROM renewed_licences WHERE fingerprint = $f
+LIMIT 1;";
                 command.Parameters.AddWithValue("$f", fingerprint);
 
                 var found = command.ExecuteScalar();
@@ -1326,12 +1352,105 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
             using var connection = Open();
             using var command = connection.CreateCommand();
 
-            command.CommandText =
-                @"SELECT 1 FROM signing_requests s JOIN activations a ON a.id = s.activation_id
-                   WHERE s.fingerprint = $f AND a.released_utc IS NOT NULL LIMIT 1;";
+            // A renewed licence belongs to the same activation as the one it
+            // replaced, so releasing the activation revokes all of them.
+            command.CommandText = @"
+SELECT 1 FROM activations a
+ WHERE a.released_utc IS NOT NULL
+   AND a.id IN (SELECT activation_id FROM signing_requests WHERE fingerprint = $f
+                UNION ALL
+                SELECT activation_id FROM renewed_licences WHERE fingerprint = $f)
+ LIMIT 1;";
             command.Parameters.AddWithValue("$f", fingerprint);
 
             return command.ExecuteScalar() != null;
+        }
+
+        /// <summary>
+        /// What the licence with this fingerprint says, as far as renewing it
+        /// needs: whose it is, which server it is for, and when it expires.
+        /// Null for a fingerprint this store never handed out.
+        ///
+        /// The licensee and server always come from the activation's signing
+        /// request, the terms fixed at first activation; only the expiry differs
+        /// between the original licence and a renewed one, and for a renewed one
+        /// it is read from renewed_licences.
+        /// </summary>
+        public HeldLicence FindHeldLicence(string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint))
+            {
+                return null;
+            }
+
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+
+            command.CommandText = @"
+SELECT activation_id, code_id, licensee, server_id, expires_utc
+  FROM signing_requests WHERE fingerprint = $f
+UNION ALL
+SELECT r.activation_id, r.code_id, s.licensee, s.server_id, r.expires_utc
+  FROM renewed_licences r JOIN signing_requests s ON s.activation_id = r.activation_id
+ WHERE r.fingerprint = $f
+LIMIT 1;";
+            command.Parameters.AddWithValue("$f", fingerprint);
+
+            using var reader = command.ExecuteReader();
+
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new HeldLicence(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                ParseIso(reader.GetString(4)));
+        }
+
+        /// <summary>
+        /// Records a licence the status check renewed, and makes it the
+        /// activation's current one. See renewed_licences in
+        /// <see cref="Initialise"/> for why it is a table of its own.
+        /// </summary>
+        public void RecordRenewedLicence(HeldLicence renewing, IssuedLicence licence)
+        {
+            if (renewing == null)
+            {
+                throw new ArgumentNullException(nameof(renewing));
+            }
+
+            if (licence == null)
+            {
+                throw new ArgumentNullException(nameof(licence));
+            }
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            Update(
+                connection,
+                transaction,
+                @"INSERT INTO renewed_licences (fingerprint, activation_id, code_id, key_id, issued_at_utc, expires_utc)
+                  VALUES ($f, $a, $c, $k, $i, $e);",
+                ("$f", licence.Fingerprint),
+                ("$a", renewing.ActivationId),
+                ("$c", renewing.CodeId),
+                ("$k", licence.KeyId),
+                ("$i", LicenceFormat.Iso(licence.IssuedAt)),
+                ("$e", LicenceFormat.Iso(licence.ExpiresAt)));
+
+            Update(
+                connection,
+                transaction,
+                "UPDATE activations SET last_fingerprint = $f WHERE id = $id;",
+                ("$f", licence.Fingerprint),
+                ("$id", renewing.ActivationId));
+
+            transaction.Commit();
         }
 
         /// <summary>Read-only, for /healthz and for answering support questions.</summary>
@@ -1968,6 +2087,31 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
     }
 
     /// <summary>One row of signing_requests: what has to be signed, and what came back.</summary>
+    /// <summary>A licence this store handed out, found by its fingerprint. See <see cref="LicenceStore.FindHeldLicence"/>.</summary>
+    public sealed class HeldLicence
+    {
+        public HeldLicence(long activationId, long codeId, string licensee, string serverId, DateTimeOffset expiresUtc)
+        {
+            ActivationId = activationId;
+            CodeId = codeId;
+            Licensee = licensee;
+            ServerId = serverId;
+            ExpiresUtc = expiresUtc;
+        }
+
+        public long ActivationId { get; }
+
+        public long CodeId { get; }
+
+        /// <summary>The `sub` every licence for this activation carries.</summary>
+        public string Licensee { get; }
+
+        /// <summary>The server id exactly as first activated - the `aud` every licence for it carries.</summary>
+        public string ServerId { get; }
+
+        public DateTimeOffset ExpiresUtc { get; }
+    }
+
     public sealed class SigningRequestRow
     {
         public SigningRequestRow(

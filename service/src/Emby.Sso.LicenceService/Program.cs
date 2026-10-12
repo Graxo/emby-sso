@@ -551,7 +551,12 @@ namespace Emby.Sso.LicenceService
                     return Results.StatusCode(reply.StatusCode);
                 }
 
-                return Results.Json(new { status = reply.Token }, statusCode: 200);
+                // `licence` only when renewing, and then beside `status` rather
+                // than instead of it: a plugin too old to know about renewals
+                // reads `status` as it always has and ignores the rest.
+                return reply.Licence == null
+                    ? Results.Json(new { status = reply.Token }, statusCode: 200)
+                    : Results.Json(new { status = reply.Token, licence = reply.Licence }, statusCode: 200);
             });
 
             app.MapPost("/paypal/webhook", async (HttpContext context, PayPalWebhookHandler handler) =>

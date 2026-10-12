@@ -278,6 +278,73 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.DoesNotContain(_service.KeyPath, text, StringComparison.Ordinal);
         }
 
+        [Fact]
+        public async Task The_status_reply_carries_a_licence_property_only_when_it_renews()
+        {
+            // The plugin reads exactly `status` and, when present, `licence`.
+            // This needs a deployment that signs for itself, because one that
+            // does not cannot answer the status question at all.
+            using var service = new TestService(options => options.PayPal.ClientId = null);
+
+            service.Options.SigningKeyPath = service.KeyPath;
+
+            var paidUntil = new DateTimeOffset(2027, 3, 1, 0, 0, 0, TimeSpan.Zero);
+            var raw = RedemptionCode.Generate();
+            var hash = RedemptionCode.Hash(raw);
+
+            service.Store.UpsertVendorCode("ref-1", hash, "test", 3, paidUntil, false, null, service.Clock.GetUtcNow());
+
+            var held = service.ActivateAndSign(
+                new Activation.ActivationRequest { Code = RedemptionCode.Format(raw), ServerId = ServerA, PluginVersion = "1.4.0" },
+                "10.0.0.1").Licence;
+
+            Assert.NotNull(held);
+
+            var app = Program.BuildApp(service.Options, builder => builder.WebHost.UseTestServer());
+
+            try
+            {
+                await app.StartAsync();
+
+                using var client = app.GetTestClient();
+                var question = new { serverId = ServerA, fingerprint = LicenceFormat.Fingerprint(held) };
+
+                var unchanged = await client.PostAsJsonAsync("/v1/licence/status", question);
+
+                Assert.Equal(HttpStatusCode.OK, unchanged.StatusCode);
+
+                using (var body = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync()))
+                {
+                    Assert.Equal(JsonValueKind.String, body.RootElement.GetProperty("status").ValueKind);
+                    Assert.False(body.RootElement.TryGetProperty("licence", out _));
+                }
+
+                service.Store.UpsertVendorCode(
+                    "ref-1", hash, "test", 3, paidUntil.AddYears(1), false, null, service.Clock.GetUtcNow());
+
+                var renewed = await client.PostAsJsonAsync("/v1/licence/status", question);
+
+                Assert.Equal(HttpStatusCode.OK, renewed.StatusCode);
+
+                using (var body = JsonDocument.Parse(await renewed.Content.ReadAsStringAsync()))
+                {
+                    Assert.Equal(JsonValueKind.String, body.RootElement.GetProperty("status").ValueKind);
+
+                    var licence = body.RootElement.GetProperty("licence").GetString();
+
+                    Assert.Equal(3, licence.Split('.').Length);
+                    Assert.Equal(
+                        paidUntil.AddYears(1),
+                        new DateTimeOffset(new Microsoft.IdentityModel.JsonWebTokens.JsonWebToken(licence).ValidTo, TimeSpan.Zero));
+                }
+            }
+            finally
+            {
+                await app.StopAsync();
+                await app.DisposeAsync();
+            }
+        }
+
         private Task<HttpResponseMessage> Activate(string code, string serverId)
         {
             return Post(_client, code, serverId);

@@ -154,6 +154,263 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Equal(second, Claims(Statuses().Check(Ask(second, "0b3d0f8fd4d9412e9c4e5ba0d09a3f77"), "10.0.0.1").Token).Subject);
         }
 
+        [Fact]
+        public async Task An_unchanged_expiry_hands_back_no_licence()
+        {
+            var fingerprint = await ActivatedLicence();
+            var reply = Statuses().Check(Ask(fingerprint), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(reply.Token));
+            Assert.Null(reply.Licence);
+        }
+
+        [Fact]
+        public async Task A_vendor_code_extended_after_activation_hands_back_a_licence_to_the_new_expiry()
+        {
+            // The renewal case: the portal moved paid-until a year on, and the
+            // licence on the server still says the old date.
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+            _service.Clock.Advance(TimeSpan.FromDays(30));
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(reply.Token));
+
+            // The status token is still about the licence that was asked about,
+            // not the one being handed back.
+            Assert.Equal(LicenceFormat.Fingerprint(held), Claims(reply.Token).Subject);
+
+            await AssertRenewed(reply.Licence, held, PaidUntil.AddYears(1));
+        }
+
+        [Fact]
+        public async Task The_renewed_licence_answers_valid_without_another_licence()
+        {
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var renewed = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence;
+
+            Assert.NotNull(renewed);
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(renewed)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(reply.Token));
+            Assert.Equal(LicenceFormat.Fingerprint(renewed), Claims(reply.Token).Subject);
+            Assert.Null(reply.Licence);
+        }
+
+        [Fact]
+        public async Task The_old_licence_is_renewed_again_when_the_server_did_not_keep_the_new_one()
+        {
+            // A plugin that crashed before saving what it was handed asks with
+            // the old fingerprint again tomorrow. That must still be recognised
+            // and still renew, or the customer is stuck on the old date.
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            Assert.NotNull(Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence);
+
+            _service.Clock.Advance(TimeSpan.FromDays(1));
+
+            var again = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(again.Token));
+            await AssertRenewed(again.Licence, held, PaidUntil.AddYears(1));
+        }
+
+        [Fact]
+        public async Task A_licence_renewed_twice_keeps_every_step_recognised()
+        {
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var second = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence;
+
+            Extend("ref-1", hash, PaidUntil.AddYears(2));
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(second)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(reply.Token));
+            await AssertRenewed(reply.Licence, held, PaidUntil.AddYears(2));
+        }
+
+        [Fact]
+        public async Task A_voided_code_is_revoked_and_hands_back_no_licence_even_when_extended()
+        {
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            _service.Store.UpsertVendorCode(
+                "ref-1", hash, "test", 3, PaidUntil.AddYears(1), true, "refunded", _service.Clock.GetUtcNow());
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Revoked, StatusOf(reply.Token));
+            Assert.Null(reply.Licence);
+        }
+
+        [Fact]
+        public async Task A_released_activation_is_revoked_and_hands_back_no_licence_even_when_extended()
+        {
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var renewed = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1").Licence;
+
+            _service.Store.ReleaseVendorActivation("ref-1", ServerA, _service.Clock.GetUtcNow());
+            Extend("ref-1", hash, PaidUntil.AddYears(2));
+
+            // Both the original and the renewed licence belong to the released
+            // activation, and both must stop.
+            foreach (var licence in new[] { held, renewed })
+            {
+                var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(licence)), "10.0.0.1");
+
+                Assert.Equal(LicenceStatusToken.Revoked, StatusOf(reply.Token));
+                Assert.Null(reply.Licence);
+            }
+        }
+
+        [Fact]
+        public async Task A_reopened_activation_still_handed_its_original_licence_is_renewed_to_the_code_expiry()
+        {
+            // Re-activating a released server hands back the licence signed for
+            // its first activation, with that activation's expiry. The status
+            // check is what brings it up to date.
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            _service.Store.ReleaseVendorActivation("ref-1", ServerA, _service.Clock.GetUtcNow());
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var reopened = _service.Activations.Activate(
+                new ActivationRequest { Code = code, ServerId = ServerA, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+
+            Assert.True(reopened.IsSuccess);
+            Assert.Equal(held, reopened.Licence);
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(reopened.Licence)), "10.0.0.1");
+
+            Assert.Equal(LicenceStatusToken.Valid, StatusOf(reply.Token));
+            await AssertRenewed(reply.Licence, held, PaidUntil.AddYears(1));
+        }
+
+        [Fact]
+        public async Task Any_active_code_whose_expiry_moved_is_renewed_not_only_vendor_codes()
+        {
+            var code = _service.GiveOutACode();
+            var held = await HeldLicence(code);
+            var moved = _service.Clock.GetUtcNow().AddDays(365 + 90);
+
+            // There is no command that moves a manual code's expiry; an operator
+            // doing it by hand in the database is exactly the case this covers.
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + _service.Options.DatabasePath))
+            {
+                connection.Open();
+
+                using var command = connection.CreateCommand();
+
+                command.CommandText = "UPDATE codes SET expires_utc = $e WHERE code_hash = $h;";
+                command.Parameters.AddWithValue("$e", LicenceFormat.Iso(moved));
+                command.Parameters.AddWithValue("$h", RedemptionCode.Hash(Normalise(code)));
+
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            var reply = Statuses().Check(Ask(LicenceFormat.Fingerprint(held)), "10.0.0.1");
+
+            await AssertRenewed(reply.Licence, held, moved);
+        }
+
+        [Fact]
+        public async Task A_question_from_a_different_server_gets_its_answer_but_no_licence()
+        {
+            // The renewed licence is for the server the activation was made
+            // for. Knowing a fingerprint must not be a way to obtain a licence
+            // on the caller's say-so about which server it is.
+            var hash = VendorCode("ref-1", PaidUntil, out var code);
+            var held = await HeldLicence(code);
+
+            Extend("ref-1", hash, PaidUntil.AddYears(1));
+
+            var reply = Statuses().Check(
+                Ask(LicenceFormat.Fingerprint(held), "0b3d0f8fd4d9412e9c4e5ba0d09a3f77"),
+                "10.0.0.1");
+
+            Assert.True(reply.IsAnswered);
+            Assert.Null(reply.Licence);
+        }
+
+        private static readonly DateTimeOffset PaidUntil = new DateTimeOffset(2027, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        private string VendorCode(string vendorRef, DateTimeOffset expires, out string code)
+        {
+            var raw = RedemptionCode.Generate();
+            var hash = RedemptionCode.Hash(raw);
+
+            _service.Store.UpsertVendorCode(vendorRef, hash, "test", 3, expires, false, null, _service.Clock.GetUtcNow());
+
+            code = RedemptionCode.Format(raw);
+
+            return hash;
+        }
+
+        private void Extend(string vendorRef, string hash, DateTimeOffset expires)
+        {
+            _service.Store.UpsertVendorCode(vendorRef, hash, "test", 3, expires, false, null, _service.Clock.GetUtcNow());
+        }
+
+        private async Task<string> HeldLicence(string code, string serverId = ServerA)
+        {
+            var reply = _service.ActivateAndSign(
+                new ActivationRequest { Code = code, ServerId = serverId, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+
+            Assert.True(reply.IsSuccess);
+
+            await Task.CompletedTask;
+
+            return reply.Licence;
+        }
+
+        /// <summary>
+        /// The licence handed back is a real one: signed by the service's key,
+        /// for the same licensee and server as the one it replaces, issued now
+        /// and expiring exactly at the code's expiry.
+        /// </summary>
+        private async Task AssertRenewed(string renewed, string held, DateTimeOffset expires)
+        {
+            Assert.False(string.IsNullOrEmpty(renewed));
+            Assert.NotEqual(held, renewed);
+
+            var verdict = await LicenceVerifier.VerifyAsync(
+                renewed,
+                Configuration.TrustedKeys.Parse(_service.Key.PublicJwk).Keys,
+                new SigningRequest
+                {
+                    Licensee = Claims(held).Subject,
+                    ServerId = ServerA,
+                    IssuedAt = LicenceFormat.Iso(_service.Clock.GetUtcNow()),
+                    Expires = LicenceFormat.Iso(expires),
+                });
+
+            Assert.True(verdict.IsValid, verdict.Problem);
+            Assert.Contains(ServerA, Claims(renewed).Audiences);
+        }
+
         private LicenceStatusService Statuses()
         {
             return new LicenceStatusService(
