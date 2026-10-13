@@ -271,7 +271,15 @@ namespace Emby.Sso.LicenceService
             builder.Services.AddSingleton(options.Admin);
             builder.Services.AddSingleton<ActivationRateLimiter>();
             builder.Services.AddSingleton<CheckoutRateLimiter>();
-            builder.Services.AddSingleton<ActivationService>();
+            // With the signing key when this deployment signs for itself, so a
+            // re-activation can renew a licence that runs out before its code.
+            builder.Services.AddSingleton(provider => new ActivationService(
+                provider.GetRequiredService<LicenceStore>(),
+                provider.GetRequiredService<ActivationRateLimiter>(),
+                provider.GetRequiredService<ServiceOptions>(),
+                provider.GetRequiredService<TimeProvider>(),
+                provider.GetRequiredService<ILogger<ActivationService>>(),
+                signingKey?.Key));
             builder.Services.AddSingleton<PayPalWebhookVerifier>();
             builder.Services.AddSingleton<PayPalWebhookHandler>();
 

@@ -103,6 +103,23 @@ namespace Emby.Sso.LicenceService.Tests
 
         public ActivationService Activations { get; }
 
+        /// <summary>
+        /// The activation service of a deployment that signs for itself: the
+        /// same store, with the private key loaded, so a repeat activation can
+        /// renew a licence that runs out before its code. <see cref="Activations"/>
+        /// stays the offline-signing service most tests are about.
+        /// </summary>
+        public ActivationService SelfSigningActivations(Microsoft.Extensions.Logging.ILogger<ActivationService> log = null)
+        {
+            return new ActivationService(
+                Store,
+                Limiter,
+                Options,
+                Clock,
+                log ?? NullLogger<ActivationService>.Instance,
+                Key.Key);
+        }
+
         public Signing.SigningDesk Desk { get; }
 
         /// <summary>

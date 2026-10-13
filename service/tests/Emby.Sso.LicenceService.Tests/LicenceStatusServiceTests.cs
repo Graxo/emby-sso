@@ -307,9 +307,12 @@ namespace Emby.Sso.LicenceService.Tests
         [Fact]
         public async Task A_reopened_activation_still_handed_its_original_licence_is_renewed_to_the_code_expiry()
         {
-            // Re-activating a released server hands back the licence signed for
-            // its first activation, with that activation's expiry. The status
-            // check is what brings it up to date.
+            // Without a signing key (the offline-signing service here),
+            // re-activating a released server hands back the licence signed for
+            // its first activation, with that activation's expiry, because
+            // nothing on the activation path can sign a longer one. The status
+            // check is what brings it up to date. A self-signing service renews
+            // on the activation itself: see ReactivationRenewalTests.
             var hash = VendorCode("ref-1", PaidUntil, out var code);
             var held = await HeldLicence(code);
 

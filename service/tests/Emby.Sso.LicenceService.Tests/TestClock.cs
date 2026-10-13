@@ -26,5 +26,16 @@ namespace Emby.Sso.LicenceService.Tests
         {
             _now = _now.Add(by);
         }
+
+        /// <summary>Forward only, like Advance: a test that moves time back is testing something else.</summary>
+        public void Set(DateTimeOffset to)
+        {
+            if (to < _now)
+            {
+                throw new ArgumentOutOfRangeException(nameof(to), "the test clock only moves forward");
+            }
+
+            _now = to;
+        }
     }
 }

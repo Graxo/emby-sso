@@ -7,6 +7,7 @@ using Emby.Sso.LicenceService.RateLimiting;
 using Emby.Sso.LicenceService.Storage;
 using Emby.Sso.Licensing;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Emby.Sso.LicenceService.Activation
 {
@@ -80,19 +81,28 @@ namespace Emby.Sso.LicenceService.Activation
         private readonly ServiceOptions _options;
         private readonly TimeProvider _time;
         private readonly ILogger<ActivationService> _log;
+        private readonly LicenceRenewer _renewer;
 
+        /// <summary>
+        /// <paramref name="signingKey"/> is null when this deployment does not
+        /// sign for itself. A re-activation whose licence runs out before its
+        /// code then gets the licence that was signed for it, because nothing
+        /// here can make a longer one.
+        /// </summary>
         public ActivationService(
             LicenceStore store,
             ActivationRateLimiter limiter,
             ServiceOptions options,
             TimeProvider time,
-            ILogger<ActivationService> log)
+            ILogger<ActivationService> log,
+            JsonWebKey signingKey = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _limiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _time = time ?? throw new ArgumentNullException(nameof(time));
             _log = log ?? throw new ArgumentNullException(nameof(log));
+            _renewer = signingKey == null ? null : new LicenceRenewer(store, signingKey);
         }
 
         /// <summary>
@@ -275,6 +285,24 @@ namespace Emby.Sso.LicenceService.Activation
                         "That redemption code is not valid.",
                         TimeSpan.Zero);
 
+                case ActivationStatus.Expired:
+                    // invalid_code, because that is the refusal every plugin
+                    // version understands, and what it tells the customer -
+                    // ask the vendor - is right: the licence has to be renewed
+                    // before this code will activate anything again. Nothing
+                    // was recorded, so no seat was spent.
+                    _log.LogInformation(
+                        "activate REFUSED code={Tag} server={Server} client={Client} reason={Reason}",
+                        tag,
+                        serverId,
+                        clientKey,
+                        outcome.Status);
+
+                    return ActivationReply.Failure(
+                        ActivationError.InvalidCode,
+                        "That licence has expired. Renew it, then activate again.",
+                        TimeSpan.Zero);
+
                 case ActivationStatus.Exhausted:
                     _log.LogInformation(
                         "activate EXHAUSTED code={Tag} server={Server} client={Client} used={Used}/{Allowed}",
@@ -324,6 +352,8 @@ namespace Emby.Sso.LicenceService.Activation
                     break;
             }
 
+            var handed = UpToDate(outcome, now, serverId);
+
             _log.LogInformation(
                 "activate OK code={Tag} server={Server} client={Client} {Kind} used={Used}/{Allowed} "
                 + "expires={Expires} fingerprint={Fingerprint} key={Key} plugin={Plugin}",
@@ -333,16 +363,122 @@ namespace Emby.Sso.LicenceService.Activation
                 outcome.Status == ActivationStatus.NewActivation ? "NEW" : "REPEAT",
                 outcome.ActivationsUsed,
                 outcome.ActivationsAllowed,
-                outcome.Request.Expires,
-                outcome.Request.Fingerprint,
-                outcome.Request.KeyId,
+                LicenceFormat.Iso(handed.ExpiresUtc),
+                handed.Fingerprint,
+                handed.KeyId,
                 pluginVersion ?? "(not sent)");
 
             return ActivationReply.Success(
-                outcome.Request.Licence,
-                outcome.ExpiresUtc ?? default,
+                handed.Licence,
+                handed.ExpiresUtc,
                 outcome.ActivationsUsed,
                 outcome.ActivationsAllowed);
+        }
+
+        /// <summary>
+        /// The licence to hand back for an allowed activation: the one its
+        /// signing request carries, unless that runs out before the code does.
+        ///
+        /// The signing request is written once, at first activation, with the
+        /// code's expiry at that moment. When the code has since been renewed,
+        /// handing it back would give a server that re-activates - reinstalled,
+        /// re-opened after a release, or running a plugin too old to take a
+        /// renewal from the status check - a licence that runs out early, or
+        /// one that has already run out and the plugin refuses to store. So
+        /// then a licence to the code's expiry is signed and recorded through
+        /// <see cref="LicenceRenewer"/>, exactly as the status check renews:
+        /// same licensee, same server, a row in renewed_licences, revocable by
+        /// void and release like every other licence for the activation.
+        ///
+        /// It compares with the code, not with what the server may already
+        /// hold: a renewed licence is not stored (only its fingerprint), so a
+        /// server re-activating while holding one gets a fresh one to the same
+        /// date, never a shorter one.
+        ///
+        /// With no signing key nothing here can sign, so the licence that was
+        /// signed is handed back, with its own expiry in the reply rather than
+        /// the code's, and a warning. That is the same limit the status check
+        /// has in that mode (it answers 501). A renewal that fails to sign or
+        /// record is logged and the signed licence handed back likewise, which
+        /// is never worse than before.
+        /// </summary>
+        private HandedLicence UpToDate(ActivationOutcome outcome, DateTimeOffset now, string serverId)
+        {
+            var request = outcome.Request;
+            var signed = new HandedLicence(
+                request.Licence,
+                request.ToExchange().ExpiresUtc,
+                request.Fingerprint,
+                request.KeyId);
+
+            if (outcome.ExpiresUtc == null)
+            {
+                return signed;
+            }
+
+            var expires = outcome.ExpiresUtc.Value;
+
+            // Whole seconds on both sides, as in the status check: the stored
+            // expiry has no more, and a fraction must not look like a renewal.
+            if (LicenceFormat.Iso(expires).CompareTo(request.Expires) <= 0)
+            {
+                return signed;
+            }
+
+            if (_renewer == null)
+            {
+                _log.LogWarning(
+                    "activate: server={Server} is handed its licence to {Signed} although its code runs to {Code}; "
+                    + "no signing key is loaded, so no longer licence can be made here",
+                    serverId,
+                    request.Expires,
+                    LicenceFormat.Iso(expires));
+
+                return signed;
+            }
+
+            try
+            {
+                var held = _store.FindHeldLicence(request.Fingerprint)
+                    ?? throw new InvalidOperationException("the signed licence of request " + request.RequestId + " is not in the store");
+
+                var licence = _renewer.Renew(held, expires, now);
+
+                _log.LogInformation(
+                    "activate RENEWED server={Server} from={Old} to={New} expires={Expires} key={Key}",
+                    held.ServerId,
+                    request.Fingerprint,
+                    licence.Fingerprint,
+                    LicenceFormat.Iso(expires),
+                    licence.KeyId);
+
+                return new HandedLicence(licence.Token, licence.ExpiresAt, licence.Fingerprint, licence.KeyId);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "activate: renewing the licence of server={Server} FAILED", serverId);
+
+                return signed;
+            }
+        }
+
+        private sealed class HandedLicence
+        {
+            public HandedLicence(string licence, DateTimeOffset expiresUtc, string fingerprint, string keyId)
+            {
+                Licence = licence;
+                ExpiresUtc = expiresUtc;
+                Fingerprint = fingerprint;
+                KeyId = keyId;
+            }
+
+            public string Licence { get; }
+
+            public DateTimeOffset ExpiresUtc { get; }
+
+            public string Fingerprint { get; }
+
+            public string KeyId { get; }
         }
 
         private ActivationReply Malformed(string clientKey, string reason, string message)

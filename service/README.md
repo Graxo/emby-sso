@@ -156,7 +156,12 @@ these can change without breaking it:
 **`malformed_request` versus `invalid_code`.** A code that is the wrong length
 or has characters outside the alphabet is `malformed_request` — the plugin can
 say "check what you typed". A well-formed code that this service has never heard
-of, or that was refunded, is `invalid_code`. The distinction leaks only the
+of, or that was refunded, or whose expiry has passed, is `invalid_code`. An
+expired code is refused before anything is recorded, so it takes no seat; once
+it is paid again (its expiry moves on) the same server activates normally, and
+a re-activation whose first licence runs out before the code gets a new licence
+to the code's expiry (only when this service holds the signing key; offline it
+gets the licence that was signed). The distinction leaks only the
 code's length and alphabet, both of which are printed on the email the code
 arrived in, and it saves the vendor a support thread every time somebody
 transposes two characters.

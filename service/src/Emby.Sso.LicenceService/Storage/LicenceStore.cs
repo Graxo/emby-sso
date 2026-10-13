@@ -504,14 +504,27 @@ CREATE TABLE IF NOT EXISTS webhook_events (
                         : ActivationStatus.Void);
             }
 
+            // A code that has run out is refused before anything is written:
+            // no seat, no signing request, no licence that is dead on arrival.
+            // Without this a new server took a seat for a licence the plugin
+            // refuses as expired. Paying again moves expires_utc on, and the
+            // next attempt goes through.
+            if (code.ExpiresUtc != null && code.ExpiresUtc.Value <= now)
+            {
+                return ActivationOutcome.Unknown(ActivationStatus.Expired);
+            }
+
             var used = CountActivations(connection, transaction, code.Id);
             var existing = ReadActivation(connection, transaction, code.Id, serverKey);
             var reopening = existing != null && IsReleased(connection, transaction, existing.Value);
 
             // The expiry is fixed at the code's first activation and every
-            // licence signed from it afterwards carries the same one. Re-issuing
-            // therefore cannot extend a licence, and the second server a customer
-            // activates does not get a longer one than the first.
+            // signing request made from it carries the same one, so the second
+            // server a customer activates does not get a longer licence than the
+            // first. Only moving the code's expiry (a vendor renewal, an
+            // operator's extension) lengthens a licence, and then through
+            // renewed_licences, never by changing a signing request: see
+            // ActivationService.UpToDate and LicenceStatusService.
             //
             // A vendor-managed code always has expires_utc set (the vendor's
             // paid-until), so for those this never falls through to
@@ -2003,6 +2016,13 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         Exhausted,
         AlreadyActivated,
         NewActivation,
+
+        /// <summary>
+        /// The code is active but its expiry has passed (a vendor code whose
+        /// paid-until ran out, or a shop code past its licence days). Refused
+        /// before a seat is taken or a signing request made.
+        /// </summary>
+        Expired,
 
         /// <summary>
         /// The activation is allowed and recorded, and there is no licence to

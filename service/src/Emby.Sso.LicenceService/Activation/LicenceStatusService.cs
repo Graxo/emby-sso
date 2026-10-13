@@ -36,9 +36,10 @@ namespace Emby.Sso.LicenceService.Activation
     /// IT ALSO DELIVERS RENEWALS. A licence's expiry is fixed when it is
     /// signed, but a code's is not: the vendor API moves it on each paid
     /// renewal, and an operator can extend one. Without this, a renewed
-    /// customer's server would run out on the old date - and so would one that
-    /// re-activated after a release, which is handed back the licence signed
-    /// for its first activation. So when the answer is valid and the code now
+    /// customer's server would run out on the old date. (A server that
+    /// re-activates is brought up to date by the activation itself - see
+    /// ActivationService.UpToDate - and both renew through
+    /// <see cref="LicenceRenewer"/>.) So when the answer is valid and the code now
     /// runs past the licence the caller holds, the reply also carries a new
     /// licence to the code's expiry, which the plugin stores in place of the
     /// old one. It is the same licence in every other respect - same licensee,
@@ -50,7 +51,7 @@ namespace Emby.Sso.LicenceService.Activation
         private readonly LicenceStore _store;
         private readonly ActivationRateLimiter _limiter;
         private readonly JsonWebKey _signingKey;
-        private readonly LicenceIssuer _issuer;
+        private readonly LicenceRenewer _renewer;
         private readonly TimeProvider _time;
         private readonly ILogger<LicenceStatusService> _log;
 
@@ -71,7 +72,7 @@ namespace Emby.Sso.LicenceService.Activation
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _limiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
             _signingKey = signingKey;
-            _issuer = signingKey == null ? null : new LicenceIssuer(signingKey);
+            _renewer = signingKey == null ? null : new LicenceRenewer(store, signingKey);
             _time = time ?? throw new ArgumentNullException(nameof(time));
             _log = log ?? throw new ArgumentNullException(nameof(log));
         }
@@ -211,9 +212,7 @@ namespace Emby.Sso.LicenceService.Activation
                     return null;
                 }
 
-                var licence = _issuer.Issue(held.Licensee, held.ServerId, now, expires);
-
-                _store.RecordRenewedLicence(held, licence);
+                var licence = _renewer.Renew(held, expires, now);
 
                 _log.LogInformation(
                     "licence status RENEWED server={Server} from={Old} to={New} expires={Expires} key={Key}",

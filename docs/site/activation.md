@@ -154,7 +154,7 @@ refusal and **Info** for a success. Neither ever contains the code.
 |---|---|---|
 | Your licence has been requested and is being issued. | `pending_signature`. **Not an error, and your code has not been used up.** The vendor signs licences on a machine that is deliberately kept offline, so it is not instant — see [Signing licences offline](offline-signing.md) for why. | Press Activate again in a few minutes. Pressing it early costs nothing. |
 | Activated. The licence for this server has been saved. | The service issued a licence, this build verified it, and it was stored. | Nothing. Sign-ins check the stored licence offline from here on. |
-| That redemption code was not recognised. | `invalid_code`: the service does not know it, or the purchase has not completed. | Check for typing mistakes, then ask the vendor. |
+| That redemption code was not recognised. | `invalid_code`: the service does not know it, the purchase has not completed, or the licence has expired and has not been renewed. | Check for typing mistakes, then ask the vendor (or renew the licence). |
 | That redemption code has already been activated on as many servers as it allows. | `code_exhausted`. | Ask the vendor to release an activation, or buy another licence. |
 | Too many activation attempts. | `rate_limited`. A numeric `Retry-After` is turned into a wait; an HTTP-date one is not, and you are told to wait a few minutes instead. | Wait and try again. |
 | The licensing service reported a problem of its own. | `server_error`. Nothing is wrong with your code or your server. | Try again in a few minutes. |
