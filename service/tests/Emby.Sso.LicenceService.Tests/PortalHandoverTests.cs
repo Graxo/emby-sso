@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Emby.Sso.LicenceService.Configuration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Emby.Sso.LicenceService.Tests
@@ -41,10 +44,19 @@ namespace Emby.Sso.LicenceService.Tests
             _service?.Dispose();
         }
 
-        private async Task StartAsync(string portalUrl)
+        private async Task StartAsync(string portalUrl, Action<ServiceOptions> tweak = null, Action<WebApplicationBuilder> configure = null)
         {
-            _service = new TestService(o => o.PortalUrl = portalUrl);
-            _app = Program.BuildApp(_service.Options, builder => builder.WebHost.UseTestServer());
+            _service = new TestService(o =>
+            {
+                o.PortalUrl = portalUrl;
+                tweak?.Invoke(o);
+            });
+
+            _app = Program.BuildApp(_service.Options, builder =>
+            {
+                builder.WebHost.UseTestServer();
+                configure?.Invoke(builder);
+            });
 
             await _app.StartAsync();
 
@@ -103,6 +115,97 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
+        public async Task The_paypal_webhook_is_not_mapped_in_portal_mode()
+        {
+            var response = await _client.PostAsync("/paypal/webhook", new StringContent("{}"));
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task The_paypal_webhook_is_still_mapped_without_a_portal_url()
+        {
+            await DisposeAsync();
+            _app = null;
+            await StartAsync(null);
+
+            var response = await _client.PostAsync("/paypal/webhook", new StringContent("{}"));
+
+            Assert.NotEqual(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task Portal_mode_starts_with_no_paypal_configuration_at_all()
+        {
+            await DisposeAsync();
+            _app = null;
+
+            await StartAsync(Portal, o =>
+            {
+                o.PayPal.WebhookId = null;
+                o.PayPal.ClientId = null;
+                o.PayPal.ClientSecret = null;
+                o.PayPal.Price = null;
+                o.PayPal.MinimumAmount = null;
+            });
+
+            Assert.Empty(_service.Options.Problems());
+            Assert.Equal(HttpStatusCode.OK, (await _client.GetAsync("/healthz")).StatusCode);
+        }
+
+        [Fact]
+        public void Without_a_portal_url_missing_paypal_configuration_is_still_a_problem()
+        {
+            Assert.Contains(Read(null, withPayPal: false).Problems(), p => p.Contains("PAYPAL_WEBHOOK_ID"));
+            Assert.Empty(Read(Portal, withPayPal: false).Problems());
+        }
+
+        [Fact]
+        public async Task Paypal_settings_in_portal_mode_are_ignored_with_one_startup_warning()
+        {
+            await DisposeAsync();
+            _app = null;
+
+            var log = new RecordingLogger<object>();
+
+            // TestService already sets a webhook id, so PayPal is "set anyway".
+            await StartAsync(Portal, null, b => b.Logging.AddProvider(new Provider(log)));
+
+            var warnings = log.At(LogLevel.Warning).Where(l => l.Rendered.Contains("PAYPAL_")).ToList();
+
+            Assert.Single(warnings);
+            Assert.Equal(HttpStatusCode.NotFound, (await _client.PostAsync("/paypal/webhook", new StringContent("{}"))).StatusCode);
+
+            await DisposeAsync();
+            _app = null;
+
+            var quiet = new RecordingLogger<object>();
+
+            await StartAsync(Portal, o => o.PayPal.WebhookId = null, b => b.Logging.AddProvider(new Provider(quiet)));
+
+            Assert.DoesNotContain(quiet.At(LogLevel.Warning), l => l.Rendered.Contains("PAYPAL_"));
+        }
+
+        private sealed class Provider : ILoggerProvider
+        {
+            private readonly RecordingLogger<object> _log;
+
+            public Provider(RecordingLogger<object> log)
+            {
+                _log = log;
+            }
+
+            public ILogger CreateLogger(string categoryName)
+            {
+                return categoryName == "Emby.Sso.LicenceService" ? _log : NullLogger.Instance;
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        [Fact]
         public void The_variable_is_read_and_must_be_an_https_url()
         {
             Assert.Equal(Portal, Read(Portal).PortalUrl);
@@ -112,12 +215,12 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Contains(Read("not a url").Problems(), p => p.Contains("LICENCE_PORTAL_URL"));
         }
 
-        private static ServiceOptions Read(string portalUrl)
+        private static ServiceOptions Read(string portalUrl, bool withPayPal = true)
         {
             var env = new Dictionary<string, string>
             {
                 ["LICENCE_PUBLIC_KEYS"] = "{\"kty\":\"RSA\",\"n\":\"" + new string('A', 342) + "\",\"e\":\"AQAB\"}",
-                ["PAYPAL_WEBHOOK_ID"] = "WH-1",
+                ["PAYPAL_WEBHOOK_ID"] = withPayPal ? "WH-1" : null,
                 ["LICENCE_PORTAL_URL"] = portalUrl,
             };
 

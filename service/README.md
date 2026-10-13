@@ -486,7 +486,7 @@ rather than starting half-configured.
 | `LICENCE_BACKUP_PASSPHRASE` | — | Turns on `/admin/backup`. At least 16 characters. There is no unencrypted backup. |
 | `LICENCE_PUBLIC_BASE_URL` | — | The https address this service is reached on. Derives the PayPal return and cancel URLs. |
 | `LICENCE_VENDOR_TOKEN` | — | **Set this to turn on `/v1/vendor/*`**, the API the portal uses to register, void and extend codes and to free a seat. A bearer token, compared in constant time and trimmed. Unset = the routes do not exist. A refused request is logged once as a warning, without the token. |
-| `LICENCE_PORTAL_URL` | — | The portal's public order page, an absolute https URL. Set = this service stops selling: `GET /`, `/buy` and `/buy/*` answer 301 there, `POST /buy/start` and `POST /v1/checkout` answer 410. Activation, status and the vendor API are untouched. |
+| `LICENCE_PORTAL_URL` | — | The portal's public order page, an absolute https URL. Set = this service stops selling: `GET /`, `/buy` and `/buy/*` answer 301 there, `POST /buy/start` and `POST /v1/checkout` answer 410. Activation, status and the vendor API are untouched. No PAYPAL_* settings are needed in this mode: the PayPal webhook is not mapped, and PAYPAL_* values that are set are ignored (one startup warning). |
 | `LICENCE_ACTIVATIONS_ALLOWED` | `3` | Servers per code. |
 | `LICENCE_DAYS` | `365` | Licence term, fixed at a code's first activation. |
 | `LICENCE_TRUSTED_PROXY_HOPS` | `0` | See above. |

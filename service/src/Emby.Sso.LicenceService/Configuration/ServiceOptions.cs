@@ -135,9 +135,21 @@ namespace Emby.Sso.LicenceService.Configuration
         /// service sells for itself. Set, its own shop is handed over: GET /,
         /// /buy and /buy/* answer 301 to this address, and POST /buy/start and
         /// POST /v1/checkout answer 410, so nothing here can start a payment.
-        /// Activation, status, release and vendor routes are untouched.
+        /// Activation, status, release and vendor routes are untouched. In this
+        /// mode the service needs no PayPal configuration at all, the PayPal
+        /// webhook is not mapped (nothing may create codes through PayPal any
+        /// more), and PayPal settings that are present are ignored.
         /// </summary>
         public string PortalUrl { get; set; }
+
+        /// <summary>
+        /// Whether any PayPal credential or the webhook id is set. Only used to
+        /// warn that portal mode ignores them.
+        /// </summary>
+        public bool PayPalIsConfigured =>
+            !string.IsNullOrWhiteSpace(PayPal.WebhookId)
+            || !string.IsNullOrWhiteSpace(PayPal.ClientId)
+            || !string.IsNullOrWhiteSpace(PayPal.ClientSecret);
 
         public RateLimitOptions RateLimit { get; } = new RateLimitOptions();
 
@@ -374,7 +386,15 @@ namespace Emby.Sso.LicenceService.Configuration
             }
 
             problems.AddRange(RateLimit.Problems());
-            problems.AddRange(PayPal.Problems());
+
+            // In portal mode nothing here talks to PayPal: the webhook is not
+            // mapped and the shop is gone, so PayPal configuration is not
+            // required, and not checked either - what is set is ignored.
+            if (PortalUrl == null)
+            {
+                problems.AddRange(PayPal.Problems());
+            }
+
             problems.AddRange(Mail.Problems());
             problems.AddRange(Admin.Problems());
 

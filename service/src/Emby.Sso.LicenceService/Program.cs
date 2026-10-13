@@ -359,6 +359,13 @@ namespace Emby.Sso.LicenceService
                     options.Mail.Port);
             }
 
+            if (options.PortalUrl != null && options.PayPalIsConfigured)
+            {
+                log.LogWarning(
+                    "LICENCE_PORTAL_URL is set, so the PayPal settings (PAYPAL_*) are ignored: the PayPal webhook is "
+                    + "not mapped and this service does not sell. Remove them.");
+            }
+
             log.LogInformation("admin page: {Admin}", options.Admin.Describe());
 
             var waiting = store.CountWaitingToBeSigned();
@@ -559,45 +566,50 @@ namespace Emby.Sso.LicenceService
                     : Results.Json(new { status = reply.Token, licence = reply.Licence }, statusCode: 200);
             });
 
-            app.MapPost("/paypal/webhook", async (HttpContext context, PayPalWebhookHandler handler) =>
+            // Not mapped in portal mode: the shop has moved, so nothing may
+            // create a code through PayPal here any more.
+            if (options.PortalUrl == null)
             {
-                var body = await ReadBodyAsync(context).ConfigureAwait(false);
-
-                if (body == null)
+                app.MapPost("/paypal/webhook", async (HttpContext context, PayPalWebhookHandler handler) =>
                 {
-                    return Results.StatusCode((int)HttpStatusCode.RequestEntityTooLarge);
-                }
+                    var body = await ReadBodyAsync(context).ConfigureAwait(false);
 
-                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (body == null)
+                    {
+                        return Results.StatusCode((int)HttpStatusCode.RequestEntityTooLarge);
+                    }
 
-                foreach (var header in context.Request.Headers)
-                {
-                    headers[header.Key] = header.Value.ToString();
-                }
+                    var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-                var outcome = await handler.HandleAsync(headers, body, context.RequestAborted).ConfigureAwait(false);
+                    foreach (var header in context.Request.Headers)
+                    {
+                        headers[header.Key] = header.Value.ToString();
+                    }
 
-                switch (outcome.Status)
-                {
-                    case WebhookStatus.Refused:
-                        // 401 and nothing else. The reason is in the log; a caller
-                        // probing the endpoint learns only that it refused.
-                        return Results.StatusCode((int)HttpStatusCode.Unauthorized);
+                    var outcome = await handler.HandleAsync(headers, body, context.RequestAborted).ConfigureAwait(false);
 
-                    case WebhookStatus.Unusable:
-                        // 400 so PayPal stops retrying something we will never
-                        // understand, and the vendor sees it in their webhook
-                        // dashboard rather than only in our log.
-                        return Results.StatusCode((int)HttpStatusCode.BadRequest);
+                    switch (outcome.Status)
+                    {
+                        case WebhookStatus.Refused:
+                            // 401 and nothing else. The reason is in the log; a caller
+                            // probing the endpoint learns only that it refused.
+                            return Results.StatusCode((int)HttpStatusCode.Unauthorized);
 
-                    default:
-                        // Everything else - created, replay, ignored, and even a
-                        // code we could not write down - is 200. PayPal retries
-                        // anything else, and a retry of a payment already recorded
-                        // achieves nothing.
-                        return Results.Ok(new { received = true });
-                }
-            });
+                        case WebhookStatus.Unusable:
+                            // 400 so PayPal stops retrying something we will never
+                            // understand, and the vendor sees it in their webhook
+                            // dashboard rather than only in our log.
+                            return Results.StatusCode((int)HttpStatusCode.BadRequest);
+
+                        default:
+                            // Everything else - created, replay, ignored, and even a
+                            // code we could not write down - is 200. PayPal retries
+                            // anything else, and a retry of a payment already recorded
+                            // achieves nothing.
+                            return Results.Ok(new { received = true });
+                    }
+                });
+            }
 
             if (options.PortalUrl != null)
             {
