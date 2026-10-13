@@ -41,6 +41,33 @@ namespace Emby.Sso.Protocol
     }
 
     /// <summary>
+    /// The outcome of the daily check plus the renewed licence the vendor may
+    /// have handed back with it. <see cref="RenewedLicence"/> is set ONLY on
+    /// <see cref="LicenceStatusOutcome.Valid"/>, and is still unchecked data -
+    /// see <see cref="LicenceRenewal"/>.
+    /// </summary>
+    internal sealed class LicenceStatusAnswer
+    {
+        public static readonly LicenceStatusAnswer NoAnswer = new LicenceStatusAnswer(LicenceStatusOutcome.NoAnswer, null);
+
+        public LicenceStatusAnswer(LicenceStatusOutcome outcome, string renewedLicence)
+        {
+            Outcome = outcome;
+            RenewedLicence = outcome == LicenceStatusOutcome.Valid ? renewedLicence : null;
+        }
+
+        public LicenceStatusOutcome Outcome { get; }
+
+        public string RenewedLicence { get; }
+
+        /// <summary>
+        /// What was decided about <see cref="RenewedLicence"/>, set by the
+        /// caller that checked it. Null when none was offered.
+        /// </summary>
+        public LicenceRenewal Renewal { get; set; }
+    }
+
+    /// <summary>
     /// Reads the vendor's signed answer to "is this licence still good?".
     ///
     /// THE WHOLE POINT IS THAT IT FAILS OPEN. This runs once a day, over the

@@ -90,11 +90,11 @@ namespace Emby.Sso.Tasks
         {
             progress?.Report(0);
 
-            LicenceStatusOutcome outcome;
+            LicenceStatusAnswer answer;
 
             try
             {
-                outcome = await SsoRuntime.CheckLicenceStatusAsync(cancellationToken).ConfigureAwait(false);
+                answer = await SsoRuntime.CheckLicenceStatusAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -112,7 +112,7 @@ namespace Emby.Sso.Tasks
                 return;
             }
 
-            switch (outcome)
+            switch (answer.Outcome)
             {
                 case LicenceStatusOutcome.Revoked:
                     _logger.Error(
@@ -142,6 +142,23 @@ namespace Emby.Sso.Tasks
                         "SSO licence check: no usable answer. Nothing has changed; it will try again tomorrow.");
 
                     break;
+            }
+
+            if (answer.Renewal != null)
+            {
+                if (answer.Renewal.Accepted)
+                {
+                    _logger.Info(
+                        "SSO licence renewed until {0}.",
+                        answer.Renewal.ExpiresAt.Value.UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    _logger.Warn(
+                        "SSO licence check: the vendor offered a renewed licence but it was not used ({0}). The "
+                        + "licence this server holds is unchanged.",
+                        answer.Renewal.Reason);
+                }
             }
 
             progress?.Report(50);

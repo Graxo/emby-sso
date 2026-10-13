@@ -230,7 +230,7 @@ namespace Emby.Sso
         /// revocation sets the flag, and only a correctly signed valid or
         /// unknown clears it.
         /// </summary>
-        public static async Task<LicenceStatusOutcome> CheckLicenceStatusAsync(CancellationToken cancellationToken)
+        public static async Task<LicenceStatusAnswer> CheckLicenceStatusAsync(CancellationToken cancellationToken)
         {
             var configuration = Configuration;
             var licence = configuration?.LicenceKey;
@@ -242,7 +242,7 @@ namespace Emby.Sso
                 return LicenceStatusOutcome.NoAnswer;
             }
 
-            var outcome = await LicenceStatusClient.CheckAsync(
+            var answer = await LicenceStatusClient.CheckAsync(
                 ActivationHttp,
                 ActivationEndpoint.Resolve(configuration.ActivationServiceUrl),
                 ServerId,
@@ -251,9 +251,11 @@ namespace Emby.Sso
                 DateTimeOffset.UtcNow,
                 cancellationToken).ConfigureAwait(false);
 
+            var outcome = answer.Outcome;
+
             if (outcome == LicenceStatusOutcome.NoAnswer)
             {
-                return outcome;
+                return answer;
             }
 
             var revoked = LicenceStatusCheck.StopsSignIns(outcome);
@@ -261,7 +263,31 @@ namespace Emby.Sso
 
             if (plugin == null)
             {
-                return outcome;
+                return answer;
+            }
+
+            // A renewal goes through the same validation as an activation and
+            // must run longer than what is held; anything else keeps the old
+            // licence. Evaluated against the licence read above, so a settings
+            // save that changed it meanwhile is not overwritten with a renewal
+            // of the old one.
+            if (answer.RenewedLicence != null)
+            {
+                answer.Renewal = await LicenceRenewal.EvaluateAsync(
+                    answer.RenewedLicence,
+                    licence,
+                    LicencePublicKey.TrustedJwks,
+                    ServerId,
+                    DateTimeOffset.UtcNow).ConfigureAwait(false);
+
+                if (answer.Renewal.Accepted && string.Equals(plugin.Configuration.LicenceKey, licence, StringComparison.Ordinal))
+                {
+                    plugin.Configuration.LicenceKey = answer.RenewedLicence.Trim();
+                }
+                else if (answer.Renewal.Accepted)
+                {
+                    answer.Renewal = null;
+                }
             }
 
             plugin.Configuration.LicenceRevoked = revoked;
@@ -270,7 +296,7 @@ namespace Emby.Sso
 
             plugin.SaveConfiguration();
 
-            return outcome;
+            return answer;
         }
 
         /// <summary>

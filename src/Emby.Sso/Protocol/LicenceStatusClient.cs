@@ -45,7 +45,7 @@ namespace Emby.Sso.Protocol
         /// Returns what the vendor said, or <see cref="LicenceStatusOutcome
         /// .NoAnswer"/> for every way that can fail.
         /// </summary>
-        public static async Task<LicenceStatusOutcome> CheckAsync(
+        public static async Task<LicenceStatusAnswer> CheckAsync(
             HttpClient client,
             string serviceBase,
             string serverId,
@@ -56,12 +56,12 @@ namespace Emby.Sso.Protocol
         {
             if (client == null || string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(licence))
             {
-                return LicenceStatusOutcome.NoAnswer;
+                return LicenceStatusAnswer.NoAnswer;
             }
 
             if (!ActivationEndpoint.TryBuildStatusUrl(serviceBase, out var url, out _))
             {
-                return LicenceStatusOutcome.NoAnswer;
+                return LicenceStatusAnswer.NoAnswer;
             }
 
             var fingerprint = Fingerprint(licence);
@@ -89,7 +89,7 @@ namespace Emby.Sso.Protocol
                     // Including 501, which is what a vendor deployment that does
                     // not sign for itself answers. Not an error - there is
                     // simply no revocation service, and nothing changes.
-                    return LicenceStatusOutcome.NoAnswer;
+                    return LicenceStatusAnswer.NoAnswer;
                 }
 
                 body = await ReadCappedAsync(response, timeout.Token).ConfigureAwait(false);
@@ -99,14 +99,29 @@ namespace Emby.Sso.Protocol
                 // Every network failure, every timeout, every refusal by the
                 // outbound guard, and cancellation at shutdown. All the same
                 // thing: no answer.
-                return LicenceStatusOutcome.NoAnswer;
+                return LicenceStatusAnswer.NoAnswer;
             }
 
-            var token = ReadStatusToken(body);
+            return await ReadAnswerAsync(body, publicKeyJwks, serverId, fingerprint, now).ConfigureAwait(false);
+        }
 
-            return await LicenceStatusCheck
-                .ReadAsync(token, publicKeyJwks, serverId, fingerprint, now)
+        /// <summary>
+        /// Reads a reply body: the status token is verified, and the renewed
+        /// licence beside it is carried along only when that verdict is valid.
+        /// The licence is NOT checked here - that is <see cref="LicenceRenewal"/>.
+        /// </summary>
+        public static async Task<LicenceStatusAnswer> ReadAnswerAsync(
+            string body,
+            IReadOnlyList<string> publicKeyJwks,
+            string serverId,
+            string fingerprint,
+            DateTimeOffset now)
+        {
+            var outcome = await LicenceStatusCheck
+                .ReadAsync(ReadString(body, "status"), publicKeyJwks, serverId, fingerprint, now)
                 .ConfigureAwait(false);
+
+            return new LicenceStatusAnswer(outcome, ReadString(body, "licence"));
         }
 
         /// <summary>
@@ -133,28 +148,29 @@ namespace Emby.Sso.Protocol
         }
 
         /// <summary>
-        /// Pulls the token out of {"status":"..."} without a JSON parser, the
+        /// Pulls a string property out of {"status":"...","licence":"..."} without a JSON parser, the
         /// way ActivationMessage does: the body is from a service this build
         /// does not trust yet, and the token that comes out of it is about to be
-        /// verified cryptographically anyway. Nothing here believes anything.
+        /// verified cryptographically anyway. Nothing here believes anything. A
+        /// value that is not a string (a number, null) reads as absent.
         /// </summary>
-        private static string ReadStatusToken(string body)
+        private static string ReadString(string body, string name)
         {
             if (string.IsNullOrEmpty(body))
             {
                 return null;
             }
 
-            const string Key = "\"status\"";
+            var key = "\"" + name + "\"";
 
-            var at = body.IndexOf(Key, StringComparison.Ordinal);
+            var at = body.IndexOf(key, StringComparison.Ordinal);
 
             if (at < 0)
             {
                 return null;
             }
 
-            var colon = body.IndexOf(':', at + Key.Length);
+            var colon = body.IndexOf(':', at + key.Length);
 
             if (colon < 0)
             {
@@ -163,7 +179,7 @@ namespace Emby.Sso.Protocol
 
             var open = body.IndexOf('"', colon + 1);
 
-            if (open < 0)
+            if (open < 0 || body.Substring(colon + 1, open - colon - 1).Trim().Length > 0)
             {
                 return null;
             }
