@@ -176,13 +176,29 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
-        public async Task The_completed_page_never_shows_a_code_and_says_the_tab_does_not_matter()
+        public void The_completed_page_never_shows_a_code_and_says_the_tab_does_not_matter()
         {
-            var html = await _client.GetStringAsync("/buy/complete");
+            var html = Http.BuyPage.RenderComplete(new Http.BuyPageModel());
 
             Assert.Contains("Thank you", html, StringComparison.Ordinal);
             Assert.Contains("Closing it now loses nothing", html, StringComparison.Ordinal);
             Assert.Contains("email address on your PayPal payment", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// The return URL without PayPal's order id has nothing to capture, so
+        /// it must not say "thank you, payment received" - that page is what
+        /// every buyer saw while no capture was ever made.
+        /// </summary>
+        [Fact]
+        public async Task Returning_without_an_order_id_does_not_claim_a_payment_was_received()
+        {
+            var response = await _client.GetAsync("/buy/complete");
+            var html = await response.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.DoesNotContain("payment has been received", html, StringComparison.Ordinal);
+            Assert.Contains("Nothing was charged", html, StringComparison.Ordinal);
         }
 
         [Fact]

@@ -198,6 +198,83 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Empty(transport.Requests);
         }
 
+        [Fact]
+        public async Task An_approved_order_is_captured_with_its_id_as_the_idempotency_key()
+        {
+            var transport = new RecordingTransport();
+            var client = new PayPalOrdersClient(new HttpClient(transport), Options());
+
+            var outcome = await client.CaptureOrderAsync("7TJ53096CB853001A", CancellationToken.None);
+
+            var capture = transport.Requests[1];
+
+            Assert.Equal(CaptureState.Completed, outcome.State);
+            Assert.Equal("https://api-m.sandbox.paypal.com/v2/checkout/orders/7TJ53096CB853001A/capture", capture.Url);
+            Assert.Equal("Bearer", capture.AuthorizationScheme);
+            Assert.Equal("capture-7TJ53096CB853001A", capture.RequestId);
+        }
+
+        [Fact]
+        public async Task A_declined_capture_is_a_refusal_and_an_already_captured_order_is_a_success()
+        {
+            var declined = new RecordingTransport
+            {
+                OrderStatus = (HttpStatusCode)422,
+                OrderBody = "{\"name\":\"UNPROCESSABLE_ENTITY\",\"details\":[{\"issue\":\"INSTRUMENT_DECLINED\"}]}",
+            };
+
+            var refused = await new PayPalOrdersClient(new HttpClient(declined), Options())
+                .CaptureOrderAsync("7TJ53096CB853001A", CancellationToken.None);
+
+            Assert.Equal(CaptureState.Refused, refused.State);
+            Assert.Equal("INSTRUMENT_DECLINED", refused.Issue);
+
+            var again = new RecordingTransport
+            {
+                OrderStatus = (HttpStatusCode)422,
+                OrderBody = "{\"details\":[{\"issue\":\"ORDER_ALREADY_CAPTURED\"}]}",
+            };
+
+            var completed = await new PayPalOrdersClient(new HttpClient(again), Options())
+                .CaptureOrderAsync("7TJ53096CB853001A", CancellationToken.None);
+
+            Assert.Equal(CaptureState.Completed, completed.State);
+        }
+
+        [Fact]
+        public async Task A_server_error_on_capture_is_an_exception_because_it_says_nothing_about_the_money()
+        {
+            var transport = new RecordingTransport { OrderStatus = HttpStatusCode.ServiceUnavailable, OrderBody = "{}" };
+            var client = new PayPalOrdersClient(new HttpClient(transport), Options());
+
+            await Assert.ThrowsAsync<PayPalApiException>(
+                () => client.CaptureOrderAsync("7TJ53096CB853001A", CancellationToken.None));
+        }
+
+        [Fact]
+        public void A_pending_capture_is_read_from_the_capture_and_not_the_order()
+        {
+            var outcome = PayPalOrdersClient.ReadCapture(
+                "{\"status\":\"COMPLETED\",\"purchase_units\":[{\"payments\":{\"captures\":[{\"status\":\"PENDING\"}]}}]}");
+
+            Assert.Equal(CaptureState.Pending, outcome.State);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("../../v1/oauth2/token")]
+        [InlineData("7TJ5%2F")]
+        public async Task An_order_id_that_is_not_alphanumeric_is_refused_before_any_request(string orderId)
+        {
+            var transport = new RecordingTransport();
+            var client = new PayPalOrdersClient(new HttpClient(transport), Options());
+
+            await Assert.ThrowsAsync<ArgumentException>(() => client.CaptureOrderAsync(orderId, CancellationToken.None));
+
+            Assert.Empty(transport.Requests);
+        }
+
         private static PayPalOptions Options()
         {
             return new PayPalOptions
@@ -224,6 +301,8 @@ namespace Emby.Sso.LicenceService.Tests
             public string AuthorizationScheme { get; set; }
 
             public string AuthorizationParameter { get; set; }
+
+            public string RequestId { get; set; }
         }
 
         /// <summary>
@@ -239,6 +318,10 @@ namespace Emby.Sso.LicenceService.Tests
 
             public string TokenBody { get; set; } = "{\"access_token\":\"test-access-token\",\"expires_in\":32400}";
 
+            public HttpStatusCode? OrderStatus { get; set; }
+
+            public string OrderBody { get; set; }
+
             protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
@@ -251,6 +334,9 @@ namespace Emby.Sso.LicenceService.Tests
                         : await request.Content.ReadAsStringAsync(cancellationToken),
                     AuthorizationScheme = request.Headers.Authorization?.Scheme,
                     AuthorizationParameter = request.Headers.Authorization?.Parameter,
+                    RequestId = request.Headers.TryGetValues("PayPal-Request-Id", out var ids)
+                        ? string.Join(",", ids)
+                        : null,
                 });
 
                 if (request.RequestUri.AbsolutePath.EndsWith("/oauth2/token", StringComparison.Ordinal))
@@ -258,6 +344,26 @@ namespace Emby.Sso.LicenceService.Tests
                     return new HttpResponseMessage(TokenStatus)
                     {
                         Content = new StringContent(TokenBody, System.Text.Encoding.UTF8, "application/json"),
+                    };
+                }
+
+                if (OrderStatus.HasValue)
+                {
+                    return new HttpResponseMessage(OrderStatus.Value)
+                    {
+                        Content = new StringContent(OrderBody, System.Text.Encoding.UTF8, "application/json"),
+                    };
+                }
+
+                if (request.RequestUri.AbsolutePath.EndsWith("/capture", StringComparison.Ordinal))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.Created)
+                    {
+                        Content = new StringContent(
+                            "{\"id\":\"7TJ53096CB853001A\",\"status\":\"COMPLETED\",\"purchase_units\":[{\"payments\":"
+                            + "{\"captures\":[{\"id\":\"3C679366HH908993F\",\"status\":\"COMPLETED\"}]}}]}",
+                            System.Text.Encoding.UTF8,
+                            "application/json"),
                     };
                 }
 

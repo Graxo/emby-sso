@@ -60,7 +60,10 @@ Set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from your sandbox app.
 - [ ] The amount on PayPal's page is the amount `/buy` showed you. If it is
       not, `PAYPAL_PRICE` and `PAYPAL_CURRENCY` are the only things involved.
 - [ ] Log in as the sandbox **personal** account and approve the payment.
-- [ ] You land back on `/buy/complete`.
+- [ ] You land back on `/buy/complete`, and it says "Thank you".
+- [ ] The log says `buy/complete captured paypal order <id>`. Approving takes
+      no money; this capture does, and without it PayPal never sends the
+      webhook below.
 
 If PayPal refuses to create the order, the log line from `buy/start` carries
 the status code. The two likely causes are credentials from the wrong

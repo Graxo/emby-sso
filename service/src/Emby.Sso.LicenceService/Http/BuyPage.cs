@@ -178,6 +178,62 @@ namespace Emby.Sso.LicenceService.Http
             return page.ToString();
         }
 
+        /// <summary>
+        /// PayPal refused the capture (declined card, order never approved,
+        /// order expired), or the return URL carried no order. Either way no
+        /// money moved.
+        /// </summary>
+        public static string RenderNotCharged(BuyPageModel model)
+        {
+            var page = new StringBuilder();
+
+            page.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+            page.Append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+            page.Append("<title>Payment not taken</title>");
+            page.Append("<style>body{font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;");
+            page.Append("margin:0;padding:2.5rem 1.25rem;background:#f6f7f9;color:#16191d;}");
+            page.Append("main{max-width:34rem;margin:0 auto;background:#fff;border:1px solid #dfe3e8;");
+            page.Append("border-radius:10px;padding:1.75rem;}h1{font-size:1.4rem;margin:0 0 .5rem;}</style>");
+            page.Append("</head><body><main>");
+            page.Append("<h1>The payment did not go through.</h1>");
+            page.Append("<p><strong>Nothing was charged</strong> and no licence was created. PayPal did not accept ");
+            page.Append("the payment - most often the payment method was declined.</p>");
+            page.Append("<p><a href=\"/buy\">Try again</a>, with another payment method if you can.</p>");
+            page.Append(Footer(model));
+            page.Append("</main></body></html>");
+
+            return page.ToString();
+        }
+
+        /// <summary>
+        /// The capture call failed in a way that does not say whether the money
+        /// moved (a timeout, a 5xx). The buyer must not be told "nothing was
+        /// charged", and must not be sent to buy again - reloading retries the
+        /// same capture, which PayPal deduplicates.
+        /// </summary>
+        public static string RenderUnconfirmed(BuyPageModel model)
+        {
+            var page = new StringBuilder();
+
+            page.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+            page.Append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+            page.Append("<title>Could not confirm payment</title>");
+            page.Append("<style>body{font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;");
+            page.Append("margin:0;padding:2.5rem 1.25rem;background:#f6f7f9;color:#16191d;}");
+            page.Append("main{max-width:34rem;margin:0 auto;background:#fff;border:1px solid #dfe3e8;");
+            page.Append("border-radius:10px;padding:1.75rem;}h1{font-size:1.4rem;margin:0 0 .5rem;}</style>");
+            page.Append("</head><body><main>");
+            page.Append("<h1>Could not confirm the payment with PayPal.</h1>");
+            page.Append("<p>Reload this page in a minute to try again - it is safe, you will not be charged twice. ");
+            page.Append("Please do not start a new purchase.</p>");
+            page.Append("<p>If PayPal sends you a receipt, the payment went through and your redemption code will ");
+            page.Append("follow by email.</p>");
+            page.Append(Footer(model));
+            page.Append("</main></body></html>");
+
+            return page.ToString();
+        }
+
         public static string RenderCancelled(BuyPageModel model)
         {
             var page = new StringBuilder();
