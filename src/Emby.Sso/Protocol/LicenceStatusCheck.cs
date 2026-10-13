@@ -48,7 +48,8 @@ namespace Emby.Sso.Protocol
     /// </summary>
     internal sealed class LicenceStatusAnswer
     {
-        public static readonly LicenceStatusAnswer NoAnswer = new LicenceStatusAnswer(LicenceStatusOutcome.NoAnswer, null);
+        /// <summary>A fresh instance each time: <see cref="Renewal"/> is settable, so none is shared.</summary>
+        public static LicenceStatusAnswer NoAnswer => new LicenceStatusAnswer(LicenceStatusOutcome.NoAnswer, null);
 
         public LicenceStatusAnswer(LicenceStatusOutcome outcome, string renewedLicence)
         {

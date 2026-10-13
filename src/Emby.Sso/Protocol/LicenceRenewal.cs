@@ -106,6 +106,12 @@ namespace Emby.Sso.Protocol
             }
         }
 
+        /// <summary>A valid renewal that was not stored because the configured licence changed during the check.</summary>
+        public static LicenceRenewal Superseded()
+        {
+            return Refused("the configured licence changed while the check ran");
+        }
+
         private static LicenceRenewal Refused(string reason)
         {
             return new LicenceRenewal(false, null, reason);

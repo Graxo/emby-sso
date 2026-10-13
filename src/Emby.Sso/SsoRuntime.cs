@@ -239,7 +239,7 @@ namespace Emby.Sso
             {
                 // Nothing to ask about. An unlicensed server is already refusing
                 // sign-ins for a reason that has nothing to do with revocation.
-                return LicenceStatusOutcome.NoAnswer;
+                return LicenceStatusAnswer.NoAnswer;
             }
 
             var answer = await LicenceStatusClient.CheckAsync(
@@ -286,7 +286,8 @@ namespace Emby.Sso
                 }
                 else if (answer.Renewal.Accepted)
                 {
-                    answer.Renewal = null;
+                    // Reported by the task as a refusal, so the drop is logged.
+                    answer.Renewal = LicenceRenewal.Superseded();
                 }
             }
 
