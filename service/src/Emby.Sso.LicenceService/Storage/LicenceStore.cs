@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using Emby.Sso.Licensing;
 using Microsoft.Data.Sqlite;
 
@@ -1248,7 +1249,7 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
             long id;
             string status;
             int seats;
-            DateTimeOffset expires;
+            DateTimeOffset? expires;
 
             using (var command = connection.CreateCommand())
             {
@@ -1266,32 +1267,210 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
                 id = reader.GetInt64(0);
                 status = reader.GetString(1);
                 seats = reader.GetInt32(2);
-                expires = reader.IsDBNull(3) ? DateTimeOffset.MinValue : ParseIso(reader.GetString(3));
+
+                // Null, not a made-up date: a code the vendor API created always
+                // has one, but an ADOPTED PayPal or manual code that was never
+                // activated has none until the portal's first PUT sets it. This
+                // used to read DateTimeOffset.MinValue, which went on the wire
+                // as 0001-01-01 - a licence that looks expired two thousand
+                // years ago rather than one that has not started.
+                expires = reader.IsDBNull(3) ? (DateTimeOffset?)null : ParseIso(reader.GetString(3));
             }
 
-            var activations = new List<VendorActivationRow>();
+            var activations = ReadVendorActivations(connection, null, "a.code_id = $c", ("$c", id))
+                .Select(a => a.Activation)
+                .ToList();
+
+            return new VendorLicenceRow(vendorRef, status, seats, expires, activations);
+        }
+
+        /// <summary>
+        /// Every code the vendor API does not manage yet - PayPal sales, codes
+        /// from `issue-code`, anything sold before the portal existed - with
+        /// their activations, so the portal can offer to import them. Void
+        /// codes are included: the portal shows them rather than pretending
+        /// the sale never happened.
+        ///
+        /// One read transaction (deferred: it takes no write lock), so the
+        /// codes and their activations are as of the same moment: an
+        /// activation that lands between two separate queries would otherwise
+        /// belong to a code the first one did not return, or be missing from
+        /// one it did.
+        /// </summary>
+        public IReadOnlyList<UnmanagedCodeRow> ListUnmanagedCodes()
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: true);
+
+            var rows = new List<UnmanagedCodeRow>();
+            var byId = new Dictionary<long, List<VendorActivationRow>>();
 
             using (var command = connection.CreateCommand())
             {
+                command.Transaction = transaction;
                 command.CommandText =
-                    "SELECT server_id, plugin_version, first_seen_utc, last_seen_utc, released_utc "
-                    + "FROM activations WHERE code_id = $c ORDER BY first_seen_utc, id;";
-                command.Parameters.AddWithValue("$c", id);
+                    @"SELECT id, code_hash, licensee, buyer_email, activations_allowed, status, source,
+                             created_utc, expires_utc, licence_days
+                        FROM codes WHERE vendor_ref IS NULL ORDER BY created_utc, id;";
 
                 using var reader = command.ExecuteReader();
 
                 while (reader.Read())
                 {
-                    activations.Add(new VendorActivationRow(
-                        reader.GetString(0),
-                        reader.IsDBNull(1) ? null : reader.GetString(1),
-                        ParseIso(reader.GetString(2)),
-                        ParseIso(reader.GetString(3)),
-                        reader.IsDBNull(4) ? (DateTimeOffset?)null : ParseIso(reader.GetString(4))));
+                    var activations = new List<VendorActivationRow>();
+
+                    byId[reader.GetInt64(0)] = activations;
+
+                    rows.Add(new UnmanagedCodeRow(
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        reader.GetInt32(4),
+                        reader.GetString(5),
+                        reader.GetString(6),
+                        ParseIso(reader.GetString(7)),
+                        reader.IsDBNull(8) ? (DateTimeOffset?)null : ParseIso(reader.GetString(8)),
+                        reader.GetInt32(9),
+                        activations));
                 }
             }
 
-            return new VendorLicenceRow(vendorRef, status, seats, expires, activations);
+            foreach (var (codeId, activation) in ReadVendorActivations(
+                connection,
+                transaction,
+                "a.code_id IN (SELECT id FROM codes WHERE vendor_ref IS NULL)"))
+            {
+                if (byId.TryGetValue(codeId, out var list))
+                {
+                    list.Add(activation);
+                }
+            }
+
+            transaction.Commit();
+
+            return rows;
+        }
+
+        /// <summary>
+        /// Puts a code that already exists - found by its hash - under the
+        /// vendor API's management by giving it <paramref name="vendorRef"/>.
+        /// NOTHING else about the code changes: not its status, seats, expiry,
+        /// licensee, source or activations. The portal's next PUT on the ref
+        /// decides those, through the ordinary update path.
+        ///
+        /// Repeating the call with the same ref and hash is Adopted again
+        /// (AlreadyAdopted), so the portal can retry after losing an answer. A
+        /// code that is already under another ref - including one the portal
+        /// created itself - is never moved: a second ref would let two orders
+        /// both believe they own the same customer's code.
+        ///
+        /// One immediate transaction, and the UPDATE is guarded by
+        /// vendor_ref IS NULL as well: two racing adopts of the same code
+        /// cannot both win, whichever check they passed first.
+        /// </summary>
+        public VendorAdoptResult AdoptVendorCode(string vendorRef, string codeHash)
+        {
+            if (string.IsNullOrWhiteSpace(vendorRef))
+            {
+                throw new ArgumentException("a vendor code needs a reference", nameof(vendorRef));
+            }
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            long id;
+            string currentRef;
+
+            using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT id, vendor_ref FROM codes WHERE code_hash = $h;";
+                read.Parameters.AddWithValue("$h", codeHash);
+
+                using var reader = read.ExecuteReader();
+
+                if (!reader.Read())
+                {
+                    return VendorAdoptResult.NotFound;
+                }
+
+                id = reader.GetInt64(0);
+                currentRef = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+
+            if (string.Equals(currentRef, vendorRef, StringComparison.Ordinal))
+            {
+                return VendorAdoptResult.AlreadyAdopted;
+            }
+
+            if (currentRef != null)
+            {
+                return VendorAdoptResult.AlreadyManaged;
+            }
+
+            if (Exists(connection, transaction, "SELECT 1 FROM codes WHERE vendor_ref = $r;", ("$r", vendorRef)))
+            {
+                return VendorAdoptResult.RefInUse;
+            }
+
+            var changed = Update(
+                connection,
+                transaction,
+                "UPDATE codes SET vendor_ref = $r WHERE id = $id AND vendor_ref IS NULL;",
+                ("$r", vendorRef),
+                ("$id", id));
+
+            if (changed != 1)
+            {
+                return VendorAdoptResult.AlreadyManaged;
+            }
+
+            transaction.Commit();
+
+            return VendorAdoptResult.Adopted;
+        }
+
+        /// <summary>
+        /// The activations the vendor API reports, released ones included, in
+        /// the order the servers first appeared. Shared by the GET by ref and
+        /// the unmanaged list so the two cannot describe one activation two
+        /// ways.
+        /// </summary>
+        private static List<(long CodeId, VendorActivationRow Activation)> ReadVendorActivations(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string where,
+            params (string Name, object Value)[] parameters)
+        {
+            using var command = connection.CreateCommand();
+
+            command.Transaction = transaction;
+            command.CommandText =
+                "SELECT a.code_id, a.server_id, a.plugin_version, a.first_seen_utc, a.last_seen_utc, a.released_utc "
+                + "FROM activations a WHERE " + where + " ORDER BY a.code_id, a.first_seen_utc, a.id;";
+
+            foreach (var (name, value) in parameters)
+            {
+                command.Parameters.AddWithValue(name, value);
+            }
+
+            var rows = new List<(long, VendorActivationRow)>();
+
+            using var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetInt64(0),
+                    new VendorActivationRow(
+                        reader.GetString(1),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        ParseIso(reader.GetString(3)),
+                        ParseIso(reader.GetString(4)),
+                        reader.IsDBNull(5) ? (DateTimeOffset?)null : ParseIso(reader.GetString(5)))));
+            }
+
+            return rows;
         }
 
         /// <summary>
@@ -1874,6 +2053,15 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         HashConflict,
     }
 
+    public enum VendorAdoptResult
+    {
+        Adopted,
+        AlreadyAdopted,
+        NotFound,
+        AlreadyManaged,
+        RefInUse,
+    }
+
     public enum ReleaseResult
     {
         Released,
@@ -1914,7 +2102,7 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
             string vendorRef,
             string status,
             int seats,
-            DateTimeOffset expiresUtc,
+            DateTimeOffset? expiresUtc,
             IReadOnlyList<VendorActivationRow> activations)
         {
             Ref = vendorRef;
@@ -1930,9 +2118,68 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
 
         public int Seats { get; }
 
-        public DateTimeOffset ExpiresUtc { get; }
+        /// <summary>
+        /// Null only for an adopted code that was never activated and has not
+        /// had its first PUT yet; every code the vendor API created has one.
+        /// </summary>
+        public DateTimeOffset? ExpiresUtc { get; }
 
         public IReadOnlyList<VendorActivationRow> Activations { get; }
+    }
+
+    /// <summary>
+    /// A code the vendor API does not manage, as the portal's import screen
+    /// sees it. BuyerEmailOrNote is the raw buyer_email column: for a manual
+    /// code that is the `issue-code --note`, not an address - see
+    /// <see cref="CodeSummary.BuyerEmailOrNote"/>.
+    /// </summary>
+    public sealed class UnmanagedCodeRow
+    {
+        public UnmanagedCodeRow(
+            string codeHash,
+            string licensee,
+            string buyerEmailOrNote,
+            int seats,
+            string status,
+            string source,
+            DateTimeOffset createdUtc,
+            DateTimeOffset? expiresUtc,
+            int licenceDays,
+            IReadOnlyList<VendorActivationRow> activations)
+        {
+            CodeHash = codeHash;
+            Licensee = licensee;
+            BuyerEmailOrNote = buyerEmailOrNote;
+            Seats = seats;
+            Status = status;
+            Source = source;
+            CreatedUtc = createdUtc;
+            ExpiresUtc = expiresUtc;
+            LicenceDays = licenceDays;
+            Activations = activations;
+        }
+
+        public string CodeHash { get; }
+
+        public string Licensee { get; }
+
+        public string BuyerEmailOrNote { get; }
+
+        public int Seats { get; }
+
+        public string Status { get; }
+
+        public string Source { get; }
+
+        public DateTimeOffset CreatedUtc { get; }
+
+        public DateTimeOffset? ExpiresUtc { get; }
+
+        public int LicenceDays { get; }
+
+        public IReadOnlyList<VendorActivationRow> Activations { get; }
+
+        public bool IsManual => string.Equals(Source, "manual", StringComparison.Ordinal);
     }
 
     public static class CodeStatus

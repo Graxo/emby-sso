@@ -123,6 +123,7 @@ What follows from that:
 | `POST /paypal/webhook` | PayPal → here | **Signature verified.** The only thing that creates a code. |
 | `GET /healthz` | your monitoring | Store writable, which key is loaded, sandbox or live. |
 | `/admin/*` | you, in a browser | **Only if `ADMIN_PASSWORD_HASH` is set.** See *The admin page* below. |
+| `/v1/vendor/*` | the portal → here | **Only if `LICENCE_VENDOR_TOKEN` is set.** See *`/v1/vendor/*` — the portal's API* below. |
 
 Everything a vendor does to what they have sold is available two ways: as a
 command on this same binary — `issue-code`, `list-codes`, `show-code`,
@@ -165,6 +166,70 @@ gets the licence that was signed). The distinction leaks only the
 code's length and alphabet, both of which are printed on the email the code
 arrived in, and it saves the vendor a support thread every time somebody
 transposes two characters.
+
+### `/v1/vendor/*` — the portal's API
+
+The reseller's system (the client portal) registers, extends, voids and
+releases the codes it sells here. Mapped only when `LICENCE_VENDOR_TOKEN` is
+set; every route wants `Authorization: Bearer <token>`, and a missing or wrong
+one is a bare 401 and one warning in the log. The code itself never arrives:
+the portal sends its SHA-256 (`codeHash`, 64 lowercase hex), so nothing here
+can read a code back. `{ref}` is the portal's own id for the sale,
+`[a-z0-9-]{1,64}`. Bad input is 400 `{"error":"invalid","field":"<name>"}`.
+
+| | |
+| --- | --- |
+| `PUT /v1/vendor/licences/{ref}` | Creates (201) or updates (200) the code for `ref`: `{codeHash, licensee, seats, expiresUtc, status: "active"\|"void", voidReason}`. A hash that is not this ref's — another ref's, or a PayPal/manual code's — is 409 `hash_conflict`. |
+| `GET /v1/vendor/licences/{ref}` | `{ref, status, seats, expiresUtc, activations: [{serverId, pluginVersion, firstSeenUtc, lastSeenUtc, releasedUtc}]}`, or 404 `not_found`. |
+| `DELETE /v1/vendor/licences/{ref}/activations/{serverId}` | Frees that server's seat. 204, also when it was already free; 404 `not_found`. |
+| `GET /v1/vendor/unmanaged` | Every code with no ref — PayPal sales, `issue-code` comps — so the portal can import what was sold before it existed. See below. |
+| `POST /v1/vendor/licences/{ref}/adopt` | `{codeHash}`: puts that existing code under `ref`. See below. |
+
+**Importing what was sold before the portal.** `GET /v1/vendor/unmanaged`
+answers every code whose ref is empty, oldest first, void ones included (the
+portal shows them greyed rather than pretending the sale never happened):
+
+```json
+{"codes": [{
+  "codeHash": "9f2a1c3e…", "licensee": "Robin", "buyerEmail": "robin@example.com",
+  "note": null, "seats": 3, "status": "active", "source": "paypal",
+  "createdUtc": "2026-03-01T10:00:00Z", "expiresUtc": "2027-03-01T10:00:00Z",
+  "licenceDays": 365,
+  "activations": [{"serverId": "…", "pluginVersion": "1.4.0",
+                   "firstSeenUtc": "…", "lastSeenUtc": "…", "releasedUtc": null}]
+}]}
+```
+
+`expiresUtc` is null for a code that was never activated: a PayPal or manual
+code's expiry is fixed at its first activation. `buyerEmail` is null for a
+`manual` code, and what `issue-code --note` wrote is in `note` instead — that
+command keeps its note in the buyer-email column, and free text about a comp
+must never be mailed to or matched against a customer.
+
+`POST /v1/vendor/licences/{ref}/adopt` with `{"codeHash": "…"}` gives that code
+the ref, and changes **nothing else** — not its status, seats, expiry,
+licensee, source or activations. The portal's next `PUT` on the ref sets those
+through the ordinary update path (same hash, so not `hash_conflict`), and from
+then on the code is managed like one the portal created. Answers:
+
+| | |
+| --- | --- |
+| 200 | The `GET /v1/vendor/licences/{ref}` shape (`expiresUtc` may be null until that first `PUT`). Also when the code already has exactly this ref, so a retry after a lost answer is safe. |
+| 400 `invalid` | `field` is `ref`, `body` or `codeHash`. |
+| 404 `not_found` | No code has that hash. |
+| 409 `already_managed` | The code already has a different ref — including a code the portal created itself. A code is never moved between refs. |
+| 409 `ref_in_use` | `ref` is already on a different code. |
+
+One transaction, and the `UPDATE` is guarded by `vendor_ref IS NULL`, so two
+racing adopts of one code cannot both win. Each call logs one line with the
+outcome and the code's log tag (the first 12 characters of the hash), never the
+whole hash.
+
+An adopted PayPal code still carries its capture id. Where the PayPal webhook
+is still mapped (not in `LICENCE_PORTAL_URL` mode), a refund of the original
+sale therefore still voids it, as before it was adopted; the portal sees that as
+`status: "void"` on its next `GET`, and a later `PUT` with `"status":"active"`
+would restore it.
 
 ### `/buy` — the purchase page
 

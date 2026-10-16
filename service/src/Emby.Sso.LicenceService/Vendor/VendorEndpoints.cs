@@ -126,6 +126,92 @@ namespace Emby.Sso.LicenceService.Vendor
                     : Results.Json(Shape(row), Web, statusCode: 200);
             });
 
+            // Codes sold before the portal existed - PayPal sales, `issue-code`
+            // comps - so the portal can offer to import them. Only hashes go
+            // out, like everything else on this API; a code itself cannot be
+            // read back from here.
+            app.MapGet("/v1/vendor/unmanaged", (HttpContext context) =>
+            {
+                if (!Authorised(context, token))
+                {
+                    return Refused(log);
+                }
+
+                var codes = store.ListUnmanagedCodes();
+
+                log.LogInformation("vendor unmanaged: {Count} codes", codes.Count);
+
+                return Results.Json(new { codes = codes.Select(c => Shape(c)).ToList() }, Web, statusCode: 200);
+            });
+
+            // Takes one of those codes over: gives it the portal's ref, and
+            // nothing else. The portal's next PUT on the ref sets licensee,
+            // seats, expiry and status through the ordinary update path, so
+            // there is still exactly one way a code's terms are changed.
+            app.MapPost("/v1/vendor/licences/{vendorRef}/adopt", async (HttpContext context, string vendorRef) =>
+            {
+                if (!Authorised(context, token))
+                {
+                    return Refused(log);
+                }
+
+                if (!RefPattern.IsMatch(vendorRef))
+                {
+                    return Bad("ref");
+                }
+
+                var body = await Program.ReadBodyAsync(context).ConfigureAwait(false);
+
+                if (body == null)
+                {
+                    return Bad("body");
+                }
+
+                AdoptBody adopt;
+
+                try
+                {
+                    adopt = JsonSerializer.Deserialize<AdoptBody>(body, Web);
+                }
+                catch (JsonException)
+                {
+                    return Bad("body");
+                }
+
+                if (adopt == null)
+                {
+                    return Bad("body");
+                }
+
+                if (adopt.CodeHash == null || !HashPattern.IsMatch(adopt.CodeHash))
+                {
+                    return Bad("codeHash");
+                }
+
+                var result = store.AdoptVendorCode(vendorRef, adopt.CodeHash);
+
+                // The log tag (a short prefix of the hash) and not the hash: it
+                // is enough to find the row with `show-code`, and the full hash
+                // is the one thing that identifies the customer's code.
+                log.LogInformation(
+                    "vendor adopt {Ref} code={Tag}: {Outcome}",
+                    vendorRef,
+                    RedemptionCode.LogTag(adopt.CodeHash),
+                    result);
+
+                switch (result)
+                {
+                    case VendorAdoptResult.NotFound:
+                        return Results.Json(new { error = "not_found" }, Web, statusCode: 404);
+                    case VendorAdoptResult.AlreadyManaged:
+                        return Results.Json(new { error = "already_managed" }, Web, statusCode: 409);
+                    case VendorAdoptResult.RefInUse:
+                        return Results.Json(new { error = "ref_in_use" }, Web, statusCode: 409);
+                    default:
+                        return Results.Json(Shape(store.FindVendorCode(vendorRef)), Web, statusCode: 200);
+                }
+            });
+
             app.MapDelete("/v1/vendor/licences/{vendorRef}/activations/{serverId}", (HttpContext context, string vendorRef, string serverId) =>
             {
                 if (!Authorised(context, token))
@@ -230,16 +316,52 @@ namespace Emby.Sso.LicenceService.Vendor
                 @ref = row.Ref,
                 status = row.Status,
                 seats = row.Seats,
-                expiresUtc = LicenceFormat.Iso(row.ExpiresUtc),
-                activations = row.Activations.Select(a => new
-                {
-                    serverId = a.ServerId,
-                    pluginVersion = a.PluginVersion,
-                    firstSeenUtc = LicenceFormat.Iso(a.FirstSeenUtc),
-                    lastSeenUtc = LicenceFormat.Iso(a.LastSeenUtc),
-                    releasedUtc = a.ReleasedUtc.HasValue ? LicenceFormat.Iso(a.ReleasedUtc.Value) : null,
-                }).ToList(),
+                expiresUtc = row.ExpiresUtc.HasValue ? LicenceFormat.Iso(row.ExpiresUtc.Value) : null,
+                activations = Shape(row.Activations),
             };
+        }
+
+        private static object Shape(UnmanagedCodeRow row)
+        {
+            return new
+            {
+                codeHash = row.CodeHash,
+                licensee = row.Licensee,
+
+                // For a manual code the column holds the `issue-code --note`,
+                // not an address, so it goes out as `note` and buyerEmail is
+                // null: the portal must never mail, or match a customer on,
+                // free text somebody typed about a comp.
+                buyerEmail = row.IsManual ? null : row.BuyerEmailOrNote,
+                note = row.IsManual ? row.BuyerEmailOrNote : null,
+                seats = row.Seats,
+                status = row.Status,
+                source = row.Source,
+                createdUtc = LicenceFormat.Iso(row.CreatedUtc),
+
+                // Null when the code was never activated: a PayPal or manual
+                // code's expiry is fixed at its first activation.
+                expiresUtc = row.ExpiresUtc.HasValue ? LicenceFormat.Iso(row.ExpiresUtc.Value) : null,
+                licenceDays = row.LicenceDays,
+                activations = Shape(row.Activations),
+            };
+        }
+
+        private static List<object> Shape(IReadOnlyList<VendorActivationRow> activations)
+        {
+            return activations.Select(a => (object)new
+            {
+                serverId = a.ServerId,
+                pluginVersion = a.PluginVersion,
+                firstSeenUtc = LicenceFormat.Iso(a.FirstSeenUtc),
+                lastSeenUtc = LicenceFormat.Iso(a.LastSeenUtc),
+                releasedUtc = a.ReleasedUtc.HasValue ? LicenceFormat.Iso(a.ReleasedUtc.Value) : null,
+            }).ToList();
+        }
+
+        private sealed class AdoptBody
+        {
+            public string CodeHash { get; set; }
         }
 
         private sealed class PutBody
