@@ -94,9 +94,12 @@ namespace Emby.Sso.LicenceService.Tests
                 (HttpMethod.Get, "/v1/vendor/licences/a"),
                 (HttpMethod.Put, "/v1/vendor/licences/a"),
                 (HttpMethod.Delete, "/v1/vendor/licences/a/activations/" + Server),
+                (HttpMethod.Get, "/v1/vendor/unmanaged"),
+                (HttpMethod.Post, "/v1/vendor/licences/a/adopt"),
             })
             {
-                var response = await Send(method, path, method == HttpMethod.Put ? Body(Hash()) : null, bearer);
+                var body = method == HttpMethod.Put ? Body(Hash()) : method == HttpMethod.Post ? Adopt(Hash()) : null;
+                var response = await Send(method, path, body, bearer);
 
                 Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
                 Assert.Equal(string.Empty, await response.Content.ReadAsStringAsync());
@@ -281,6 +284,285 @@ namespace Emby.Sso.LicenceService.Tests
 
             Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Delete, "/v1/vendor/licences/order-1/activations/ffff", null, Token)).StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Delete, "/v1/vendor/licences/nope/activations/" + Server, null, Token)).StatusCode);
+        }
+
+        [Fact]
+        public async Task Unmanaged_lists_only_codes_without_a_ref_with_activations_void_ones_and_null_expiry()
+        {
+            Assert.Equal(
+                "{\"codes\":[]}",
+                await (await Send(HttpMethod.Get, "/v1/vendor/unmanaged", null, Token)).Content.ReadAsStringAsync());
+
+            var activated = RedemptionCode.Generate();
+            var store = _service.Store;
+            var now = _service.Clock.GetUtcNow();
+
+            store.RecordPayment(
+                "evt-1", "tx-1", "PAYMENT.CAPTURE.COMPLETED", "cap-1", "buyer@example.com", "Buyer",
+                null, RedemptionCode.Hash(activated), 2, 365, now);
+
+            _service.Clock.Advance(TimeSpan.FromMinutes(1));
+
+            var comp = Hash();
+            store.CreateManualCode(comp, "Tester", 1, 30, "comp for a tester", _service.Clock.GetUtcNow());
+
+            _service.Clock.Advance(TimeSpan.FromMinutes(1));
+
+            var voided = Hash();
+            store.CreateManualCode(voided, "Leaked", 1, 365, null, _service.Clock.GetUtcNow());
+            store.VoidCodeByHash(voided, "leaked", _service.Clock.GetUtcNow());
+
+            // The portal's own code is managed already and must not be offered.
+            await Send(HttpMethod.Put, "/v1/vendor/licences/order-1", Body(Hash()), Token);
+
+            _service.ActivateAndSign(
+                new ActivationRequest { Code = RedemptionCode.Format(activated), ServerId = Server, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+
+            var response = await Send(HttpMethod.Get, "/v1/vendor/unmanaged", null, Token);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var codes = (await Json(response)).GetProperty("codes");
+
+            Assert.Equal(3, codes.GetArrayLength());
+
+            var paypal = codes[0];
+
+            Assert.Equal(RedemptionCode.Hash(activated), paypal.GetProperty("codeHash").GetString());
+            Assert.Equal("Buyer", paypal.GetProperty("licensee").GetString());
+            Assert.Equal("buyer@example.com", paypal.GetProperty("buyerEmail").GetString());
+            Assert.Equal(2, paypal.GetProperty("seats").GetInt32());
+            Assert.Equal("active", paypal.GetProperty("status").GetString());
+            Assert.Equal("paypal", paypal.GetProperty("source").GetString());
+            Assert.Equal(LicenceFormat.Iso(now), paypal.GetProperty("createdUtc").GetString());
+            Assert.Equal(JsonValueKind.String, paypal.GetProperty("expiresUtc").ValueKind);
+            Assert.Equal(365, paypal.GetProperty("licenceDays").GetInt32());
+
+            var activation = paypal.GetProperty("activations")[0];
+
+            Assert.Equal(Server, activation.GetProperty("serverId").GetString());
+            Assert.Equal("1.4.0", activation.GetProperty("pluginVersion").GetString());
+            Assert.Equal(JsonValueKind.String, activation.GetProperty("firstSeenUtc").ValueKind);
+            Assert.Equal(JsonValueKind.String, activation.GetProperty("lastSeenUtc").ValueKind);
+            Assert.Equal(JsonValueKind.Null, activation.GetProperty("releasedUtc").ValueKind);
+
+            var manual = codes[1];
+
+            Assert.Equal(comp, manual.GetProperty("codeHash").GetString());
+            Assert.Equal("manual", manual.GetProperty("source").GetString());
+            Assert.Equal(JsonValueKind.Null, manual.GetProperty("expiresUtc").ValueKind);
+            Assert.Equal(30, manual.GetProperty("licenceDays").GetInt32());
+            Assert.Equal(0, manual.GetProperty("activations").GetArrayLength());
+
+            // The note `issue-code` keeps in buyer_email is not an address.
+            Assert.Equal(JsonValueKind.Null, manual.GetProperty("buyerEmail").ValueKind);
+            Assert.Equal("comp for a tester", manual.GetProperty("note").GetString());
+
+            Assert.Equal(voided, codes[2].GetProperty("codeHash").GetString());
+            Assert.Equal("void", codes[2].GetProperty("status").GetString());
+        }
+
+        [Fact]
+        public async Task Adopt_attaches_the_ref_and_changes_nothing_else()
+        {
+            var hash = Hash();
+            _service.Store.CreateManualCode(hash, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+
+            var before = _service.Store.FindCodeByHash(hash);
+            var response = await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var json = await Json(response);
+
+            Assert.Equal("order-7", json.GetProperty("ref").GetString());
+            Assert.Equal("active", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("seats").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("expiresUtc").ValueKind);
+
+            var after = _service.Store.FindCodeByHash(hash);
+
+            Assert.Equal(before.Status, after.Status);
+            Assert.Equal(before.Licensee, after.Licensee);
+            Assert.Equal(before.ActivationsAllowed, after.ActivationsAllowed);
+            Assert.Equal(before.ExpiresUtc, after.ExpiresUtc);
+            Assert.Equal(before.LicenceDays, after.LicenceDays);
+            Assert.Equal("manual", after.Source);
+
+            var unmanaged = (await Json(await Send(HttpMethod.Get, "/v1/vendor/unmanaged", null, Token))).GetProperty("codes");
+
+            Assert.Equal(0, unmanaged.GetArrayLength());
+        }
+
+        [Fact]
+        public async Task Adopting_again_with_the_same_ref_is_200()
+        {
+            var hash = Hash();
+            _service.Store.CreateManualCode(hash, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token)).StatusCode);
+
+            var again = await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token);
+
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            Assert.Equal("order-7", (await Json(again)).GetProperty("ref").GetString());
+        }
+
+        [Fact]
+        public async Task Adopting_a_code_that_has_another_ref_is_409_already_managed()
+        {
+            var adopted = Hash();
+            _service.Store.CreateManualCode(adopted, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+            await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(adopted), Token);
+
+            var created = Hash();
+            await Send(HttpMethod.Put, "/v1/vendor/licences/order-1", Body(created), Token);
+
+            foreach (var hash in new[] { adopted, created })
+            {
+                var response = await Send(HttpMethod.Post, "/v1/vendor/licences/order-9/adopt", Adopt(hash), Token);
+
+                Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+                Assert.Equal("already_managed", (await Json(response)).GetProperty("error").GetString());
+            }
+
+            Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Get, "/v1/vendor/licences/order-9", null, Token)).StatusCode);
+        }
+
+        [Fact]
+        public async Task Adopting_with_a_ref_another_code_has_is_409_ref_in_use()
+        {
+            await Send(HttpMethod.Put, "/v1/vendor/licences/order-1", Body(Hash()), Token);
+
+            var hash = Hash();
+            _service.Store.CreateManualCode(hash, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+
+            var response = await Send(HttpMethod.Post, "/v1/vendor/licences/order-1/adopt", Adopt(hash), Token);
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal("ref_in_use", (await Json(response)).GetProperty("error").GetString());
+
+            // Still unmanaged.
+            var unmanaged = (await Json(await Send(HttpMethod.Get, "/v1/vendor/unmanaged", null, Token))).GetProperty("codes");
+
+            Assert.Equal(hash, unmanaged[0].GetProperty("codeHash").GetString());
+        }
+
+        [Fact]
+        public async Task Adopting_an_unknown_hash_is_404()
+        {
+            var response = await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(Hash()), Token);
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Equal("not_found", (await Json(response)).GetProperty("error").GetString());
+        }
+
+        [Theory]
+        [InlineData("Bad_Ref", null, "ref")]
+        [InlineData("order-7", "{not json", "body")]
+        [InlineData("order-7", "null", "body")]
+        [InlineData("order-7", "{}", "codeHash")]
+        [InlineData("order-7", "{\"codeHash\":\"ABC\"}", "codeHash")]
+        [InlineData("order-7", "{\"codeHash\":\"0123\"}", "codeHash")]
+        public async Task Bad_adopt_input_is_400_naming_the_field(string vendorRef, string body, string field)
+        {
+            var response = await Send(HttpMethod.Post, "/v1/vendor/licences/" + vendorRef + "/adopt", body ?? Adopt(Hash()), Token);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+            var json = await Json(response);
+
+            Assert.Equal("invalid", json.GetProperty("error").GetString());
+            Assert.Equal(field, json.GetProperty("field").GetString());
+        }
+
+        [Fact]
+        public async Task An_adopted_code_is_managed_by_get_and_put_and_keeps_its_activations()
+        {
+            var code = RedemptionCode.Generate();
+            var hash = RedemptionCode.Hash(code);
+
+            _service.Store.RecordPayment(
+                "evt-1", "tx-1", "PAYMENT.CAPTURE.COMPLETED", "cap-1", "buyer@example.com", "Buyer",
+                null, hash, 2, 365, _service.Clock.GetUtcNow());
+
+            _service.ActivateAndSign(
+                new ActivationRequest { Code = RedemptionCode.Format(code), ServerId = Server, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token)).StatusCode);
+
+            var got = await Json(await Send(HttpMethod.Get, "/v1/vendor/licences/order-7", null, Token));
+
+            Assert.Equal(2, got.GetProperty("seats").GetInt32());
+            Assert.Equal(1, got.GetProperty("activations").GetArrayLength());
+
+            // The update path, not hash_conflict: the code is this ref's now.
+            var put = await Send(HttpMethod.Put, "/v1/vendor/licences/order-7", Body(hash, seats: 5, licensee: "Robin"), Token);
+
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+            var json = await Json(put);
+
+            Assert.Equal(5, json.GetProperty("seats").GetInt32());
+            Assert.Equal("2027-10-26T00:00:00Z", json.GetProperty("expiresUtc").GetString());
+            Assert.Equal(Server, json.GetProperty("activations")[0].GetProperty("serverId").GetString());
+
+            var summary = _service.Store.FindCodeByHash(hash);
+
+            Assert.Equal("Robin", summary.Licensee);
+            Assert.Equal("paypal", summary.Source);
+            Assert.Equal(1, summary.ActivationsUsed);
+
+            // And the seat can be released by ref like any vendor code's.
+            Assert.Equal(
+                HttpStatusCode.NoContent,
+                (await Send(HttpMethod.Delete, "/v1/vendor/licences/order-7/activations/" + Server, null, Token)).StatusCode);
+        }
+
+        [Fact]
+        public async Task An_adopted_code_that_was_never_activated_answers_a_null_expiry_until_its_first_put()
+        {
+            var hash = Hash();
+            _service.Store.CreateManualCode(hash, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+
+            await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token);
+
+            var got = await Send(HttpMethod.Get, "/v1/vendor/licences/order-7", null, Token);
+
+            Assert.Equal(HttpStatusCode.OK, got.StatusCode);
+            Assert.Equal(JsonValueKind.Null, (await Json(got)).GetProperty("expiresUtc").ValueKind);
+
+            var put = await Send(HttpMethod.Put, "/v1/vendor/licences/order-7", Body(hash), Token);
+
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+            Assert.Equal("2027-10-26T00:00:00Z", (await Json(put)).GetProperty("expiresUtc").GetString());
+        }
+
+        [Fact]
+        public async Task Adopt_logs_one_line_with_the_tag_and_never_the_whole_hash()
+        {
+            var log = new RecordingLogger<object>();
+
+            await StartAsync(Token, builder => builder.Logging.AddProvider(new RecordingProvider(log)));
+
+            var hash = Hash();
+            _service.Store.CreateManualCode(hash, "Old customer", 2, 365, null, _service.Clock.GetUtcNow());
+
+            await Send(HttpMethod.Post, "/v1/vendor/licences/order-7/adopt", Adopt(hash), Token);
+
+            var lines = log.At(LogLevel.Information).ToList();
+
+            Assert.Single(lines);
+            Assert.DoesNotContain(hash, log.Everything);
+            Assert.Contains(RedemptionCode.LogTag(hash), log.Everything);
+            Assert.Contains("Adopted", log.Everything);
+        }
+
+        private static string Adopt(string hash)
+        {
+            return JsonSerializer.Serialize(new { codeHash = hash });
         }
 
         private static string Hash()
