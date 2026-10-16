@@ -52,6 +52,17 @@
          offer STARTTLS rather than quietly continuing in the clear. See
          README.md, "Emailing the code". -->
     <PackageReference Include="MailKit" Version="4.17.0" />
+
+    <!-- MimeKit's S/MIME support, pinned FORWARD of what MailKit 4.17.0 asks for, the
+         same way and for the same reason as SQLitePCLRaw above.
+
+         MimeKit 4.17.0 resolves System.Security.Cryptography.Pkcs 8.0.1, which since
+         2026-10-13 carries two .NET denial-of-service advisories (GHSA-846f-f764-76mx
+         High, GHSA-2fmv-rv2c-59x7 Moderate), both fixed in 8.0.2. In portal mode the
+         service sends no mail at all, but the package is in the image either way, and
+         ci/audit-packages.sh gates on the image, not on today's configuration. Remove
+         this line once MailKit itself resolves a fixed version. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
   </ItemGroup>
 
   <ItemGroup>
