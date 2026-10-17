@@ -135,9 +135,11 @@ namespace Emby.Sso.LicenceService.Vendor
             });
 
             // Codes sold before the portal existed - PayPal sales, `issue-code`
-            // comps - so the portal can offer to import them. Only hashes go
-            // out, like everything else on this API; a code itself cannot be
-            // read back from here.
+            // comps - so the portal can offer to import them, plus the ones a
+            // portal import adopted (importRef set), so an import that failed
+            // after its adopt can be finished. Only hashes go out, like
+            // everything else on this API; a code itself cannot be read back
+            // from here.
             app.MapGet("/v1/vendor/unmanaged", (HttpContext context) =>
             {
                 if (!Authorised(context, token))
@@ -405,6 +407,11 @@ namespace Emby.Sso.LicenceService.Vendor
             return new
             {
                 codeHash = row.CodeHash,
+
+                // Null for an unmanaged code; the ref when a portal import
+                // adopted it - the portal shows those it has no licence for as
+                // an import to finish.
+                importRef = row.ImportRef,
                 licensee = row.Licensee,
 
                 // For a manual code the column holds the `issue-code --note`,

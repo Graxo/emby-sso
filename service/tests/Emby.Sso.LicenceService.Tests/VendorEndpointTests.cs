@@ -401,6 +401,33 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.Equal(0, unmanaged.GetArrayLength());
         }
 
+        // An import that failed after its adopt (the portal refused to write its row)
+        // must stay finishable: the code is listed again, with the import ref, until
+        // the portal has a licence for it. Adopted under any other ref, it is managed.
+        [Fact]
+        public async Task Unmanaged_lists_a_code_adopted_under_its_import_ref_with_that_ref()
+        {
+            var stuck = Hash();
+            var managed = Hash();
+            var open = Hash();
+            var now = _service.Clock.GetUtcNow();
+            _service.Store.CreateManualCode(stuck, "Robin", 3, 365, null, now);
+            _service.Store.CreateManualCode(managed, "Other", 3, 365, null, now);
+            _service.Store.CreateManualCode(open, "Nobody", 3, 365, null, now);
+
+            var importRef = "el-" + stuck.Substring(0, 32);
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/v1/vendor/licences/" + importRef + "/adopt", Adopt(stuck), Token)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/v1/vendor/licences/order-9/adopt", Adopt(managed), Token)).StatusCode);
+
+            var codes = (await Json(await Send(HttpMethod.Get, "/v1/vendor/unmanaged", null, Token))).GetProperty("codes");
+            var byHash = codes.EnumerateArray().ToDictionary(c => c.GetProperty("codeHash").GetString());
+
+            Assert.Equal(2, byHash.Count);
+            Assert.Equal(importRef, byHash[stuck].GetProperty("importRef").GetString());
+            Assert.Equal(JsonValueKind.Null, byHash[open].GetProperty("importRef").ValueKind);
+            Assert.False(byHash.ContainsKey(managed));
+        }
+
         [Fact]
         public async Task Adopting_again_with_the_same_ref_is_200()
         {

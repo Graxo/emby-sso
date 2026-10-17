@@ -1501,12 +1501,30 @@ SELECT a.server_id, k.day, k.checks
         /// codes are included: the portal shows them rather than pretending
         /// the sale never happened.
         ///
+        /// ALSO every code ADOPTED UNDER ITS IMPORT REF - `el-` and the first
+        /// 32 hex of its own hash, the ref the portal's import gives a code
+        /// (embylicence.ImportRef) - with that ref in ImportRef. The portal
+        /// adopts before it writes its own row, so an import that failed in
+        /// between left a code that was no longer unmanaged and not in the
+        /// portal either: invisible on both sides, with no button to finish
+        /// it. The portal lists these again, minus the ones it has a row for,
+        /// and importing one finishes it (adopt is idempotent for the same
+        /// ref). A code adopted under any other ref is managed and stays out.
+        ///
         /// One read transaction (deferred: it takes no write lock), so the
         /// codes and their activations are as of the same moment: an
         /// activation that lands between two separate queries would otherwise
         /// belong to a code the first one did not return, or be missing from
         /// one it did.
         /// </summary>
+        /// <summary>
+        /// Unmanaged, or adopted under exactly its import ref. substr counts
+        /// from 1; code_hash is 64 lowercase hex, so this is the same string
+        /// the portal builds.
+        /// </summary>
+        private const string UnmanagedOrImportAdopted =
+            "(vendor_ref IS NULL OR vendor_ref = 'el-' || substr(code_hash, 1, 32))";
+
         public IReadOnlyList<UnmanagedCodeRow> ListUnmanagedCodes()
         {
             using var connection = Open();
@@ -1520,8 +1538,8 @@ SELECT a.server_id, k.day, k.checks
                 command.Transaction = transaction;
                 command.CommandText =
                     @"SELECT id, code_hash, licensee, buyer_email, activations_allowed, status, source,
-                             created_utc, expires_utc, licence_days
-                        FROM codes WHERE vendor_ref IS NULL ORDER BY created_utc, id;";
+                             created_utc, expires_utc, licence_days, vendor_ref
+                        FROM codes WHERE " + UnmanagedOrImportAdopted + @" ORDER BY created_utc, id;";
 
                 using var reader = command.ExecuteReader();
 
@@ -1541,14 +1559,15 @@ SELECT a.server_id, k.day, k.checks
                         ParseIso(reader.GetString(7)),
                         reader.IsDBNull(8) ? (DateTimeOffset?)null : ParseIso(reader.GetString(8)),
                         reader.GetInt32(9),
-                        activations));
+                        activations,
+                        reader.IsDBNull(10) ? null : reader.GetString(10)));
                 }
             }
 
             foreach (var (codeId, activation) in ReadVendorActivations(
                 connection,
                 transaction,
-                "a.code_id IN (SELECT id FROM codes WHERE vendor_ref IS NULL)"))
+                "a.code_id IN (SELECT id FROM codes WHERE " + UnmanagedOrImportAdopted + ")"))
             {
                 if (byId.TryGetValue(codeId, out var list))
                 {
@@ -2373,8 +2392,10 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
             DateTimeOffset createdUtc,
             DateTimeOffset? expiresUtc,
             int licenceDays,
-            IReadOnlyList<VendorActivationRow> activations)
+            IReadOnlyList<VendorActivationRow> activations,
+            string importRef = null)
         {
+            ImportRef = importRef;
             CodeHash = codeHash;
             Licensee = licensee;
             BuyerEmailOrNote = buyerEmailOrNote;
@@ -2386,6 +2407,12 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
             LicenceDays = licenceDays;
             Activations = activations;
         }
+
+        /// <summary>
+        /// Null for a code nobody manages; the ref for one a portal import
+        /// adopted (see ListUnmanagedCodes).
+        /// </summary>
+        public string ImportRef { get; }
 
         public string CodeHash { get; }
 
