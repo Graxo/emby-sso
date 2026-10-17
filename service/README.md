@@ -182,7 +182,7 @@ can read a code back. `{ref}` is the portal's own id for the sale,
 | `PUT /v1/vendor/licences/{ref}` | Creates (201) or updates (200) the code for `ref`: `{codeHash, licensee, seats, expiresUtc, status: "active"\|"void", voidReason}`. A hash that is not this ref's — another ref's, or a PayPal/manual code's — is 409 `hash_conflict`. |
 | `GET /v1/vendor/licences/{ref}` | `{ref, status, seats, expiresUtc, activations: [{serverId, pluginVersion, firstSeenUtc, lastSeenUtc, releasedUtc}]}`, or 404 `not_found`. |
 | `DELETE /v1/vendor/licences/{ref}/activations/{serverId}` | Frees that server's seat. 204, also when it was already free; 404 `not_found`. |
-| `GET /v1/vendor/unmanaged` | Every code with no ref — PayPal sales, `issue-code` comps — so the portal can import what was sold before it existed. See below. |
+| `GET /v1/vendor/unmanaged` | Every code with no ref — PayPal sales, `issue-code` comps — so the portal can import what was sold before it existed, plus codes a portal import adopted (`importRef`). See below. |
 | `POST /v1/vendor/licences/{ref}/adopt` | `{codeHash}`: puts that existing code under `ref`. See below. |
 | `GET /v1/vendor/licences/{ref}/checkins?days=N` | Check-ins per server per day over the last `N` UTC days (1–90, default 30). See below. |
 
@@ -220,6 +220,16 @@ then on the code is managed like one the portal created. Answers:
 | 404 `not_found` | No code has that hash. |
 | 409 `already_managed` | The code already has a different ref — including a code the portal created itself. A code is never moved between refs. |
 | 409 `ref_in_use` | `ref` is already on a different code. |
+
+**An import that stopped halfway.** The portal adopts before it writes its own
+row, so an import it refuses at that point (the account already has the tier,
+say) leaves a code that is managed but not in the portal. `GET
+/v1/vendor/unmanaged` therefore also returns every code whose ref is exactly its
+import ref — `el-` and the first 32 hex of its own hash — with that ref in
+`importRef` (null for a code nobody manages). The portal shows the ones it has
+no licence for as an import to finish; importing again finishes it, since adopt
+is a success for the same ref and hash. A code adopted under any other ref is
+managed and is not listed.
 
 One transaction, and the `UPDATE` is guarded by `vendor_ref IS NULL`, so two
 racing adopts of one code cannot both win. Each call logs one line with the
