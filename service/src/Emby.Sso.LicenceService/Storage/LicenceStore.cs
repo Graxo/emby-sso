@@ -43,6 +43,19 @@ namespace Emby.Sso.LicenceService.Storage
     {
         private readonly string _connectionString;
 
+        /// <summary>
+        /// How many UTC days of check-in history are kept, today included. The
+        /// portal shows at most 90; 400 is a year and a bit, so a "same month
+        /// last year" comparison stays possible without the table growing for
+        /// ever.
+        /// </summary>
+        public const int CheckinRetentionDays = 400;
+
+        // The UTC day this store last pruned activation_checkins on. Pruning
+        // is once per process per day, piggy-backed on the first check-in of
+        // the day - see RecordCheckin.
+        private string _checkinsPrunedOn;
+
         public LicenceStore(string databasePath)
             : this(databasePath, StoreAccess.CreateIfMissing)
         {
@@ -288,6 +301,33 @@ CREATE TABLE IF NOT EXISTS renewed_licences (
     issued_at_utc  TEXT    NOT NULL,
     expires_utc    TEXT    NOT NULL
 );");
+
+            // How often each activation checked in, one row per activation per
+            // UTC day, so the portal can draw "check-ins over time" per server.
+            // A counter per day rather than a row per request: a plugin asks
+            // once a day, but a restart loop or a retrying proxy asks hundreds
+            // of times, and a table that grows with every request is a table
+            // somebody's broken server can fill the volume with. This one grows
+            // by at most one row per server per day whatever the server does,
+            // and is cut back to CheckinRetentionDays (see RecordCheckin).
+            //
+            // Written only by a check-in that was answered for an activation -
+            // a successful /v1/activate, a status check whose fingerprint this
+            // store issued - so a refused or unknown request leaves no trace
+            // here, the same as it leaves none in activations.
+            Execute(connection, @"
+CREATE TABLE IF NOT EXISTS activation_checkins (
+    activation_id  INTEGER NOT NULL REFERENCES activations(id),
+    day            TEXT    NOT NULL,
+    checks         INTEGER NOT NULL,
+    PRIMARY KEY (activation_id, day)
+);");
+
+            // The pruning DELETE is by day alone; without this it is a scan of
+            // the whole table, once a day, inside a write transaction.
+            Execute(connection, @"
+CREATE INDEX IF NOT EXISTS ix_activation_checkins_day
+    ON activation_checkins (day);");
 
             Execute(connection, @"
 CREATE INDEX IF NOT EXISTS ix_signing_requests_waiting
@@ -591,6 +631,11 @@ CREATE TABLE IF NOT EXISTS webhook_events (
                     ("$v", (object)pluginVersion ?? DBNull.Value),
                     ("$id", activationId));
             }
+
+            // A check-in, in the same transaction as last_seen_utc: either both
+            // are written or, if anything below throws, neither is. Every
+            // return above this line is a refusal and records nothing.
+            RecordCheckin(connection, transaction, activationId, now);
 
             // One request per activation, created once. A second activation of
             // the same server does NOT create a second request: it is the same
@@ -1282,6 +1327,171 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
                 .ToList();
 
             return new VendorLicenceRow(vendorRef, status, seats, expires, activations);
+        }
+
+        /// <summary>
+        /// Counts a status check against the activation that holds the licence
+        /// with this fingerprint - the original licence or any renewal of it.
+        /// False, and nothing written, for a fingerprint this store never
+        /// handed out.
+        ///
+        /// A status check does not touch last_seen_utc (that is the last
+        /// ACTIVATION, and the vendor API reports it as such), so unlike
+        /// <see cref="Activate"/> this has a transaction of its own. Released
+        /// activations and void codes are counted too: the server really did
+        /// ask, and was answered "revoked".
+        /// </summary>
+        public bool RecordStatusCheckin(string fingerprint, DateTimeOffset now)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint))
+            {
+                return false;
+            }
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            long activationId;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT activation_id FROM signing_requests WHERE fingerprint = $f
+UNION ALL
+SELECT activation_id FROM renewed_licences WHERE fingerprint = $f
+LIMIT 1;";
+                command.Parameters.AddWithValue("$f", fingerprint);
+
+                var found = command.ExecuteScalar();
+
+                if (found == null || found == DBNull.Value)
+                {
+                    return false;
+                }
+
+                activationId = Convert.ToInt64(found, CultureInfo.InvariantCulture);
+            }
+
+            RecordCheckin(connection, transaction, activationId, now);
+
+            transaction.Commit();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Check-ins per server per day for one vendor code, between two UTC
+        /// days inclusive (YYYY-MM-DD), ordered by day then server id. Only
+        /// days with a check are listed. Released activations are included:
+        /// their history happened. Null for an unknown reference.
+        ///
+        /// One read transaction, so the code lookup and the rows agree.
+        /// </summary>
+        public IReadOnlyList<CheckinRow> ReadVendorCheckins(string vendorRef, string fromDay, string toDay)
+        {
+            if (string.IsNullOrWhiteSpace(vendorRef))
+            {
+                return null;
+            }
+
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction(deferred: true);
+
+            long codeId;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT id FROM codes WHERE vendor_ref = $r;";
+                command.Parameters.AddWithValue("$r", vendorRef);
+
+                var found = command.ExecuteScalar();
+
+                if (found == null || found == DBNull.Value)
+                {
+                    return null;
+                }
+
+                codeId = Convert.ToInt64(found, CultureInfo.InvariantCulture);
+            }
+
+            var rows = new List<CheckinRow>();
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+
+                // Days are YYYY-MM-DD, so string order is date order and
+                // BETWEEN is the inclusive range it reads as.
+                command.CommandText = @"
+SELECT a.server_id, k.day, k.checks
+  FROM activation_checkins k JOIN activations a ON a.id = k.activation_id
+ WHERE a.code_id = $c AND k.day BETWEEN $from AND $to AND k.checks > 0
+ ORDER BY k.day, a.server_id;";
+                command.Parameters.AddWithValue("$c", codeId);
+                command.Parameters.AddWithValue("$from", fromDay);
+                command.Parameters.AddWithValue("$to", toDay);
+
+                using var reader = command.ExecuteReader();
+
+                while (reader.Read())
+                {
+                    rows.Add(new CheckinRow(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+                }
+            }
+
+            transaction.Commit();
+
+            return rows;
+        }
+
+        /// <summary>The UTC day a moment falls on, as activation_checkins stores it.</summary>
+        public static string CheckinDay(DateTimeOffset moment)
+        {
+            return moment.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Adds one to today's count for the activation, inside the caller's
+        /// write transaction.
+        ///
+        /// Pruning rides along on the first check-in of each UTC day this
+        /// process sees, rather than on a timer: the hosted services this
+        /// service has (the signing daemon, the mail queue) are only there
+        /// when signing or mail is configured, so neither is a place every
+        /// deployment runs, and a background loop of its own would be one
+        /// more thing to start, stop and test for a DELETE that takes
+        /// milliseconds once a day. A deployment nobody checks in to adds no
+        /// rows, so it has nothing to prune either. The marker is set before
+        /// the caller commits; a rollback only postpones pruning to tomorrow,
+        /// which is harmless.
+        /// </summary>
+        private void RecordCheckin(SqliteConnection connection, SqliteTransaction transaction, long activationId, DateTimeOffset now)
+        {
+            var today = CheckinDay(now);
+
+            Update(
+                connection,
+                transaction,
+                @"INSERT INTO activation_checkins (activation_id, day, checks) VALUES ($a, $d, 1)
+                  ON CONFLICT (activation_id, day) DO UPDATE SET checks = checks + 1;",
+                ("$a", activationId),
+                ("$d", today));
+
+            if (string.Equals(System.Threading.Volatile.Read(ref _checkinsPrunedOn), today, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            // Keeps CheckinRetentionDays days, today included.
+            Update(
+                connection,
+                transaction,
+                "DELETE FROM activation_checkins WHERE day < $cut;",
+                ("$cut", CheckinDay(now.AddDays(-(CheckinRetentionDays - 1)))));
+
+            System.Threading.Volatile.Write(ref _checkinsPrunedOn, today);
         }
 
         /// <summary>
@@ -2094,6 +2304,24 @@ SELECT c.id, c.code_hash, c.created_utc, c.status, c.licensee, c.activations_all
         public DateTimeOffset LastSeenUtc { get; }
 
         public DateTimeOffset? ReleasedUtc { get; }
+    }
+
+    /// <summary>One server's check-ins on one UTC day, for the vendor API.</summary>
+    public sealed class CheckinRow
+    {
+        public CheckinRow(string serverId, string day, int checks)
+        {
+            ServerId = serverId;
+            Day = day;
+            Checks = checks;
+        }
+
+        public string ServerId { get; }
+
+        /// <summary>YYYY-MM-DD, UTC.</summary>
+        public string Day { get; }
+
+        public int Checks { get; }
     }
 
     public sealed class VendorLicenceRow

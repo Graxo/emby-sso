@@ -184,6 +184,7 @@ can read a code back. `{ref}` is the portal's own id for the sale,
 | `DELETE /v1/vendor/licences/{ref}/activations/{serverId}` | Frees that server's seat. 204, also when it was already free; 404 `not_found`. |
 | `GET /v1/vendor/unmanaged` | Every code with no ref — PayPal sales, `issue-code` comps — so the portal can import what was sold before it existed. See below. |
 | `POST /v1/vendor/licences/{ref}/adopt` | `{codeHash}`: puts that existing code under `ref`. See below. |
+| `GET /v1/vendor/licences/{ref}/checkins?days=N` | Check-ins per server per day over the last `N` UTC days (1–90, default 30). See below. |
 
 **Importing what was sold before the portal.** `GET /v1/vendor/unmanaged`
 answers every code whose ref is empty, oldest first, void ones included (the
@@ -230,6 +231,42 @@ is still mapped (not in `LICENCE_PORTAL_URL` mode), a refund of the original
 sale therefore still voids it, as before it was adopted; the portal sees that as
 `status: "void"` on its next `GET`, and a later `PUT` with `"status":"active"`
 would restore it.
+
+**Check-ins over time.** Every check-in a server makes is counted, per
+activation per UTC day, in the `activation_checkins` table
+(`activation_id, day YYYY-MM-DD, checks`, primary key `(activation_id, day)`).
+A check-in is a `/v1/activate` that reaches an activation — including the first
+one, answered "waiting for a signature" — counted in the same transaction that
+moves `last_seen_utc`; and a `/v1/licence/status` whose fingerprint this store
+issued, whether the answer is `valid` or `revoked` (a status check does not move
+`last_seen_utc`, which stays the last *activation*). A request that is refused —
+rate-limited, malformed, an unknown or void code, no free seat, an unknown
+fingerprint — counts nothing. A counter per day rather than a row per request,
+so a server stuck in a restart loop adds one row a day, not thousands.
+
+`GET /v1/vendor/licences/{ref}/checkins?days=N` answers the last `N` days,
+today included:
+
+```json
+{"from": "2025-12-07", "to": "2026-01-05",
+ "checkins": [{"serverId": "c5bc6e91458540caa295c4efdda1a58a",
+               "day": "2026-01-05", "checks": 2}]}
+```
+
+`to` is today (UTC) and `from` is `N - 1` days before it. Only days with at least
+one check are listed — the portal fills the gaps — ordered by day, then
+`serverId`. Released activations are included: their history happened. `days`
+must be a plain integer from 1 to 90, otherwise 400 `invalid` with
+`field: "days"`; an unknown or malformed `ref` is 404 `not_found`. Each call logs
+one line with the ref and the row count.
+
+**Retention: 400 days**, today included. Older rows are deleted by the first
+check-in of each UTC day the process sees, inside that check-in's transaction —
+not by a timer, since the only background services this has (the signing
+daemon, the mail queue) run only when signing or mail is configured. A service
+nobody checks in to adds no rows, so it has nothing to prune. The table is
+created on start like every other, so an existing volume gains it on upgrade
+with no history before that day.
 
 ### `/buy` — the purchase page
 

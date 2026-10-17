@@ -11,6 +11,7 @@ using Emby.Sso.Licensing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -65,6 +66,10 @@ namespace Emby.Sso.LicenceService.Tests
             _app = Program.BuildApp(_service.Options, builder =>
             {
                 builder.WebHost.UseTestServer();
+
+                // The service's own clock, so "today" in the check-ins window
+                // is the day the test's activations were recorded on.
+                builder.Services.AddSingleton<TimeProvider>(_service.Clock);
                 configure?.Invoke(builder);
             });
 
@@ -96,6 +101,7 @@ namespace Emby.Sso.LicenceService.Tests
                 (HttpMethod.Delete, "/v1/vendor/licences/a/activations/" + Server),
                 (HttpMethod.Get, "/v1/vendor/unmanaged"),
                 (HttpMethod.Post, "/v1/vendor/licences/a/adopt"),
+                (HttpMethod.Get, "/v1/vendor/licences/a/checkins"),
             })
             {
                 var body = method == HttpMethod.Put ? Body(Hash()) : method == HttpMethod.Post ? Adopt(Hash()) : null;
@@ -558,6 +564,163 @@ namespace Emby.Sso.LicenceService.Tests
             Assert.DoesNotContain(hash, log.Everything);
             Assert.Contains(RedemptionCode.LogTag(hash), log.Everything);
             Assert.Contains("Adopted", log.Everything);
+        }
+
+        [Fact]
+        public async Task Checkins_answers_the_default_30_day_window_with_one_row_per_server_per_day()
+        {
+            var code = RedemptionCode.Generate();
+
+            await Send(HttpMethod.Put, "/v1/vendor/licences/order-1", Body(RedemptionCode.Hash(code)), Token);
+
+            // Activate, sign, activate: two check-ins today.
+            _service.ActivateAndSign(
+                new ActivationRequest { Code = RedemptionCode.Format(code), ServerId = Server, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+
+            var response = await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins", null, Token);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.StartsWith("application/json", response.Content.Headers.ContentType.MediaType);
+
+            // The test clock is 2026-01-05 12:00 UTC; 30 days back, today
+            // included, starts on 2025-12-07.
+            Assert.Equal(
+                "{\"from\":\"2025-12-07\",\"to\":\"2026-01-05\",\"checkins\":[{\"serverId\":\"" + Server + "\",\"day\":\"2026-01-05\",\"checks\":2}]}",
+                await response.Content.ReadAsStringAsync());
+        }
+
+        [Fact]
+        public async Task Checkins_lists_only_days_inside_the_window_ordered_by_day_then_server()
+        {
+            const string Other = "0b3d0f8fd4d9412e9c4e5ba0d09a3f77";
+            var code = RedemptionCode.Format(await VendorCode("order-1"));
+
+            Activate(code, Server);
+            _service.Clock.Advance(TimeSpan.FromDays(10));
+            Activate(code, Server);
+            Activate(code, Other);
+
+            // days=10 starts the day after the first check-in.
+            var json = await Json(await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins?days=10", null, Token));
+
+            Assert.Equal("2026-01-06", json.GetProperty("from").GetString());
+            Assert.Equal("2026-01-15", json.GetProperty("to").GetString());
+            Assert.Equal(
+                new[] { ("2026-01-15", Other, 1), ("2026-01-15", Server, 1) },
+                Checkins(json));
+
+            var wider = await Json(await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins?days=11", null, Token));
+
+            Assert.Equal(
+                new[] { ("2026-01-05", Server, 1), ("2026-01-15", Other, 1), ("2026-01-15", Server, 1) },
+                Checkins(wider));
+        }
+
+        [Fact]
+        public async Task Checkins_include_a_released_activation()
+        {
+            var code = RedemptionCode.Format(await VendorCode("order-1"));
+
+            Activate(code, Server);
+
+            Assert.Equal(
+                HttpStatusCode.NoContent,
+                (await Send(HttpMethod.Delete, "/v1/vendor/licences/order-1/activations/" + Server, null, Token)).StatusCode);
+
+            var json = await Json(await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins", null, Token));
+
+            Assert.Equal(new[] { ("2026-01-05", Server, 1) }, Checkins(json));
+        }
+
+        [Fact]
+        public async Task Checkins_is_404_for_an_unknown_or_malformed_ref_and_empty_for_a_quiet_one()
+        {
+            foreach (var path in new[] { "/v1/vendor/licences/nope/checkins", "/v1/vendor/licences/Bad_Ref/checkins" })
+            {
+                var response = await Send(HttpMethod.Get, path, null, Token);
+
+                Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+                Assert.Equal("not_found", (await Json(response)).GetProperty("error").GetString());
+            }
+
+            await VendorCode("order-1");
+
+            var json = await Json(await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins?days=1", null, Token));
+
+            Assert.Equal("2026-01-05", json.GetProperty("from").GetString());
+            Assert.Equal("2026-01-05", json.GetProperty("to").GetString());
+            Assert.Equal(0, json.GetProperty("checkins").GetArrayLength());
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("91")]
+        [InlineData("abc")]
+        [InlineData("-1")]
+        [InlineData("")]
+        [InlineData("7.0")]
+        [InlineData("30&days=30")]
+        public async Task Checkins_days_outside_1_to_90_is_400_naming_the_field(string days)
+        {
+            await VendorCode("order-1");
+
+            var response = await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins?days=" + days, null, Token);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+            var json = await Json(response);
+
+            Assert.Equal("invalid", json.GetProperty("error").GetString());
+            Assert.Equal("days", json.GetProperty("field").GetString());
+        }
+
+        [Fact]
+        public async Task Checkins_logs_one_line_with_the_ref_and_the_count()
+        {
+            var log = new RecordingLogger<object>();
+
+            await StartAsync(Token, builder => builder.Logging.AddProvider(new RecordingProvider(log)));
+
+            var code = RedemptionCode.Format(await VendorCode("order-1"));
+
+            Activate(code, Server);
+
+            var lines = log.At(LogLevel.Information).ToList();
+
+            await Send(HttpMethod.Get, "/v1/vendor/licences/order-1/checkins", null, Token);
+
+            var added = log.At(LogLevel.Information).Skip(lines.Count).ToList();
+
+            Assert.Single(added);
+            Assert.Contains("order-1", log.Everything);
+            Assert.Contains("1 rows", log.Everything);
+            Assert.DoesNotContain(Server, log.Everything);
+        }
+
+        private async Task<string> VendorCode(string vendorRef)
+        {
+            var code = RedemptionCode.Generate();
+
+            Assert.Equal(
+                HttpStatusCode.Created,
+                (await Send(HttpMethod.Put, "/v1/vendor/licences/" + vendorRef, Body(RedemptionCode.Hash(code)), Token)).StatusCode);
+
+            return code;
+        }
+
+        private void Activate(string code, string serverId)
+        {
+            _service.Activations.Activate(
+                new ActivationRequest { Code = code, ServerId = serverId, PluginVersion = "1.4.0" },
+                "10.0.0.1");
+        }
+
+        private static (string Day, string ServerId, int Checks)[] Checkins(JsonElement json)
+        {
+            return json.GetProperty("checkins").EnumerateArray()
+                .Select(c => (c.GetProperty("day").GetString(), c.GetProperty("serverId").GetString(), c.GetProperty("checks").GetInt32()))
+                .ToArray();
         }
 
         private static string Adopt(string hash)

@@ -139,6 +139,23 @@ namespace Emby.Sso.LicenceService.Activation
                 return LicenceStatusReply.Refused(500, TimeSpan.Zero);
             }
 
+            // A check-in for the portal's history, for every answer that is
+            // about an activation - valid or revoked; an unknown fingerprint
+            // has no activation to count against. Never fails the answer: a
+            // missing tick on a chart is not worth a server going without its
+            // status, and the plugin would only ask again.
+            if (code != null)
+            {
+                try
+                {
+                    _store.RecordStatusCheckin(fingerprint, now);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "licence status: recording the check-in for server={Server} FAILED", serverId);
+                }
+            }
+
             // Info, not warning, even for revoked: a revoked licence still
             // checking in is the system working, not a problem.
             _log.LogInformation(

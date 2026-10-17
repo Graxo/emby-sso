@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace Emby.Sso.LicenceService.Vendor
 {
@@ -40,6 +42,12 @@ namespace Emby.Sso.LicenceService.Vendor
         private const int MaximumLicenseeLength = 200;
 
         private const int MaximumVoidReasonLength = 500;
+
+        private const int DefaultCheckinDays = 30;
+
+        // The portal's longest chart. The store keeps more (see
+        // LicenceStore.CheckinRetentionDays); this caps one answer.
+        private const int MaximumCheckinDays = 90;
 
         private static readonly JsonSerializerOptions Web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
@@ -212,6 +220,52 @@ namespace Emby.Sso.LicenceService.Vendor
                 }
             });
 
+            // Check-ins per server per day, for the portal's "check-ins over
+            // time" chart. Only days with a check are listed; the portal fills
+            // the gaps, so a quiet month is a short answer rather than ninety
+            // zeros. Released activations are included: they checked in.
+            app.MapGet("/v1/vendor/licences/{vendorRef}/checkins", (HttpContext context, string vendorRef) =>
+            {
+                if (!Authorised(context, token))
+                {
+                    return Refused(log);
+                }
+
+                if (!RefPattern.IsMatch(vendorRef))
+                {
+                    return Results.Json(new { error = "not_found" }, Web, statusCode: 404);
+                }
+
+                var days = CheckinDays(context.Request.Query["days"]);
+
+                if (days == null)
+                {
+                    return Bad("days");
+                }
+
+                var now = clock.GetUtcNow();
+                var to = LicenceStore.CheckinDay(now);
+                var from = LicenceStore.CheckinDay(now.AddDays(-(days.Value - 1)));
+                var rows = store.ReadVendorCheckins(vendorRef, from, to);
+
+                if (rows == null)
+                {
+                    return Results.Json(new { error = "not_found" }, Web, statusCode: 404);
+                }
+
+                log.LogInformation("vendor checkins {Ref}: {Count} rows", vendorRef, rows.Count);
+
+                return Results.Json(
+                    new
+                    {
+                        from,
+                        to,
+                        checkins = rows.Select(r => new { serverId = r.ServerId, day = r.Day, checks = r.Checks }).ToList(),
+                    },
+                    Web,
+                    statusCode: 200);
+            });
+
             app.MapDelete("/v1/vendor/licences/{vendorRef}/activations/{serverId}", (HttpContext context, string vendorRef, string serverId) =>
             {
                 if (!Authorised(context, token))
@@ -302,6 +356,31 @@ namespace Emby.Sso.LicenceService.Vendor
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// The window for the check-ins GET: 30 when absent, otherwise exactly
+        /// one plain integer from 1 to 90, or null. Digits only - no sign, no
+        /// spaces, no "7.0" - and a repeated ?days= is refused rather than one
+        /// of them picked, so the portal finds out at once if it sends
+        /// something it did not mean.
+        /// </summary>
+        private static int? CheckinDays(StringValues values)
+        {
+            if (values.Count == 0)
+            {
+                return DefaultCheckinDays;
+            }
+
+            if (values.Count > 1
+                || !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var days)
+                || days < 1
+                || days > MaximumCheckinDays)
+            {
+                return null;
+            }
+
+            return days;
         }
 
         private static IResult Bad(string field)
