@@ -517,7 +517,7 @@ namespace Emby.Sso.LicenceService.Activation
             return true;
         }
 
-        private static string Truncate(string value, int maximum)
+        internal static string Truncate(string value, int maximum)
         {
             if (string.IsNullOrWhiteSpace(value))
             {

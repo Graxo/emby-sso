@@ -73,6 +73,43 @@ namespace Emby.Sso.LicenceService.Tests
         }
 
         [Fact]
+        public void A_status_check_brings_the_activations_plugin_version_up_to_date()
+        {
+            // A licensed server never activates again, so without this the
+            // vendor API reports the version it was activated with for ever.
+            var code = VendorCode("ref-1");
+            var fingerprint = LicenceFormat.Fingerprint(_service.ActivateAndSign(Ask(code, ServerA), "10.0.0.1").Licence);
+
+            Assert.Equal("1.4.0", PluginVersion("ref-1"));
+
+            Statuses().Check(Status(fingerprint, "  1.4.3  "), "10.0.0.1");
+
+            Assert.Equal("1.4.3", PluginVersion("ref-1"));
+
+            // An older plugin sends no version: what was stored stays.
+            Statuses().Check(Status(fingerprint, null), "10.0.0.1");
+            Statuses().Check(Status(fingerprint, "   "), "10.0.0.1");
+
+            Assert.Equal("1.4.3", PluginVersion("ref-1"));
+
+            // Capped like activation's, so a hostile client cannot store a novel.
+            Statuses().Check(Status(fingerprint, new string('9', 500)), "10.0.0.1");
+
+            Assert.Equal(ActivationService.MaximumPluginVersionLength, PluginVersion("ref-1").Length);
+        }
+
+        [Fact]
+        public void A_status_check_about_an_unknown_licence_stores_no_version()
+        {
+            var code = VendorCode("ref-1");
+
+            _service.ActivateAndSign(Ask(code, ServerA), "10.0.0.1");
+            Statuses().Check(Status("sha256:" + new string('a', 64), "9.9.9"), "10.0.0.1");
+
+            Assert.Equal("1.4.0", PluginVersion("ref-1"));
+        }
+
+        [Fact]
         public void A_revoked_answer_is_still_a_check_in()
         {
             // The server asked and was answered; that it was told "revoked" is
@@ -189,9 +226,14 @@ namespace Emby.Sso.LicenceService.Tests
             return new ActivationRequest { Code = code, ServerId = serverId, PluginVersion = "1.4.0" };
         }
 
-        private static LicenceStatusRequest Status(string fingerprint)
+        private static LicenceStatusRequest Status(string fingerprint, string pluginVersion = null)
         {
-            return new LicenceStatusRequest { ServerId = ServerA, Fingerprint = fingerprint };
+            return new LicenceStatusRequest { ServerId = ServerA, Fingerprint = fingerprint, PluginVersion = pluginVersion };
+        }
+
+        private string PluginVersion(string vendorRef)
+        {
+            return _service.Store.FindVendorCode(vendorRef).Activations.Single().PluginVersion;
         }
 
         private LicenceStatusService Statuses()

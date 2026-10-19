@@ -136,6 +136,23 @@ namespace Emby.Sso.Tests
         }
 
         [Fact]
+        public void The_request_carries_the_server_the_fingerprint_and_the_version()
+        {
+            // The version is how the vendor learns this server was updated: a
+            // licensed server never activates again, and activation was the only
+            // other request that carried it.
+            var body = Newtonsoft.Json.Linq.JObject.Parse(
+                LicenceStatusClient.BuildRequest(" " + ServerId + " ", Fingerprint, "1.0.5"));
+
+            Assert.Equal(ServerId, (string)body["serverId"]);
+            Assert.Equal(Fingerprint, (string)body["fingerprint"]);
+            Assert.Equal("1.0.5", (string)body["pluginVersion"]);
+            Assert.Equal(
+                "unknown",
+                (string)Newtonsoft.Json.Linq.JObject.Parse(LicenceStatusClient.BuildRequest(ServerId, Fingerprint, null))["pluginVersion"]);
+        }
+
+        [Fact]
         public async Task With_no_trusted_keys_nothing_can_change_anything()
         {
             var outcome = await LicenceStatusCheck.ReadAsync(

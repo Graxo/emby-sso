@@ -79,6 +79,10 @@ or a licence issued in error. It appears in *Dashboard → Scheduled Tasks* as
 **Check the SSO plugin licence**, where you can see when it last ran, run it
 yourself, or turn it off.
 
+What it sends is this server's id, a one-way fingerprint of the licence (never
+the licence itself) and the plugin's version, so the vendor's records show the
+version you run now rather than the one you activated with.
+
 !!! warning "It fails open, deliberately"
 
     If the licensing service cannot be reached — it is down, your server is

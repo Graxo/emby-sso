@@ -247,6 +247,7 @@ namespace Emby.Sso
                 ActivationEndpoint.Resolve(configuration.ActivationServiceUrl),
                 ServerId,
                 licence,
+                PluginVersion,
                 LicencePublicKey.TrustedJwks,
                 DateTimeOffset.UtcNow,
                 cancellationToken).ConfigureAwait(false);

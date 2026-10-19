@@ -28,7 +28,9 @@ namespace Emby.Sso.LicenceService.Activation
     /// <see cref="LicenceStatusToken"/>.
     ///
     /// WHAT IT LEARNS ABOUT THE CALLER. A server id and a licence fingerprint,
-    /// both of which this service issued. Not the licence, which never leaves
+    /// both of which this service issued, and the plugin's version - stored on
+    /// the activation with the check-in, because a licensed server never
+    /// activates again and activation was the only other place it was sent. Not the licence, which never leaves
     /// the customer's server; not the redemption code, which is a bearer secret.
     /// A fingerprint is one-way, so this endpoint cannot be used to fish for
     /// licences - only to ask about one somebody already holds.
@@ -148,7 +150,10 @@ namespace Emby.Sso.LicenceService.Activation
             {
                 try
                 {
-                    _store.RecordStatusCheckin(fingerprint, now);
+                    _store.RecordStatusCheckin(
+                        fingerprint,
+                        now,
+                        ActivationService.Truncate(request.PluginVersion, ActivationService.MaximumPluginVersionLength));
                 }
                 catch (Exception ex)
                 {
@@ -291,6 +296,12 @@ namespace Emby.Sso.LicenceService.Activation
 
         /// <summary>The licence's SHA-256, not the licence. See the service's remarks.</summary>
         public string Fingerprint { get; set; }
+
+        /// <summary>
+        /// The plugin's version, or null from a plugin older than 1.0.5, which
+        /// does not send it - the stored version is then left as it is.
+        /// </summary>
+        public string PluginVersion { get; set; }
     }
 
     public sealed class LicenceStatusReply

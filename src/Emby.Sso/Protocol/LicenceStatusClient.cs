@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 
 namespace Emby.Sso.Protocol
 {
@@ -18,9 +19,15 @@ namespace Emby.Sso.Protocol
     /// a correctly signed revocation.
     ///
     /// THE LICENCE ITSELF IS NEVER SENT. What goes out is this server's id and
-    /// the licence's SHA-256, both of which the vendor already has. A
-    /// fingerprint is one-way, so a service that received it - or anything that
-    /// intercepted it - learns nothing it could use as a licence.
+    /// the licence's SHA-256, both of which the vendor already has, and this
+    /// build's version. A fingerprint is one-way, so a service that received
+    /// it - or anything that intercepted it - learns nothing it could use as a
+    /// licence.
+    ///
+    /// The version is there because activation is the only other call that
+    /// carries one, and a licensed server never activates again: without it the
+    /// vendor goes on reporting the version a server was activated with long
+    /// after it has been updated. A service too old to read it ignores it.
     ///
     /// It goes through the same outbound guard as everything else, so a
     /// configured service address pointing at a private or loopback address is
@@ -50,6 +57,7 @@ namespace Emby.Sso.Protocol
             string serviceBase,
             string serverId,
             string licence,
+            string pluginVersion,
             IReadOnlyList<string> publicKeyJwks,
             DateTimeOffset now,
             CancellationToken cancellationToken)
@@ -73,7 +81,7 @@ namespace Emby.Sso.Protocol
                 using var request = new HttpRequestMessage(HttpMethod.Post, url)
                 {
                     Content = new StringContent(
-                        "{\"serverId\":\"" + JsonEscape(serverId.Trim()) + "\",\"fingerprint\":\"" + fingerprint + "\"}",
+                        BuildRequest(serverId, fingerprint, pluginVersion),
                         Encoding.UTF8,
                         "application/json"),
                 };
@@ -103,6 +111,23 @@ namespace Emby.Sso.Protocol
             }
 
             return await ReadAnswerAsync(body, publicKeyJwks, serverId, fingerprint, now).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The request body, built the way <see cref="ActivationMessage.BuildRequest"/>
+        /// builds the activation's, version included: "unknown" for a build
+        /// without one, exactly as activation sends it.
+        /// </summary>
+        public static string BuildRequest(string serverId, string fingerprint, string pluginVersion)
+        {
+            var body = new JObject
+            {
+                ["serverId"] = (serverId ?? string.Empty).Trim(),
+                ["fingerprint"] = fingerprint ?? string.Empty,
+                ["pluginVersion"] = string.IsNullOrWhiteSpace(pluginVersion) ? "unknown" : pluginVersion.Trim(),
+            };
+
+            return body.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         /// <summary>
@@ -210,15 +235,6 @@ namespace Emby.Sso.Protocol
             }
 
             return Encoding.UTF8.GetString(buffer, 0, filled);
-        }
-
-        private static string JsonEscape(string value)
-        {
-            // The two callers pass a server id that has already been checked
-            // against a strict character set, so this is belt and braces rather
-            // than the only guard - but a request body built by concatenation
-            // deserves it anyway.
-            return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
     }
 }

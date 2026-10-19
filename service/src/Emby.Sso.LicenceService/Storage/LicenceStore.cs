@@ -1340,8 +1340,13 @@ SELECT request_id, activation_id, licensee, server_id, issued_at_utc, expires_ut
         /// <see cref="Activate"/> this has a transaction of its own. Released
         /// activations and void codes are counted too: the server really did
         /// ask, and was answered "revoked".
+        ///
+        /// A <paramref name="pluginVersion"/> replaces the activation's, in the
+        /// same transaction: it is what that server runs today, where the
+        /// activation only knew what it ran when it last activated. Null (a
+        /// plugin that does not send one) leaves the stored version alone.
         /// </summary>
-        public bool RecordStatusCheckin(string fingerprint, DateTimeOffset now)
+        public bool RecordStatusCheckin(string fingerprint, DateTimeOffset now, string pluginVersion = null)
         {
             if (string.IsNullOrWhiteSpace(fingerprint))
             {
@@ -1374,6 +1379,16 @@ LIMIT 1;";
             }
 
             RecordCheckin(connection, transaction, activationId, now);
+
+            if (pluginVersion != null)
+            {
+                Update(
+                    connection,
+                    transaction,
+                    "UPDATE activations SET plugin_version = $v WHERE id = $id;",
+                    ("$v", pluginVersion),
+                    ("$id", activationId));
+            }
 
             transaction.Commit();
 

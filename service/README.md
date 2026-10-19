@@ -180,7 +180,7 @@ can read a code back. `{ref}` is the portal's own id for the sale,
 | | |
 | --- | --- |
 | `PUT /v1/vendor/licences/{ref}` | Creates (201) or updates (200) the code for `ref`: `{codeHash, licensee, seats, expiresUtc, status: "active"\|"void", voidReason}`. A hash that is not this ref's — another ref's, or a PayPal/manual code's — is 409 `hash_conflict`. |
-| `GET /v1/vendor/licences/{ref}` | `{ref, status, seats, expiresUtc, activations: [{serverId, pluginVersion, firstSeenUtc, lastSeenUtc, releasedUtc}]}`, or 404 `not_found`. |
+| `GET /v1/vendor/licences/{ref}` | `{ref, status, seats, expiresUtc, activations: [{serverId, pluginVersion, firstSeenUtc, lastSeenUtc, releasedUtc}]}`, or 404 `not_found`. `pluginVersion` is the latest a server reported: at activation, and on every `/v1/licence/status` from plugin 1.0.5 on (older plugins send none, which leaves it as it was). |
 | `DELETE /v1/vendor/licences/{ref}/activations/{serverId}` | Frees that server's seat. 204, also when it was already free; 404 `not_found`. |
 | `GET /v1/vendor/unmanaged` | Every code with no ref — PayPal sales, `issue-code` comps — so the portal can import what was sold before it existed, plus codes a portal import adopted (`importRef`). See below. |
 | `POST /v1/vendor/licences/{ref}/adopt` | `{codeHash}`: puts that existing code under `ref`. See below. |
