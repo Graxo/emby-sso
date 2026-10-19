@@ -9,7 +9,7 @@ version, this file's SHA-256, at this address. Nothing else can produce that
 offer, and nothing installs without one.
 
 Making that statement is the last step of a release, and it is the only step
-the build pipeline does not do.
+the build pipeline does not do: one command on the machine that holds the key.
 
 !!! note "The licence tool is not in this repository"
 
@@ -51,46 +51,59 @@ so that key stays on one machine you control. Everything up to the signature
 *is* automated: the pipeline builds, stamps the version, computes the checksum,
 publishes the file, and prints the exact command to sign it.
 
-## Every release: two steps
+## Every release: one command
 
-### 1. Sign, on the release machine
-
-Download the `Emby.Sso.dll` the pipeline published — from the GitLab release
-page in a browser is fine — then:
+Push the version's tag (`v1.0.6`), then, on the release machine:
 
 ```bash
-tools/Emby.Sso.LicenceTool/release.sh 1.0.3 ~/Downloads/Emby.Sso.dll
+tools/Emby.Sso.LicenceTool/release.sh 1.0.6
 ```
 
-That is the whole command. It fills in the address, the key directory and the
-hash, and prints the manifest.
+That is the whole release. The script waits for the tag's pipeline to publish
+the build, downloads it from the package registry, checks it against the
+checksum the pipeline published, signs it with the release key, posts the pair
+to the licence service's `POST /v1/release`, and reads the public download's
+checksum back to confirm the service serves exactly the file it signed.
 
-Pass the checksum from the pipeline as a third argument and it is checked
-before the key is touched at all:
+It refuses, before anything is published, if the file disagrees with the
+pipeline's checksum, and it throws the manifest away if the key it used is not
+the release key the plugin trusts. That is the mistake it exists to catch:
+signing with the licence key produces a manifest that verifies everywhere
+except on a customer's server.
+
+**What the release machine needs**, besides the key and Docker: a GitLab token
+that can only *read* the package registry - a project access token with
+`read_api`, or a deploy token with `read_package_registry` - in
+`~/.config/emby-sso/gitlab-token` (or `GITLAB_TOKEN`). It needs no password for
+the licence service and no cluster access.
+
+### Why publishing needs no password
+
+`POST /v1/release` takes the same two fields the admin page's form does and
+runs the same check: the manifest must verify against the release public key,
+name a version newer than the one published, point at this service's download
+address, and the file must hash to what it was signed for. Anything else is
+refused and nothing is stored. The signature *is* the credential - nobody
+without the release key can produce a pair it accepts - and a password in front
+of it would add a second secret to the key machine while guarding nothing the
+signature does not. It is rate-limited, capped at 32 MB, and recorded in the
+admin audit.
+
+What it cannot tell apart is a manifest you signed and meant to hold back. So
+the script never leaves one lying around: it signs and publishes in one go.
+
+### Without a token, or to publish by hand
+
+Download `Emby.Sso.dll` from the GitLab release and pass it with the pipeline's
+checksum:
 
 ```bash
-tools/Emby.Sso.LicenceTool/release.sh 1.0.3 ~/Downloads/Emby.Sso.dll 9f86d081...
+tools/Emby.Sso.LicenceTool/release.sh 1.0.6 ~/Downloads/Emby.Sso.dll 9f86d081...
 ```
 
-Do that. It is the difference between *"this file is the build"* and *"this
-file was in my downloads folder"*.
-
-The script refuses, and throws the manifest away, if the key it just used is
-not the release key the plugin trusts. That is the mistake it exists to
-catch: signing with the licence key produces a manifest that verifies
-everywhere except on a customer's server.
-
-### 2. Publish, on the admin page
-
-Sign in to `https://license.koper.cloud/admin` and open **Release**. Choose the
-same `Emby.Sso.dll`, paste the manifest, press **Publish**.
-
-Both halves go together, and the page checks them against each other: a file
-that does not hash to what the manifest was signed for is refused and nothing
-is stored. So is a manifest signed by the wrong key, and so is a version that
-is not newer than the one already published.
-
-That is it. There is no third step.
+With `PUBLISH=no` the script only signs, and leaves the DLL and the manifest in
+your home directory for the admin page (**Release**: choose the file, paste the
+manifest, press **Publish**), which runs the same checks.
 
 ## Why the service hosts the file
 

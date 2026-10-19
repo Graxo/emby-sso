@@ -487,6 +487,89 @@ namespace Emby.Sso.LicenceService
                     : Results.Json(new { manifest }, statusCode: 200);
             });
 
+            // Publishing a release from a script: release.sh on the machine that
+            // holds the release key signs a build and posts it here, with the
+            // same two fields the admin page's form posts (`manifest`, `plugin`).
+            //
+            // THE SIGNATURE IS THE CREDENTIAL. ReleaseStore.PublishAsync is the
+            // check the admin page runs: the manifest must verify against the
+            // release key (LICENCE_RELEASE_PUBLIC_KEYS), name a version newer
+            // than the one published, point at this service's download, and the
+            // file must hash to what it was signed for - or nothing is stored.
+            // Nobody without the release key can make that pair, and a password
+            // in front of it would add a second secret to the key machine while
+            // guarding nothing the signature does not: every plugin checks the
+            // same signature again before installing anything. What it cannot
+            // stop - someone publishing a manifest the vendor signed but meant
+            // to hold back - is why release.sh signs and publishes in one go.
+            //
+            // Rate-limited like activation, capped like the admin upload, and
+            // recorded in the admin audit when there is one.
+            app.MapPost("/v1/release", async (
+                HttpContext context,
+                Release.ReleaseStore releases,
+                ActivationRateLimiter limiter,
+                ILogger<Release.ReleaseStore> log) =>
+            {
+                var client = ClientKey(context, options.TrustedProxyHops);
+                var limit = limiter.Check(client);
+
+                if (!limit.IsAllowed)
+                {
+                    context.Response.Headers.RetryAfter =
+                        ((int)Math.Ceiling(limit.RetryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+
+                    return Results.StatusCode(429);
+                }
+
+                AdminEndpoints.AllowUploadOf(context, AdminEndpoints.MaximumReleaseBytes + AdminEndpoints.UploadOverheadBytes);
+
+                var form = await AdminEndpoints.ReadFormAsync(context).ConfigureAwait(false);
+                var plugin = form?.Files.GetFile("plugin");
+
+                if (form == null || plugin == null || plugin.Length == 0)
+                {
+                    return Results.Json(
+                        new { error = "Post multipart/form-data with the signed `manifest` and the `plugin` file." },
+                        statusCode: 400);
+                }
+
+                if (plugin.Length > AdminEndpoints.MaximumReleaseBytes)
+                {
+                    return Results.Json(new { error = "That file is larger than a plugin build can be." }, statusCode: 413);
+                }
+
+                using var buffer = new MemoryStream();
+
+                await plugin.OpenReadStream().CopyToAsync(buffer, context.RequestAborted).ConfigureAwait(false);
+
+                var problem = await releases
+                    .PublishAsync(form["manifest"].ToString(), buffer.ToArray())
+                    .ConfigureAwait(false);
+
+                var outcome = problem ?? ("published " + (releases.PublishedVersion() ?? "?") + " through /v1/release");
+
+                context.RequestServices.GetService<AdminAudit>()
+                    ?.Record(AdminAudit.ReleasePublished, client, (string)null, outcome, null);
+
+                if (problem != null)
+                {
+                    log.LogWarning("release publish REFUSED client={Client}: {Problem}", client, problem);
+
+                    return Results.Json(new { error = problem }, statusCode: 422);
+                }
+
+                log.LogInformation(
+                    "release PUBLISHED version={Version} sha256={Hash} client={Client}",
+                    releases.PublishedVersion(),
+                    releases.PublishedHash(),
+                    client);
+
+                return Results.Json(
+                    new { version = releases.PublishedVersion(), sha256 = releases.PublishedHash() },
+                    statusCode: 200);
+            });
+
             // The plugin file itself, when this service is hosting it.
             //
             // WHY THIS SERVES A BINARY AT ALL. A manifest names an address, and

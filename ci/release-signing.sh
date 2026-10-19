@@ -13,9 +13,8 @@
 # argument, and no amount of masking changes it.
 #
 # So the pipeline does all of the work that does not need the key, and hands
-# the operator one command that does. The commands below are complete and
-# filled in - the version, the address, the expected hash - so signing is
-# copy, paste, read one line of output, paste it back.
+# the operator one command that does: release.sh fetches this build, checks it
+# against this checksum, signs it and publishes it on the licence service.
 set -eu
 
 usage='usage: release-signing.sh <version> <sha256-file>'
@@ -25,30 +24,27 @@ sha_file="${2:?$usage}"
 checksum=$(cut -d' ' -f1 < "$sha_file")
 
 cat <<NOTES
-# Signing $version
+# Releasing $version
 
 This build is published but NOT yet offered to anybody. No server will see it
-until a manifest signed with the release key is uploaded to the licence
-service, and that key is not in this pipeline.
+until it is signed with the release key, and that key is not in this pipeline.
 
-## 1. On the machine that holds the release key
+## On the machine that holds the release key
 
-Download \`Emby.Sso.dll\` from this release, then:
+    tools/Emby.Sso.LicenceTool/release.sh $version
 
-    tools/Emby.Sso.LicenceTool/release.sh $version ~/Downloads/Emby.Sso.dll $checksum
-
-Passing the checksum is not optional here: it is what makes this the build the
-pipeline made rather than whatever was in the downloads folder. The script
-refuses to produce anything if the file disagrees, or if the key it used is not
-the release key the plugin trusts.
-
-## 2. On the licence service's admin page
-
-Open **Release**, choose that same \`Emby.Sso.dll\`, paste the manifest the
-script printed, and press **Publish**. The page refuses the pair unless the
-file hashes to:
+That is the whole release. It downloads this build, checks it against
 
     $checksum
+
+signs it, publishes it on the licence service and checks the service serves
+exactly that file. It refuses to sign if the file disagrees, or if the key it
+used is not the release key the plugin trusts.
+
+Without a GitLab token on that machine, download \`Emby.Sso.dll\` from this
+release and pass it with the checksum instead:
+
+    tools/Emby.Sso.LicenceTool/release.sh $version ~/Downloads/Emby.Sso.dll $checksum
 
 Publishing installs nothing. Each licensed server is offered the update on its
 next daily check and installs it when its administrator chooses, after checking

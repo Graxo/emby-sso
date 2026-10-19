@@ -74,14 +74,14 @@ namespace Emby.Sso.LicenceService.Admin
         /// container cannot be made to hold an unreasonable amount, because the
         /// file is read whole in order to hash it.
         /// </summary>
-        private const long MaximumReleaseBytes = 32 * 1024 * 1024;
+        internal const long MaximumReleaseBytes = 32 * 1024 * 1024;
 
         /// <summary>
         /// Multipart framing, the other fields, and the boundary markers, on top
         /// of the file itself. Small and fixed: the limit exists to bound the
         /// request, not to be exact about it.
         /// </summary>
-        private const long UploadOverheadBytes = 64 * 1024;
+        internal const long UploadOverheadBytes = 64 * 1024;
 
         public static void Map(WebApplication app, ServiceOptions options, AdminPassword password, AdminAccessGate gate)
         {
@@ -1096,7 +1096,7 @@ namespace Emby.Sso.LicenceService.Admin
         /// limit is what stops an unauthenticated caller making this process
         /// read anything large, and it should keep doing that.
         /// </summary>
-        private static void AllowUploadOf(HttpContext context, long bytes)
+        internal static void AllowUploadOf(HttpContext context, long bytes)
         {
             var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
 
@@ -1106,7 +1106,7 @@ namespace Emby.Sso.LicenceService.Admin
             }
         }
 
-        private static async Task<IFormCollection> ReadFormAsync(HttpContext context)
+        internal static async Task<IFormCollection> ReadFormAsync(HttpContext context)
         {
             if (!context.Request.HasFormContentType)
             {
