@@ -453,6 +453,22 @@ service-image:
         docker tag "$IMAGE:$PRIMARY_TAG" "$IMAGE:$tag"
         docker push "$IMAGE:$tag"
       done
+    # The same tags to Harbor, the main registry (awx-homelab plan
+    # 2026-10-24-harbor-main-registry, Task 7), under the same path in project
+    # homelab. Harbor scans on push. Only where the protected variables
+    # HARBOR_ROBOT_USER / HARBOR_ROBOT_TOKEN (robot homelab-ci) exist, so main
+    # and v* tags; GitLab's registry stays the second copy.
+    - |
+      if [ -n "${HARBOR_ROBOT_USER:-}" ] && [ -n "${HARBOR_ROBOT_TOKEN:-}" ]; then
+        HARBOR_IMAGE="cr.koper.cloud/homelab/${CI_REGISTRY_IMAGE#*/}/$SERVICE_IMAGE_NAME"
+        printf '%s' "$HARBOR_ROBOT_TOKEN" | docker login -u "$HARBOR_ROBOT_USER" --password-stdin cr.koper.cloud
+        for tag in $TAGS; do
+          docker tag "$IMAGE:$PRIMARY_TAG" "$HARBOR_IMAGE:$tag"
+          docker push "$HARBOR_IMAGE:$tag"
+        done
+      else
+        echo "service-image: no HARBOR_ROBOT_USER/TOKEN, so GitLab's registry only"
+      fi
     - |
       echo "service-image: pushed. The host pulls it with:"
       echo "  docker pull $IMAGE:$PRIMARY_TAG"
