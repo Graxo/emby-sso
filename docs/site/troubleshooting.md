@@ -1,310 +1,188 @@
 # Troubleshooting
 
-Search this page for the exact sentence the user was shown. Each one has its
-own section below.
+## Start with the log
 
-## Where the detail is
+Users only ever see a short, vague message — on purpose, so a stranger cannot
+learn whether an account exists. The real reason is always in Emby's server
+log:
 
-The plugin logs under the category **`AuthentikSso`**, in Emby's own server log
-— Dashboard → Logs, or the log file in Emby's data directory
-(`embyserver.txt` on the linuxserver.io image).
+- **Dashboard → Logs**, open the current server log, and search for
+  `AuthentikSso` (or `SSO`).
+- Or the `embyserver.txt` file in Emby's `logs` folder.
 
-!!! note "Diagnostic detail is written there and only there, by design"
+Reproduce the problem, then read the lines logged at that moment. Most lines
+start with `SSO:` or `Rejecting sign-in` / `Rejected sign-in` and say exactly
+which check failed.
 
-    Exception messages, unreachable-endpoint causes, which validation step
-    failed — all of it is in the log. The browser only ever sees one of a fixed
-    set of short, generic sentences, because a refusal must not tell a stranger
-    which of several reasons applied.
+## Quick checklist
 
-    **In almost every case below, only the log tells the causes apart.** Open it
-    before you start guessing.
+Most problems are one of these:
 
-## The seven sentences
+1. **Required group** is set in the plugin, and the user is in that group in
+   Authentik.
+2. The user's Emby account has its **login provider set to Authentik SSO**
+   ([Setup, step 6](setup.md#6-move-accounts-to-sso)).
+3. The Emby username matches the user's Authentik username.
+4. The **redirect URI** in Authentik is exactly the one on the plugin's
+   settings page.
+5. The **Emby public URL** is exactly the address users type in the browser.
+6. The licence section of the settings page says **Active**.
+7. If Authentik is on a private/LAN address, **Allow an identity provider on a
+   private network** is ticked.
 
-| What the user saw | Jump to |
+## By message
+
+### "Single sign-on is not configured on this server."
+
+The plugin's configuration is incomplete or refuses to run. Look for a log line
+starting with `SSO: refusing to start sign-in:` or `Rejecting sign-in:`.
+
+| Log says | Fix |
 |---|---|
-| Single sign-on is not configured on this server. | [→](#single-sign-on-is-not-configured-on-this-server) |
-| The sign-in provider could not be reached. | [→](#the-sign-in-provider-could-not-be-reached) |
-| The sign-in provider rejected this sign-in. | [→](#the-sign-in-provider-rejected-this-sign-in) |
-| The sign-in response could not be verified. | [→](#the-sign-in-response-could-not-be-verified) |
-| This sign-in attempt expired. Please try again. | [→](#this-sign-in-attempt-expired-please-try-again) |
-| This account is not set up on this server. | [→](#this-account-is-not-set-up-on-this-server) |
-| Password sign-in is disabled for this account. | [→](#password-sign-in-is-disabled-for-this-account) |
-| This sign-in could not be completed in this browser. Please try signing in again. | [→](#this-sign-in-could-not-be-completed-in-this-browser-please-try-signing-in-again) |
+| `no required group is configured` | Set **Required group**. Until you do, everybody is refused. |
+| `the public base URL is not HTTPS` / `the issuer URL is not HTTPS` | Use HTTPS, or tick *Allow plain HTTP* for testing. |
+| `auto-create is on but no template user is configured` | Set **Template user**, or turn off automatic account creation. |
+| `the configured template user '…' does not exist` | Fix the template user's name. |
+| An address and the rule that refused it (loopback / private / carrier-grade NAT) | Tick **Allow an identity provider on a private network**. |
 
-A licensing refusal is the one exception to the vagueness rule: it says it is a
-licensing problem. See [Licensing](licensing.md#what-the-log-tells-you).
+Also check that Issuer URL, Client ID and Emby public URL are filled in.
 
----
+### "Single sign-on is unavailable: this server's SSO plugin licence is missing, invalid or expired."
 
-## Single sign-on is not configured on this server.
+The licence is not valid. The settings page shows why. See
+[Licensing](licensing.md#when-the-licence-is-missing-expired-or-invalid).
 
-**What it means.** One of:
+### "The sign-in provider could not be reached."
 
-- the plugin is not configured — issuer URL, client ID or base URL missing;
-- the public base URL is not HTTPS and plain HTTP has not been explicitly
-  allowed;
-- **no required group is configured**, which refuses everyone;
-- auto-create is on with no template user;
-- the identity provider resolves to a private or loopback address and that has
-  not been allowed.
+Emby could not fetch Authentik's discovery document, keys or token endpoint.
+Test **from the Emby server (or container)**, not from your own machine:
 
-**What to check.** Dashboard → Plugins → Authentik SSO: all required fields set,
-**including [Required group](settings.md#required-group)**.
+```bash
+curl -v https://<authentik>/application/o/<slug>/.well-known/openid-configuration
+```
 
-!!! danger "`no required group is configured` in the log is the lockout"
+Check DNS, TLS certificates (Emby must trust Authentik's certificate) and
+firewalls between Emby and Authentik. Make sure the issuer URL ends with the
+application slug and a `/`.
 
-    ```
-    SSO: refusing to start sign-in: no required group is configured, so the callback could only refuse
-    Rejecting sign-in for <user> without contacting the provider: no required group is configured
-    ```
+### "The sign-in provider rejected this sign-in."
 
-    This refuses every user, including ones who were signing in fine before an
-    upgrade. See
-    [the required-group lockout](before-you-install.md#the-required-group-lockout).
+Authentik returned an error. The log line `SSO: the provider returned an error
+parameter: …` shows which; Authentik's own event log (**Events → Logs**) shows
+more.
 
-If you are testing over HTTP, enable
-[Allow plain HTTP](settings.md#allow-plain-http-testing-only) — and note it
-disables native password sign-in.
+- `invalid_grant` on a native app: the user used their normal password. They
+  need an Authentik **app password** — or use [PIN sign-in](pin-sign-in.md).
+- Redirect URI errors at Authentik: the redirect URI in Authentik does not
+  exactly match the one on the plugin's settings page.
+- `access_denied`: the user is not allowed to use the application in Authentik
+  (check the application's policy bindings).
+- Client authentication errors: client ID or secret wrong, or a public client
+  configured with a secret in the plugin (or the other way round).
 
-If the log names a refused address, see
-[Allow an identity provider on a private or loopback address](settings.md#allow-an-identity-provider-on-a-private-or-loopback-address).
+### "The sign-in response could not be verified."
 
----
+Authentik's token failed validation. Check:
 
-## The sign-in provider could not be reached.
+- The clocks on the Emby and Authentik servers are correct.
+- **Issuer URL** matches the issuer Authentik reports exactly (including the
+  trailing `/`).
+- **Client ID** is the one of this provider.
 
-**What it means.** Authentik's discovery document or token endpoint could not be
-fetched.
+### "This sign-in attempt expired. Please try again."
 
-**What to check.** The [issuer URL](settings.md#issuer-url) is correct and
-reachable **from the Emby server itself**, not just from your browser. Check
-DNS, TLS and firewall between Emby and Authentik.
+The sign-in took too long, or the callback was opened twice (back button, an
+old bookmark of the callback page). Start again from `/sso/start`. If it always
+happens, check that your reverse proxy does not cache or replay requests to
+`/sso/callback`.
 
-!!! tip "An attempt that failed this way is not charged to the throttle"
+### "This sign-in could not be completed in this browser. Please try signing in again."
 
-    A provider outage during a mass first sign-in does not lock individual
-    newcomers out of their own retries, and does not raise a surge. See
-    [Brute-force protection](brute-force-protection.md).
+The cookie set by `/sso/start` did not come back on `/sso/callback`. Usually a
+reverse proxy stripping cookies or rewriting paths, or the sign-in started on
+one address (e.g. `http://` or a LAN IP) and returned on another. Make sure
+users start from the exact sign-in URL on the settings page, and that the
+proxy passes `Cookie` / `Set-Cookie` through on `/sso/`.
 
----
+### "This account is not set up on this server."
 
-## The sign-in provider rejected this sign-in.
+The most common message. It covers several cases; the log says which:
 
-**What it means.** Authentik returned an OAuth error on the callback, or an
-empty/malformed credential was submitted.
+| Log says | Fix |
+|---|---|
+| `the account has no authentication provider assigned` | Set the account's login provider to Authentik SSO ([Setup, step 6](setup.md#6-move-accounts-to-sso)). |
+| `no Emby user named '…'` / `no matching Emby user and auto-create is off` | Create the Emby account with the same username, or turn on automatic account creation. Check the *Username claim*. |
+| `required group not held` | Add the user to the required group in Authentik. |
+| `the token carried no 'groups' claim` | Authentik is not sending a `groups` claim. Check the scope mappings on the provider and that *Scopes* includes `profile`. |
+| `already bound to a different Emby account` / `already bound to a different identity provider subject` | The account belongs to another Authentik user, usually after a rename. See [identity binding](how-it-works.md#one-emby-account-one-authentik-user). |
+| `the provisioning throttle is closed` | Too many failed attempts for this username. Wait 15 minutes. |
 
-**What to check.** The Authentik provider/application logs for the same request.
-Confirm the [redirect URI](authentik.md#2-set-the-redirect-uri-exactly) matches
-exactly — scheme, host and path.
+### "Password sign-in is disabled for this account."
 
-If this is a native app: Authentik will not accept an ordinary account password
-on a direct grant, only an app password token —
-[read this](native-apps.md#what-authentik-accepts-as-the-password).
+A native app tried to sign in with a password, but **Allow native apps to sign
+in with a password** is off, or **Allow plain HTTP** is on (which turns it
+off). Turn on the setting, or use [PIN sign-in](pin-sign-in.md) instead.
 
----
+### "PIN sign-in is not enabled on this server."
 
-## The sign-in response could not be verified.
+Tick **Allow native apps to sign in with a one-time PIN**.
 
-**What it means.** The ID token failed validation — bad signature, wrong issuer,
-wrong audience, expired, or a nonce mismatch.
+## Other problems
 
-**What to check.**
+### The user signs in but ends up on Emby's login screen
 
-- Server clocks in sync, on both Emby and Authentik.
-- [Client ID](settings.md#client-id) matches the token's audience.
-- [Issuer URL](settings.md#issuer-url) matches the token's `iss` **exactly**.
+The sign-in worked on the server, but the browser was sent to the wrong
+address. **Emby public URL** must be exactly what users use, including
+`https://`, the host name, the port and any sub-path.
 
----
+### The user can no longer use their Emby password
 
-## This sign-in attempt expired. Please try again.
+Expected: once an account's login provider is Authentik SSO, Emby only asks
+Authentik. To move the account back, set its provider to *Default*
+([Setup, step 6](setup.md#6-move-accounts-to-sso)).
 
-**What it means.** The `state` value on the callback was unknown, already used,
-or too old. It is single-use with a short TTL.
+### I locked myself out of the dashboard
 
-**What to check.** Usually a stale bookmark or back-button reuse — just start
-over from the sign-in URL.
+Sign in with an administrator that is still on Emby's own password — this is
+why you keep one. A browser or app that is still signed in also keeps working.
 
-If it happens consistently, check for a reverse proxy caching or replaying the
-callback request.
+If the lockout is caused by the plugin's configuration (for example an empty
+*Required group*), stop Emby, fix the value in
+`plugins/configurations/Emby.Sso.xml`, and start Emby again.
 
----
+### Someone removed from the group can still watch
 
-## This account is not set up on this server.
+The group is checked at sign-in, not during a session. Disable their Emby
+account or delete their device under **Dashboard → Devices**.
 
-Deliberately indistinguishable to the user, and it is now one of several things:
+### Two "Emby Web" devices for one browser
 
-- the username claim matched no existing Emby user and automatic creation is
-  off;
-- the token carried no groups claim;
-- the identity did not hold the required group;
-- the provisioning throttle is closed for that username;
-- **the account is not assigned to this plugin as its login provider**;
-- **the identity does not match the `sub` the account is bound to**, or the
-  binding store could not be read or written.
+Expected. The plugin's sign-in registers its own device entry next to the web
+client's. Deleting either one signs that browser out.
 
-!!! warning "Only the log tells them apart"
+### The settings page looks wrong or is blank after an update
 
-    It says which — naming the *configured claim* rather than any group value.
+Reload the dashboard in your browser (it caches plugin pages). If it stays
+blank, check that only one `Emby.Sso.dll` is in the `plugins` folder and that
+the version under **Dashboard → Plugins** is the one you installed.
 
-**What to check, in order:**
+### The plugin does not appear under Dashboard → Plugins
 
-1. Confirm the Emby account exists, or that
-   [auto-create and a template user](groups-and-account-creation.md) are
-   configured.
-2. Confirm Authentik emits the groups claim **on the flow in use, direct grant
-   included** — see [step 7](authentik.md#7-emit-the-group-list-in-the-id-token).
-3. Confirm the user is in the [required group](settings.md#required-group).
-4. Confirm the account's
-   [login provider is set to this plugin](login-providers.md). This is the one
-   people miss; the plugin refuses any existing account not already assigned to
-   it, deliberately.
-5. If the log says the throttle is closed, **wait out the 15-minute window** —
-   see [Brute-force protection](brute-force-protection.md).
-6. If the log talks about a binding, read
-   [One Emby account, one Authentik identity](identity-binding.md). A recent
-   rename of the Emby account is the usual cause.
+Check that `Emby.Sso.dll` is in the right `plugins` folder, that Emby was
+restarted, and that you copied only that one file. Look for `Emby.Sso` in the
+server log at startup for a load error.
 
----
+### Nothing happens when I press "Download and install"
 
-## Password sign-in is disabled for this account.
+Read the message under the button and the `SSO update:` lines in the log. You
+can always [update by hand](setup.md#updating).
 
-**What it means.** A native app tried to sign in via direct grant, but either
-[Allow native apps to sign in with a password](settings.md#allow-native-apps-to-sign-in-with-a-password)
-is off, **or
-[Allow plain HTTP (testing only)](settings.md#allow-plain-http-testing-only) is
-on**, which disables native password sign-in entirely.
+## Asking for help
 
-The user-facing sentence is the same for both; the log says which.
+Email <support@koper.cloud> with:
 
-**What to check.** Enable native sign-in in the plugin configuration if you want
-it, understanding
-[the MFA trade-off](native-apps.md#trade-offs-to-weigh-before-turning-this-on).
+- the message the user saw,
+- the `AuthentikSso` lines from the log around that time,
+- the plugin version and Emby version.
 
-If the log names plain HTTP, turn that off and serve the plugin over HTTPS —
-this server will not relay a password in cleartext, in any configuration.
-
----
-
-## This sign-in could not be completed in this browser. Please try signing in again.
-
-**What it means.** `/sso/start` sets a short-lived binding cookie that must
-come back unchanged on `/sso/callback`. A reverse proxy sitting in front of
-Emby stripped or rewrote cookies on that path, or rewrote the path so the
-cookie's `Path` no longer covers `/sso/callback`.
-
-**What to check.**
-
-- The log line next to this error distinguishes **no cookie presented at all**
-  from **a cookie that was presented but did not match**.
-- Confirm the proxy forwards the `Cookie` and `Set-Cookie` headers unmodified on
-  both `/sso/start` and `/sso/callback`.
-- Confirm it does not rewrite either path in a way that changes the cookie's
-  directory.
-
----
-
-## Your licence has been requested and is being issued.
-
-**Not an error, and nothing is wrong.** It appears under the **Activate** button
-on the plugin's configuration page the first time a redemption code is used on a
-server.
-
-The vendor's licence service does not hold the key that signs licences — it is
-kept on a machine that answers no requests, so that breaking into the service
-cannot mint one. Somebody signs what has been paid for and uploads it, and your
-next press of **Activate** returns the licence.
-
-- **Your code has not been used up.** The activation is already recorded against
-  this server; pressing Activate again does not consume another.
-- **Pressing it early costs nothing** beyond one rate-limiter token.
-- **Sign-ins are unaffected while you wait.** The licence check only gates *new*
-  single sign-ons; existing sessions and Emby's own local accounts carry on
-  exactly as before.
-- **Still pending after a few hours?** Then the vendor has not signed it yet,
-  and they are who to ask.
-
-The full reasoning is in [Signing licences offline](offline-signing.md).
-
-## The log says the licence has been withdrawn
-
-The daily licence check received a signed answer from the vendor saying this
-server's licence has been revoked — normally a refund, a chargeback, or a
-licence issued in error.
-
-New single sign-ons stop. **People already signed in stay signed in, and Emby's
-own accounts are unaffected**, exactly as for an expired licence.
-
-If it is unexpected, the vendor is the one to ask. Nothing on this server can
-undo it, and re-activating a code you still hold will clear it if the vendor
-reinstates the licence.
-
-**It cannot be caused by a network problem.** The check fails open: an
-unreachable service, an unsigned answer, or an answer about a different server
-all leave everything exactly as it was. Only a correctly signed revocation
-naming this server and this licence does anything.
-
-## Problems that are not an error message
-
-### A user cannot sign in with their old Emby password after using SSO once
-
-That is expected, not a fault.
-
-!!! danger "Emby stamps the winning provider onto the user permanently"
-
-    An administrator must reset that user's `AuthenticationProviderId` via
-    `POST /emby/Users/{userId}/Policy`. See
-    [provider stamping](before-you-install.md#emby-stamps-the-provider-permanently)
-    for the full call.
-
-### The settings page renders oddly right after an update
-
-For example, as an overlay on top of the plugin catalog instead of replacing the
-view.
-
-**Reload the Emby dashboard in your browser.** Emby caches configuration pages,
-and the old version may still be in the browser's cache.
-
-If it comes up **blank**, that is a different problem — the plugin's
-configuration page markup, not the feature behind it. See
-[what has not been verified](verification-status.md#the-configuration-page).
-
-### Sign-in completes but the browser lands on the login screen
-
-The most likely causes, in order:
-
-1. the [Emby public base URL](settings.md#emby-public-base-url) not matching the
-   address your browser actually uses — reverse-proxy sub-paths are the usual
-   culprit;
-2. a future Emby client update changing the credential store's key or shape.
-
-Either way, sign-in through the plugin **still completed on the server side** —
-the account is not locked out. It is only the automatic hand-off into the
-already-signed-in home screen that would need a second look. See
-[what has not been verified there](browser-sign-in.md#what-has-not-been-observed).
-
-### Dashboard → Devices shows two "Emby Web" rows for one browser
-
-Expected, and **do not delete either one**. See
-[the device rows](browser-sign-in.md#two-emby-web-device-rows-for-one-browser-and-you-must-not-delete-either).
-
-### Somebody was removed from the group but can still watch
-
-The gate is re-evaluated at the **next** sign-in; it does not revoke an access
-token already minted. Disable their Emby account, or delete their device/session
-in Dashboard → Devices, as well as removing the group. See
-[Losing the group](groups-and-account-creation.md#losing-the-group).
-
-### A user's PIN keeps being destroyed
-
-Somebody who knows their username can send PIN-shaped guesses at it and destroy
-each PIN as it is issued, denying **that one person** the PIN route. It affects
-nobody else and no other sign-in path — browser sign-in still works. See
-[what an attacker can do](pin-sign-in.md#what-an-attacker-can-do-stated-plainly).
-
-### Everything stopped working after an upgrade, and the log names an address
-
-An existing install whose identity provider resolves to a private or loopback
-address stops working until
-[that is explicitly allowed](settings.md#allow-an-identity-provider-on-a-private-or-loopback-address).
-The log names the address and the rule that refused it.
+Never send your redemption code or client secret.

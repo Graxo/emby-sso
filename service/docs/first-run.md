@@ -13,7 +13,7 @@ signing key is mounted into the service, which is a deliberate trade:
 > The alternative is still supported and is one line of config away: leave the
 > key off the server, and sign at `/admin/signing` with `licencetool sign` on a
 > machine that answers no requests. Safer, not instant. See
-> [Signing licences offline](../../docs/site/offline-signing.md).
+> [Signing licences offline](offline-signing.md).
 
 You still generate the key on your own machine — step 1 — and copy it up.
 

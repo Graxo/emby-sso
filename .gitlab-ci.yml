@@ -9,7 +9,7 @@
 # is not in any variable here. The publish job instead prints the exact command
 # to run on the machine that does hold it (ci/release-signing.sh), and until
 # that manifest is uploaded to the licence service the build is downloadable by
-# hand and offered to nobody. docs/site/signing-a-release.md is the procedure.
+# hand and offered to nobody. service/docs/signing-a-release.md is the procedure.
 #
 # The version an operator sees in Emby's dashboard comes from the tag and
 # nowhere else: ci/version.sh turns v1.4.0 into 1.4.0, the build is handed it

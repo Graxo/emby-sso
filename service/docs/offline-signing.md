@@ -163,5 +163,4 @@ If a licence really has to change, void the code and issue a new one.
 ## See also
 
 - [Rotating and revoking a signing key](key-rotation.md)
-- [Licensing](licensing.md) — what an invalid licence does and does not stop
-- [Buying and activating a licence](activation.md)
+- [Licensing](../../docs/site/licensing.md) — what an invalid licence does and does not stop

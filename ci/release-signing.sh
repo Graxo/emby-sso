@@ -50,5 +50,5 @@ Publishing installs nothing. Each licensed server is offered the update on its
 next daily check and installs it when its administrator chooses, after checking
 the download against that hash.
 
-Full procedure, including the first time: docs/site/signing-a-release.md
+Full procedure, including the first time: service/docs/signing-a-release.md
 NOTES

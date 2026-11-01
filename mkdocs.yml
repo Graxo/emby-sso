@@ -11,8 +11,8 @@
 # them to the internet.
 site_name: Emby OIDC SSO
 site_description: >-
-  Sign in to Emby with Authentik. Installation, group gating, native app and
-  PIN sign-in, licensing, and what each error message actually means.
+  Sign in to Emby with Authentik: how the plugin works, how to set it up, and
+  how to troubleshoot it.
 # UNVERIFIED: nothing here has been able to reach this GitLab instance over
 # HTTPS, so the site's real published address is unknown. GitLab sets
 # CI_PAGES_URL in the pages job to whatever the address actually is, and that
@@ -63,9 +63,6 @@ theme:
     admonition:
       danger: material/alert-octagon
 
-extra_css:
-  - stylesheets/evidence.css
-
 extra:
   # No analytics, no trackers, no external requests.
   social: []
@@ -102,32 +99,12 @@ validation:
   unrecognized_links: warn
   anchors: warn
 
-# Structured around what a reader is trying to do, not around how the repo is
-# laid out.
 nav:
-  - Start here: index.md
-  - Getting started:
-      - Read this before you install: before-you-install.md
-      - Installing and upgrading: installing.md
-      - Updates and the daily check: updates.md
-      - Setting up Authentik: authentik.md
-      - Assigning each user's login provider: login-providers.md
-  - Signing in:
-      - Browser sign-in: browser-sign-in.md
-      - Native apps with a password: native-apps.md
-      - Native apps with a one-time PIN: pin-sign-in.md
-  - Who may sign in:
-      - Group gating and account creation: groups-and-account-creation.md
-      - One Emby account, one Authentik identity: identity-binding.md
-      - Brute-force protection: brute-force-protection.md
-  - Reference:
-      - Every setting, explained: settings.md
-      - Licensing: licensing.md
-      - Buying and activating a licence: activation.md
-      - Troubleshooting: troubleshooting.md
-      - What has and has not been verified: verification-status.md
-      - Building from source: building.md
-  - For the vendor:
-      - Signing licences offline: offline-signing.md
-      - Rotating and revoking a signing key: key-rotation.md
-      - Signing and publishing a plugin update: signing-a-release.md
+  - Overview: index.md
+  - How it works: how-it-works.md
+  - Setup: setup.md
+  - Troubleshooting: troubleshooting.md
+  - One-time PIN sign-in: pin-sign-in.md
+  - Settings reference: settings.md
+  - Licensing: licensing.md
+  - Building from source: building.md
